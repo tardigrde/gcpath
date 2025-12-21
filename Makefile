@@ -31,6 +31,7 @@ format:
 	uv run ruff check . --fix
 
 clean:
+	rm .coverage
 	rm -rf .pytest_cache
 	rm -rf .mypy_cache
 	rm -rf .ruff_cache

@@ -266,16 +266,6 @@ def get_resource_name(
         handle_error(e)
 
 
-@app.command(name="get-resource-name", hidden=True)
-def get_resource_name_alias(
-    ctx: typer.Context,
-    paths: Annotated[List[str], typer.Argument()],
-    id_only: bool = typer.Option(False, "--id"),
-) -> None:
-    """Alias for 'name' command for Go compatibility."""
-    get_resource_name(ctx, paths, id_only)
-
-
 @app.command(name="path")
 def get_path_command(
     ctx: typer.Context,
@@ -298,15 +288,6 @@ def get_path_command(
 
     except Exception as e:
         handle_error(e)
-
-
-@app.command(name="get-path", hidden=True)
-def get_path_alias(
-    ctx: typer.Context,
-    resource_names: Annotated[List[str], typer.Argument()],
-) -> None:
-    """Alias for 'path' command for Go compatibility."""
-    get_path_command(ctx, resource_names)
 
 
 def run() -> None:
