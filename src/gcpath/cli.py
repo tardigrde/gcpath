@@ -277,14 +277,19 @@ def get_path_command(
     Get path of a resource name.
     """
     try:
-        hierarchy = Hierarchy.load(
-            display_names=None, 
-            via_resource_manager=not ctx.obj["use_asset_api"]
-        )
-
         for name in resource_names:
-            p = hierarchy.get_path_by_resource_name(name)
-            print(p)
+            try:
+                # Use optimized recursive lookup instead of full hierarchy load
+                p = Hierarchy.resolve_ancestry(name)
+                print(p)
+            except Exception as e:
+                # If one fails, log it but continue processing others? 
+                # Or just print error. CLI usually expects one output per line.
+                # Let's print error to stderr and continue if multiple requested
+                if len(resource_names) > 1:
+                    error_console.print(f"[red]Error resolving {name}: {e}[/red]")
+                else:
+                    raise e
 
     except Exception as e:
         handle_error(e)

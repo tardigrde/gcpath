@@ -307,45 +307,68 @@ class Hierarchy:
 
         for row in response.query_result.rows:
                 # The Asset API SQL results are returned in a Struct where the values
-                # are in a list named 'f', similar to BigQuery JSON output.
-                # 0: name, 1: displayName, 2: ancestors
+            # are in a list named 'f', similar to BigQuery JSON output.
+            # 0: name, 1: displayName, 2: ancestors
+            # IMPORTANT: The google-cloud-asset library returns MapComposite objects
+            # which behave like dicts. Do NOT access .fields on them.
+            row_dict = dict(row)
+            if "f" not in row_dict:
+                continue
 
-                row_dict = dict(row.fields)
-                if "f" not in row_dict:
-                    continue
+            # row_dict["f"] is a list of values
+            f_list = row_dict["f"]
+            if len(f_list) < 3:
+                logger.warning(
+                    f"Unexpected number of columns in Asset API row: {len(f_list)}"
+                )
+                continue
 
-                try:
-                    f_list = row_dict["f"].list_value.values
-                    if len(f_list) < 3:
-                        logger.warning(f"Unexpected number of columns in Asset API row: {len(f_list)}")
-                        continue
+            # Accessing struct values directly.
+            # Note: The 'v' key logic depends on the exact unmarshaling.
+            # If the library returns native python types, we might just access them directly.
+            # Based on error reports, it seems to return MapComposite/RepeatedComposite.
+            # We'll try to access safely.
+            try:
+                # Based on typical unmarshaling of Structs:
+                # f_list[0] is the first column (name)
+                # It might be a dict `{'v': '...'}` or just the value if flattened.
+                # Let's assume standard Struct/ListValue structure preserved but unmarshaled as dicts.
+                name_col = f_list[0]
+                dn_col = f_list[1]
+                anc_col = f_list[2]
 
-                    name_val = f_list[0].struct_value.fields["v"].string_value
-                    display_name = f_list[1].struct_value.fields["v"].string_value
-                    ancestors_val = f_list[2].struct_value.fields["v"].list_value.values
+                # Check if it's a dict with 'v' or just potential direct value
+                name_val = name_col.get("v") if isinstance(name_col, dict) else name_col
+                display_name = dn_col.get("v") if isinstance(dn_col, dict) else dn_col
+                ancestors_wrapper = anc_col.get("v") if isinstance(anc_col, dict) else anc_col
 
-                    if not name_val or not display_name:
-                        continue
+                # Ancestors might be a list wrapper
+                raw_ancestors_uncleaned = ancestors_wrapper if isinstance(ancestors_wrapper, list) else []
 
-                    name = _clean_asset_name(name_val)
-                    raw_ancestors = [_clean_asset_name(item.struct_value.fields["v"].string_value) for item in ancestors_val]
+            except (IndexError, AttributeError, TypeError) as e:
+                logger.warning(f"Error parsing Asset API row: {e}")
+                continue
 
-                    # Ensure consistency with _load_folders_rm structure: [self, parent, ..., org]
-                    if not raw_ancestors or raw_ancestors[0] != name:
-                        ancestors = [name] + raw_ancestors
-                    else:
-                        ancestors = raw_ancestors
+            if not name_val or not display_name:
+                continue
 
-                    f = Folder(
-                        name=name,
-                        display_name=display_name,
-                        ancestors=ancestors,
-                        organization=node
-                    )
-                    node.folders[f.name] = f
-                except (AttributeError, KeyError, IndexError) as e:
-                    logger.warning(f"Failed to parse Asset API row: {e}")
-                    continue
+            name = _clean_asset_name(str(name_val))
+            raw_ancestors = [_clean_asset_name(str(item.get("v") if isinstance(item, dict) else item)) for item in raw_ancestors_uncleaned]
+
+            # Ensure consistency with _load_folders_rm structure: [self, parent, ..., org]
+            if not raw_ancestors or raw_ancestors[0] != name:
+                ancestors = [name] + raw_ancestors
+            else:
+                ancestors = raw_ancestors
+
+            f = Folder(
+                name=name,
+                display_name=display_name,
+                ancestors=ancestors,
+                organization=node
+            )
+            node.folders[f.name] = f
+
 
     @staticmethod
     def _load_projects_asset(node: OrganizationNode) -> List[Project]:
@@ -362,17 +385,18 @@ class Hierarchy:
 
         try:
             response = asset_client.query_assets(request=query_request)
-            
+
             # Iterate directly over the response
             if not response.query_result or not response.query_result.rows:
                 return projects
 
             for row in response.query_result.rows:
-                    row_dict = dict(row.fields)
+                try:
+                    row_dict = dict(row)
                     if "f" not in row_dict:
                         continue
 
-                    f_list = row_dict["f"].list_value.values
+                    f_list = row_dict["f"]
                     if len(f_list) < 4:
                         logger.warning(
                             f"Unexpected number of columns in Asset API project row: {len(f_list)}"
@@ -380,20 +404,35 @@ class Hierarchy:
                         continue
 
                     # 0: name, 1: projectNumber, 2: projectId, 3: ancestors
-                    name_val = f_list[0].struct_value.fields["v"].string_value
-                    project_id = f_list[2].struct_value.fields["v"].string_value
-                    display_name = project_id  # Use projectId as displayName
-                    ancestors_val = f_list[3].struct_value.fields["v"].list_value.values
+                    name_col = f_list[0]
+                    # num_col = f_list[1] # unused
+                    id_col = f_list[2]
+                    anc_col = f_list[3]
 
-                    name = _clean_asset_name(name_val)
+                    name_val = name_col.get("v") if isinstance(name_col, dict) else name_col
+                    project_id = id_col.get("v") if isinstance(id_col, dict) else id_col
+                    display_name = project_id  # Use projectId as displayName
+
+                    ancestors_wrapper = anc_col.get("v") if isinstance(anc_col, dict) else anc_col
+                    raw_ancestors_uncleaned = ancestors_wrapper if isinstance(ancestors_wrapper, list) else []
+
+                    name = _clean_asset_name(str(name_val))
                     raw_ancestors = [
-                        _clean_asset_name(item.struct_value.fields["v"].string_value)
-                        for item in ancestors_val
+                        _clean_asset_name(str(item.get("v") if isinstance(item, dict) else item))
+                        for item in raw_ancestors_uncleaned
                     ]
 
+                except (IndexError, AttributeError, TypeError) as e:
+                    logger.warning(f"Error parsing Asset API project row: {e}")
+                    continue
+
+                try:
                     # For projects, we want the first ancestor that is NOT the project itself.
                     # Typically raw_ancestors[0] is the parent, but if it's the project itself, pick [1].
-                    if raw_ancestors and raw_ancestors[0] == name:
+                    if not raw_ancestors:
+                        # Should not happen for a valid project
+                        continue
+                    elif raw_ancestors and raw_ancestors[0] == name:
                         parent_res = (
                             raw_ancestors[1]
                             if len(raw_ancestors) > 1
@@ -412,13 +451,16 @@ class Hierarchy:
 
                     proj = Project(
                         name=name,
-                        project_id=project_id,
-                        display_name=display_name,
+                        project_id=str(project_id),
+                        display_name=str(display_name),
                         parent=parent_res,
                         organization=node,
                         folder=parent_folder,
                     )
                     projects.append(proj)
+                except (IndexError, AttributeError, TypeError) as e:
+                    logger.warning(f"Error processing project {name}: {e}")
+                    continue
         except Exception as e:
             logger.error(f"Error querying projects via Asset API: {e}")
 
@@ -489,3 +531,95 @@ class Hierarchy:
             raise ResourceNotFoundError(f"Project '{resource_name}' not found")
 
         raise ResourceNotFoundError(f"Unsupported resource name '{resource_name}'")
+
+    @staticmethod
+    def resolve_ancestry(resource_name: str) -> str:
+        """
+        Resolves the path for a given resource name by traversing up the hierarchy.
+        This avoids loading the entire hierarchy.
+        """
+        folders_client = resourcemanager_v3.FoldersClient()
+        projects_client = resourcemanager_v3.ProjectsClient()
+        org_client = resourcemanager_v3.OrganizationsClient()
+
+        segments: List[str] = []
+        current_resource_name = resource_name
+
+        # First, allow organizations/ID directly
+        if current_resource_name.startswith("organizations/"):
+            try:
+                org = org_client.get_organization(name=current_resource_name)
+                return "//" + path_escape(org.display_name)
+            except exceptions.PermissionDenied:
+                 logger.warning(f"Permission denied accessing organization {current_resource_name}")
+                 return f"//_unknown_org_({current_resource_name})" # Fallback
+            except Exception as e:
+                 logger.error(f"Error fetching organization {current_resource_name}: {e}")
+                 raise
+
+        # Helper to fetch display name and parent
+        def get_resource_info(name: str):
+            if name.startswith("projects/"):
+                try:
+                    p = projects_client.get_project(name=name)
+                    # Project display_name is optional, fallback to projectId
+                    d_name = p.display_name or p.project_id
+                    return d_name, p.parent
+                except exceptions.PermissionDenied:
+                     # If we can't see the project, we can't resolve its path
+                     raise ResourceNotFoundError(f"Permission denied accessing project {name}")
+
+            elif name.startswith("folders/"):
+                try:
+                    f = folders_client.get_folder(name=name)
+                    return f.display_name, f.parent
+                except exceptions.PermissionDenied:
+                     raise ResourceNotFoundError(f"Permission denied accessing folder {name}")
+
+            elif name.startswith("organizations/"):
+                try:
+                    o = org_client.get_organization(name=name)
+                    return o.display_name, None
+                except exceptions.PermissionDenied:
+                     # This might happen at the top of the chain
+                     return f"_unknown_org_({name})", None
+            
+            raise ResourceNotFoundError(f"Unknown resource type: {name}")
+
+        # Traverse up
+        while current_resource_name:
+            try:
+                display_name, parent = get_resource_info(current_resource_name)
+                # We build the path relevant to the resource itself, 
+                # but we need to handle the root (Org).
+                # If it's an organization, it becomes the prefix //Org
+                if current_resource_name.startswith("organizations/"):
+                    # We reached the top
+                    path_prefix = "//" + path_escape(display_name)
+                    # Prepend prefix to existing segments
+                    full_path = path_prefix + (("/" + "/".join(segments)) if segments else "")
+                    return full_path
+
+                # If it's a project or folder, add to segments
+                # Note: We are traversing UP, so we are collecting child -> parent
+                # We insert at the beginning of the list later or just reverse.
+                # Actually simpler: append to a list and reverse at the end?
+                # But we build segments usually as [Folder, Subfolder, Resource]
+                # Here we get Resource, then Parent (Folder), etc.
+                segments.insert(0, path_escape(display_name))
+                
+                # Check for organizationless project
+                if not parent:
+                     # Missing parent usually implies Organizationless (or error)
+                     # If we are at a project and it has no parent or parent is not org/folder
+                     # (though get_resource_info handles standard types)
+                     return "//_/" + "/".join(segments)
+
+                current_resource_name = parent
+
+            except exceptions.NotFound:
+                raise ResourceNotFoundError(f"Resource not found: {current_resource_name}")
+            except Exception:
+                raise
+
+        return "//?/" + "/".join(segments) # Should not be reached ideally
