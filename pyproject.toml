@@ -1,0 +1,30 @@
+[project]
+name = "gcpath"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "google-cloud-asset>=4.1.0",
+    "google-cloud-resource-manager>=1.15.0",
+    "rich>=14.2.0",
+    "typer>=0.20.1",
+]
+
+[project.scripts]
+gcpath = "gcpath.cli:run"
+
+[dependency-groups]
+dev = [
+    "mypy>=1.19.1",
+    "pytest>=9.0.2",
+    "pytest-cov>=7.0.0",
+    "ruff>=0.14.10",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/gcpath"]
