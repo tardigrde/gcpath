@@ -350,7 +350,7 @@ class Hierarchy:
     @staticmethod
     def _load_projects_asset(node: OrganizationNode) -> List[Project]:
         asset_client = asset_v1.AssetServiceClient()
-        projects = []
+        projects: List[Project] = []
         # Query Projects
         # Note: displayName is not in resource.data for Projects in Asset API query results
         # We'll use projectId as the display name fallback
