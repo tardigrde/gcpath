@@ -12,12 +12,35 @@ It helps you translate between GCP resource names (e.g., `folders/12345`) and hu
     - **Cloud Asset API (Default)**: Fast, bulk loading using GCP Cloud Asset Inventory.
     - **Resource Manager API**: Iterative loading using standard Resource Manager API (slower, but different permissions).
 
-## Installation
+## Quick Start
+
+After installation, ensure you are authenticated with Google Cloud and have the necessary permissions.
 
 ```bash
-pip install gcpath
-# or with uv
-uv tool install gcpath
+# List all resources
+gcpath ls
+
+# Find ID of a specific path
+gcpath name //example.com/engineering
+
+# Find path of a specific resource ID
+gcpath path folders/123456789
+```
+
+## Authentication
+
+`gcpath` uses [Google Cloud Application Default Credentials (ADC)](https://cloud.google.com/docs/authentication/provide-credentials-adc).
+
+### Setup
+1. Install [gcloud CLI](https://cloud.google.com/sdk/docs/install).
+2. Authenticate:
+   ```bash
+   gcloud auth application-default login
+   ```
+
+For service accounts in CI/CD environments:
+```bash
+export GOOGLE_APPLICATION_CREDENTIALS=/path/to/service-account.json
 ```
 
 ## Usage
@@ -68,6 +91,18 @@ Get the path from a resource name:
 gcpath path folders/987654321
 # Output: //example.com/engineering/backend
 ```
+
+### Tree View
+
+Visualize the hierarchy in a tree format:
+
+```bash
+gcpath tree
+```
+
+Options:
+- `-L, --level N`: Limit depth of the tree.
+- `-i, --ids`: Include resource IDs in the output.
 
 ### Modes
 
