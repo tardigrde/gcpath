@@ -115,6 +115,18 @@ class Hierarchy:
     def __init__(self, organizations: List[OrganizationNode], projects: List[Project]):
         self.organizations = organizations
         self.projects = projects
+        
+        # Build lookup maps for O(1) resource name resolution
+        self._orgs_by_name: Dict[str, OrganizationNode] = {
+            o.organization.name: o for o in organizations
+        }
+        self._folders_by_name: Dict[str, Folder] = {}
+        for org in organizations:
+            self._folders_by_name.update(org.folders)
+            
+        self._projects_by_name: Dict[str, Project] = {
+            p.name: p for p in projects
+        }
 
     @classmethod
     def load(
@@ -387,22 +399,21 @@ class Hierarchy:
 
     def get_path_by_resource_name(self, resource_name: str) -> str:
         if resource_name.startswith("organizations/"):
-            for org in self.organizations:
-                if org.organization.name == resource_name:
-                    return "//" + path_escape(org.organization.display_name)
+            org = self._orgs_by_name.get(resource_name)
+            if org:
+                return "//" + path_escape(org.organization.display_name)
             raise ValueError(f"Organization '{resource_name}' not found")
         
         if resource_name.startswith("folders/"):
-            for org in self.organizations:
-                folder = org.folders.get(resource_name)
-                if folder:
-                    return folder.path
+            folder = self._folders_by_name.get(resource_name)
+            if folder:
+                return folder.path
             raise ValueError(f"Folder '{resource_name}' not found")
 
         if resource_name.startswith("projects/"):
-            for proj in self.projects:
-                if proj.name == resource_name:
-                    return proj.path
+            proj = self._projects_by_name.get(resource_name)
+            if proj:
+                return proj.path
             raise ValueError(f"Project '{resource_name}' not found")
         
         raise ValueError(f"Unsupported resource name '{resource_name}'")
