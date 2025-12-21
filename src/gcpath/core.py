@@ -296,7 +296,7 @@ class Hierarchy:
         statement = "SELECT name, resource.data.displayName, ancestors FROM `cloudresourcemanager_googleapis_com_Folder`"
         query_request = asset_v1.QueryAssetsRequest(
             parent=node.organization.name,
-            query=asset_v1.QueryAssetsRequest.Statement(statement=statement),
+            statement=statement,
         )
 
         response = asset_client.query_assets(request=query_request)
@@ -355,7 +355,7 @@ class Hierarchy:
         statement = "SELECT name, resource.data.projectNumber, resource.data.projectId, resource.data.displayName, ancestors FROM `cloudresourcemanager_googleapis_com_Project`"
         query_request = asset_v1.QueryAssetsRequest(
             parent=node.organization.name,
-            query=asset_v1.QueryAssetsRequest.Statement(statement=statement),
+            statement=statement,
         )
 
         try:
