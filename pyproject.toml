@@ -1,6 +1,6 @@
 [project]
 name = "gcpath"
-version = "1.0.0"
+version = "0.1.3"
 description = "A CLI utility to manage Google Cloud Platform resource hierarchy paths."
 readme = "README.md"
 authors = [
@@ -48,6 +48,7 @@ build-backend = "hatchling.build"
 packages = ["src/gcpath"]
 
 [tool.semantic_release]
+major_on_zero = false
 version_toml = ["pyproject.toml:project.version"]
 branch = "main"
 upload_to_pypi = false
