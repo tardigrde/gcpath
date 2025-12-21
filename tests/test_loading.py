@@ -58,15 +58,17 @@ def test_load_folders_asset(mock_q_req, mock_asset_client_cls, mock_org_node):
         row.fields = {"f": f_field}
         return row
 
-    mock_page = MagicMock()
-    mock_page.query_result.rows = [
+    mock_query_result = MagicMock()
+    mock_query_result.rows = [
         create_row(
             "//cloudresourcemanager.googleapis.com/folders/1",
             "f1",
             ["//cloudresourcemanager.googleapis.com/organizations/123"],
         )
     ]
-    mock_client.query_assets.return_value.pages = [mock_page]
+    mock_response = MagicMock()
+    mock_response.query_result = mock_query_result
+    mock_client.query_assets.return_value = mock_response
 
     Hierarchy._load_folders_asset(mock_org_node)
 
@@ -83,8 +85,8 @@ def test_load_projects_asset(mock_q_req, mock_asset_client_cls, mock_org_node):
     mock_client = mock_asset_client_cls.return_value
     mock_q_req.Statement.return_value = MagicMock()
 
-    # Mock row for SELECT name(0), projectNumber(1), projectId(2), displayName(3), ancestors(4)
-    def create_project_row(name, p_num, p_id, display_name, ancestors):
+    # Mock row for SELECT name(0), projectNumber(1), projectId(2), ancestors(3) - displayName removed
+    def create_project_row(name, p_num, p_id, ancestors):
         row = MagicMock()
         f_field = MagicMock()
 
@@ -94,8 +96,6 @@ def test_load_projects_asset(mock_q_req, mock_asset_client_cls, mock_org_node):
         v_num.struct_value.fields = {"v": MagicMock(string_value=p_num)}
         v_id = MagicMock()
         v_id.struct_value.fields = {"v": MagicMock(string_value=p_id)}
-        v_dn = MagicMock()
-        v_dn.struct_value.fields = {"v": MagicMock(string_value=display_name)}
 
         anc_vals = []
         for anc in ancestors:
@@ -107,21 +107,22 @@ def test_load_projects_asset(mock_q_req, mock_asset_client_cls, mock_org_node):
             "v": MagicMock(list_value=MagicMock(values=anc_vals))
         }
 
-        f_field.list_value.values = [v_name, v_num, v_id, v_dn, v_anc]
+        f_field.list_value.values = [v_name, v_num, v_id, v_anc]
         row.fields = {"f": f_field}
         return row
 
-    mock_page = MagicMock()
-    mock_page.query_result.rows = [
+    mock_query_result = MagicMock()
+    mock_query_result.rows = [
         create_project_row(
             "//cloudresourcemanager.googleapis.com/projects/p1",
             "123",
             "p1-id",
-            "P1",
             ["//cloudresourcemanager.googleapis.com/folders/f1", "organizations/123"],
         )
     ]
-    mock_client.query_assets.return_value.pages = [mock_page]
+    mock_response = MagicMock()
+    mock_response.query_result = mock_query_result
+    mock_client.query_assets.return_value = mock_response
 
     # Pre-populate a folder to test parent resolution
     mock_org_node.folders["folders/f1"] = Folder(
@@ -136,7 +137,7 @@ def test_load_projects_asset(mock_q_req, mock_asset_client_cls, mock_org_node):
     assert len(projects) == 1
     p = projects[0]
     assert p.name == "projects/p1"
-    assert p.display_name == "P1"
+    assert p.display_name == "p1-id"  # Now uses projectId
     assert p.parent == "folders/f1"
     assert p.folder is not None
     assert p.folder.name == "folders/f1"

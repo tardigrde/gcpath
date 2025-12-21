@@ -301,11 +301,11 @@ class Hierarchy:
 
         response = asset_client.query_assets(request=query_request)
 
-        for page in response.pages:
-            if not page.query_result or not page.query_result.rows:
-                continue
+        # Iterate directly over the response (pagination is handled automatically)
+        if not response.query_result or not response.query_result.rows:
+            return
 
-            for row in page.query_result.rows:
+        for row in response.query_result.rows:
                 # The Asset API SQL results are returned in a Struct where the values
                 # are in a list named 'f', similar to BigQuery JSON output.
                 # 0: name, 1: displayName, 2: ancestors
@@ -352,7 +352,9 @@ class Hierarchy:
         asset_client = asset_v1.AssetServiceClient()
         projects = []
         # Query Projects
-        statement = "SELECT name, resource.data.projectNumber, resource.data.projectId, resource.data.displayName, ancestors FROM `cloudresourcemanager_googleapis_com_Project`"
+        # Note: displayName is not in resource.data for Projects in Asset API query results
+        # We'll use projectId as the display name fallback
+        statement = "SELECT name, resource.data.projectNumber, resource.data.projectId, ancestors FROM `cloudresourcemanager_googleapis_com_Project`"
         query_request = asset_v1.QueryAssetsRequest(
             parent=node.organization.name,
             statement=statement,
@@ -360,29 +362,28 @@ class Hierarchy:
 
         try:
             response = asset_client.query_assets(request=query_request)
-            for page in response.pages:
-                if not page.query_result or not page.query_result.rows:
-                    continue
+            
+            # Iterate directly over the response
+            if not response.query_result or not response.query_result.rows:
+                return projects
 
-                for row in page.query_result.rows:
+            for row in response.query_result.rows:
                     row_dict = dict(row.fields)
                     if "f" not in row_dict:
                         continue
 
                     f_list = row_dict["f"].list_value.values
-                    if len(f_list) < 5:
+                    if len(f_list) < 4:
                         logger.warning(
                             f"Unexpected number of columns in Asset API project row: {len(f_list)}"
                         )
                         continue
 
-                    # 0: name, 1: projectNumber, 2: projectId, 3: displayName, 4: ancestors
+                    # 0: name, 1: projectNumber, 2: projectId, 3: ancestors
                     name_val = f_list[0].struct_value.fields["v"].string_value
                     project_id = f_list[2].struct_value.fields["v"].string_value
-                    display_name = (
-                        f_list[3].struct_value.fields["v"].string_value or project_id
-                    )
-                    ancestors_val = f_list[4].struct_value.fields["v"].list_value.values
+                    display_name = project_id  # Use projectId as displayName
+                    ancestors_val = f_list[3].struct_value.fields["v"].list_value.values
 
                     name = _clean_asset_name(name_val)
                     raw_ancestors = [
