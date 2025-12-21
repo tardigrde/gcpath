@@ -32,30 +32,19 @@ def test_load_folders_asset(mock_q_req, mock_asset_client_cls, mock_org_node):
     mock_client = mock_asset_client_cls.return_value
     mock_q_req.Statement.return_value = MagicMock()
 
-    # Mocking the response structure: { f: [ {v: name}, {v: displayName}, {v: [ {v: a1}, {v: a2} ] } ] }
+    # Mocking the response structure: plain dicts/lists for unmarshaled Structs
+    # { "f": [ {"v": name}, {"v": displayName}, {"v": [ {"v": a1}, {"v": a2} ] } ] }
     def create_row(name, display_name, ancestors):
-        row = MagicMock()
-        f_field = MagicMock()
-
-        name_val = MagicMock()
-        name_val.struct_value.fields = {"v": MagicMock(string_value=name)}
-
-        dn_val = MagicMock()
-        dn_val.struct_value.fields = {"v": MagicMock(string_value=display_name)}
-
-        anc_vals = []
-        for anc in ancestors:
-            av = MagicMock()
-            av.struct_value.fields = {"v": MagicMock(string_value=anc)}
-            anc_vals.append(av)
-
-        anc_list = MagicMock()
-        anc_list.struct_value.fields = {
-            "v": MagicMock(list_value=MagicMock(values=anc_vals))
+        anc_vals = [{"v": anc} for anc in ancestors]
+        
+        # Row is a dict representing the struct
+        row = {
+            "f": [
+                {"v": name},
+                {"v": display_name},
+                {"v": anc_vals}  # ancestors is a list wrapper
+            ]
         }
-
-        f_field.list_value.values = [name_val, dn_val, anc_list]
-        row.fields = {"f": f_field}
         return row
 
     mock_query_result = MagicMock()
@@ -87,28 +76,16 @@ def test_load_projects_asset(mock_q_req, mock_asset_client_cls, mock_org_node):
 
     # Mock row for SELECT name(0), projectNumber(1), projectId(2), ancestors(3) - displayName removed
     def create_project_row(name, p_num, p_id, ancestors):
-        row = MagicMock()
-        f_field = MagicMock()
-
-        v_name = MagicMock()
-        v_name.struct_value.fields = {"v": MagicMock(string_value=name)}
-        v_num = MagicMock()
-        v_num.struct_value.fields = {"v": MagicMock(string_value=p_num)}
-        v_id = MagicMock()
-        v_id.struct_value.fields = {"v": MagicMock(string_value=p_id)}
-
-        anc_vals = []
-        for anc in ancestors:
-            av = MagicMock()
-            av.struct_value.fields = {"v": MagicMock(string_value=anc)}
-            anc_vals.append(av)
-        v_anc = MagicMock()
-        v_anc.struct_value.fields = {
-            "v": MagicMock(list_value=MagicMock(values=anc_vals))
+        anc_vals = [{"v": anc} for anc in ancestors]
+        
+        row = {
+            "f": [
+                {"v": name},
+                {"v": p_num},
+                {"v": p_id},
+                {"v": anc_vals}
+            ]
         }
-
-        f_field.list_value.values = [v_name, v_num, v_id, v_anc]
-        row.fields = {"f": f_field}
         return row
 
     mock_query_result = MagicMock()

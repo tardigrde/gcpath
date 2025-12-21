@@ -147,3 +147,88 @@ def test_organizationless_project_path():
 
     h = Hierarchy([], [p1])
     assert h.get_resource_name("//_/Project%201") == "projects/p1"
+
+from unittest.mock import patch, MagicMock
+from google.api_core import exceptions
+from gcpath.core import Hierarchy, ResourceNotFoundError
+
+@patch("google.cloud.resourcemanager_v3.OrganizationsClient")
+@patch("google.cloud.resourcemanager_v3.FoldersClient")
+@patch("google.cloud.resourcemanager_v3.ProjectsClient")
+def test_resolve_ancestry_project(mock_proj_client, mock_folder_client, mock_org_client):
+    # Setup Mocks
+    p_client = mock_proj_client.return_value
+    f_client = mock_folder_client.return_value
+    o_client = mock_org_client.return_value
+
+    # Project -> Folder -> Org
+    # projects/p1 (Project 1) -> folders/f1 (Folder 1) -> organizations/123 (Example Org)
+    
+    # 1. Get Project
+    mock_proj = MagicMock()
+    mock_proj.display_name = "Project 1"
+    mock_proj.parent = "folders/f1"
+    p_client.get_project.return_value = mock_proj
+
+    # 2. Get Folder
+    mock_folder = MagicMock()
+    mock_folder.display_name = "Folder 1"
+    mock_folder.parent = "organizations/123"
+    f_client.get_folder.return_value = mock_folder
+
+    # 3. Get Org
+    mock_org = MagicMock()
+    mock_org.display_name = "Example Org"
+    o_client.get_organization.return_value = mock_org
+
+    # Execute
+    path = Hierarchy.resolve_ancestry("projects/p1")
+
+    # Verify
+    assert path == "//Example%20Org/Folder%201/Project%201"
+    
+    p_client.get_project.assert_called_with(name="projects/p1")
+    f_client.get_folder.assert_called_with(name="folders/f1")
+    o_client.get_organization.assert_called_with(name="organizations/123")
+
+
+@patch("google.cloud.resourcemanager_v3.OrganizationsClient")
+def test_resolve_ancestry_organization(mock_org_client):
+    o_client = mock_org_client.return_value
+    mock_org = MagicMock()
+    mock_org.display_name = "Example Org"
+    o_client.get_organization.return_value = mock_org
+
+    path = Hierarchy.resolve_ancestry("organizations/123")
+    assert path == "//Example%20Org"
+
+
+@patch("google.cloud.resourcemanager_v3.ProjectsClient")
+def test_resolve_ancestry_not_found(mock_proj_client):
+    p_client = mock_proj_client.return_value
+    p_client.get_project.side_effect = exceptions.NotFound("Project not found")
+
+    with pytest.raises(ResourceNotFoundError, match="Resource not found"):
+        Hierarchy.resolve_ancestry("projects/nonexistent")
+
+
+@patch("google.cloud.resourcemanager_v3.ProjectsClient")
+def test_resolve_ancestry_permission_denied(mock_proj_client):
+    p_client = mock_proj_client.return_value
+    p_client.get_project.side_effect = exceptions.PermissionDenied("Access denied")
+
+    with pytest.raises(ResourceNotFoundError, match="Permission denied"):
+        Hierarchy.resolve_ancestry("projects/restricted")
+
+@patch("google.cloud.resourcemanager_v3.ProjectsClient")
+def test_resolve_ancestry_organizationless(mock_proj_client):
+    p_client = mock_proj_client.return_value
+    
+    # Project with no parent (or parent not org/folder)
+    mock_proj = MagicMock()
+    mock_proj.display_name = "Standalone"
+    mock_proj.parent = "" 
+    p_client.get_project.return_value = mock_proj
+    
+    path = Hierarchy.resolve_ancestry("projects/standalone")
+    assert path == "//_/Standalone"

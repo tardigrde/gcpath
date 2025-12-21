@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.4] - 2025-12-21
+
+### Fixed
+- **CRITICAL FIX**: Fixed `AttributeError: 'MapComposite' object has no attribute 'fields'` by accessing row data directly as dictionaries. This aligns with how `google-cloud-asset` unmarshals Structs.
+- Fixed logic to correctly append `Project` objects to the returned list in `_load_projects_asset`.
+
+### Changed
+- **Optimization**: `gcpath path` command now uses direct recursive lookup (Resource Manager API) instead of loading the entire hierarchy, significantly improving performance for single resource queries.
+- Configured automated release to stay within `0.x.y` version range (`major_on_zero = false`).
+
 ## [0.1.3] - 2025-12-21
 
 ### Fixed

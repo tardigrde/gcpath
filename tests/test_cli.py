@@ -50,14 +50,6 @@ def test_name_command_id_only(mock_load, mock_hierarchy):
 
 
 @patch("gcpath.core.Hierarchy.load")
-def test_path_command(mock_load, mock_hierarchy):
-    mock_load.return_value = mock_hierarchy
-    result = runner.invoke(app, ["path", "folders/1"])
-    assert result.exit_code == 0
-    assert "//example.com/f1" in result.stdout
-
-
-@patch("gcpath.core.Hierarchy.load")
 def test_ls_shows_projects(mock_load, mock_hierarchy):
     p1 = Project(
         name="projects/p1",
