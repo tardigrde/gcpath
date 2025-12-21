@@ -144,6 +144,9 @@ class Hierarchy:
         for org in organizations:
             self._folders_by_name.update(org.folders)
 
+        # Public list of all folders for convenience
+        self.folders = list(self._folders_by_name.values())
+
         self._projects_by_name: Dict[str, Project] = {p.name: p for p in projects}
 
     @classmethod
