@@ -1,7 +1,7 @@
 [project]
 name = "gcpath"
 version = "0.1.0"
-description = "Add your description here"
+description = "A CLI utility to manage Google Cloud Platform resource hierarchy paths."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
