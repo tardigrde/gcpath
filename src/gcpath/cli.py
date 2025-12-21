@@ -1,11 +1,11 @@
 import typer
-from typing import Optional, List
+from typing import Optional, List, Dict
 from typing_extensions import Annotated
 from rich.console import Console
 from rich import print as rprint
 import sys
 
-from gcpath.core import Hierarchy, path_escape
+from gcpath.core import Hierarchy, path_escape, Project
 
 app = typer.Typer(
     name="gcpath",
@@ -112,7 +112,7 @@ def tree(
         root_tree = Tree("[bold cyan]GCP Hierarchy[/bold cyan]")
         
         # Group projects by parent
-        projects_by_parent = {}
+        projects_by_parent: Dict[str, List[Project]] = {}
         for proj in hierarchy.projects:
             projects_by_parent.setdefault(proj.parent, []).append(proj)
             
@@ -228,7 +228,7 @@ def get_path_command(
             print(p)
             
     except Exception as e:
-        console.print(f"[red]Error:[/red] {e}", file=sys.stderr)
+        error_console.print(f"[red]Error:[/red] {e}")
         raise typer.Exit(code=1)
 
 def run():
