@@ -48,6 +48,7 @@ build-backend = "hatchling.build"
 packages = ["src/gcpath"]
 
 [tool.semantic_release]
+major_on_zero = false
 version_toml = ["pyproject.toml:project.version"]
 branch = "main"
 upload_to_pypi = false
