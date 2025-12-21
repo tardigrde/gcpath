@@ -36,13 +36,13 @@ def test_load_folders_asset(mock_q_req, mock_asset_client_cls, mock_org_node):
     # { "f": [ {"v": name}, {"v": displayName}, {"v": [ {"v": a1}, {"v": a2} ] } ] }
     def create_row(name, display_name, ancestors):
         anc_vals = [{"v": anc} for anc in ancestors]
-        
+
         # Row is a dict representing the struct
         row = {
             "f": [
                 {"v": name},
                 {"v": display_name},
-                {"v": anc_vals}  # ancestors is a list wrapper
+                {"v": anc_vals},  # ancestors is a list wrapper
             ]
         }
         return row
@@ -77,15 +77,8 @@ def test_load_projects_asset(mock_q_req, mock_asset_client_cls, mock_org_node):
     # Mock row for SELECT name(0), projectNumber(1), projectId(2), ancestors(3) - displayName removed
     def create_project_row(name, p_num, p_id, ancestors):
         anc_vals = [{"v": anc} for anc in ancestors]
-        
-        row = {
-            "f": [
-                {"v": name},
-                {"v": p_num},
-                {"v": p_id},
-                {"v": anc_vals}
-            ]
-        }
+
+        row = {"f": [{"v": name}, {"v": p_num}, {"v": p_id}, {"v": anc_vals}]}
         return row
 
     mock_query_result = MagicMock()

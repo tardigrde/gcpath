@@ -14,7 +14,7 @@ def mock_hierarchy():
         name="organizations/123", display_name="example.com"
     )
     org_node = OrganizationNode(organization=org_proto)
-    
+
     # F1 (depth 1)
     f1 = Folder(
         name="folders/1",
@@ -29,10 +29,10 @@ def mock_hierarchy():
         ancestors=["folders/11", "folders/1", "organizations/123"],
         organization=org_node,
     )
-    
+
     org_node.folders["folders/1"] = f1
     org_node.folders["folders/11"] = f11
-    
+
     # Projects
     p1 = Project(
         name="projects/p1",
@@ -42,7 +42,7 @@ def mock_hierarchy():
         organization=org_node,
         folder=f1,
     )
-    
+
     # Orgless Project
     orgless_p = Project(
         name="projects/standalone",
@@ -52,7 +52,7 @@ def mock_hierarchy():
         organization=None,
         folder=None,
     )
-    
+
     return Hierarchy([org_node], [p1, orgless_p])
 
 
@@ -71,7 +71,7 @@ def test_ls_command(mock_load, mock_hierarchy):
 def test_ls_positional_resource(mock_resolve, mock_load, mock_hierarchy):
     mock_load.return_value = mock_hierarchy
     mock_resolve.return_value = "//example.com/f1"
-    
+
     # List folder/1 children
     result = runner.invoke(app, ["ls", "folders/1"])
     assert result.exit_code == 0
@@ -176,6 +176,7 @@ def test_ls_no_resources_message(mock_load):
 def test_handle_error_gcpath_error():
     from gcpath.cli import handle_error
     import typer
+
     with pytest.raises(typer.Exit):
         handle_error(GCPathError("test error"))
 
@@ -192,11 +193,14 @@ def test_ls_gmail_account(mock_load):
     # Mock google.auth.default to return a gmail account
     mock_creds = MagicMock()
     mock_creds.account = "user@gmail.com"
-    
+
     with patch("google.auth.default", return_value=(mock_creds, "project")):
         mock_load.return_value = Hierarchy([], [])
         result = runner.invoke(app, ["ls"])
-        assert "No organizations or projects found accessible to your account" in result.stdout
+        assert (
+            "No organizations or projects found accessible to your account"
+            in result.stdout
+        )
         assert "user@gmail.com" in result.stdout
 
 
@@ -205,7 +209,7 @@ def test_ls_gmail_account(mock_load):
 def test_ls_recursive_folder(mock_resolve, mock_load, mock_hierarchy):
     mock_load.return_value = mock_hierarchy
     mock_resolve.return_value = "//example.com/f1"
-    
+
     result = runner.invoke(app, ["ls", "-R", "folders/1"])
     assert result.exit_code == 0
     assert "//example.com/f1" in result.stdout
@@ -216,6 +220,7 @@ def test_handle_error_permission_denied():
     from google.api_core import exceptions as gcp_exceptions
     from gcpath.cli import handle_error
     import typer
+
     with pytest.raises(typer.Exit):
         handle_error(gcp_exceptions.PermissionDenied("denied"))
 
@@ -224,6 +229,7 @@ def test_handle_error_service_unavailable():
     from google.api_core import exceptions as gcp_exceptions
     from gcpath.cli import handle_error
     import typer
+
     with pytest.raises(typer.Exit):
         handle_error(gcp_exceptions.ServiceUnavailable("unavailable"))
 
@@ -249,7 +255,7 @@ def test_name_organizationless_project(mock_load):
         folder=None,
     )
     mock_load.return_value = Hierarchy([], [p1])
-    
+
     result = runner.invoke(app, ["name", "//_/main-dev-levente-001"])
     assert result.exit_code == 0
     assert "projects/965192208715" in result.stdout

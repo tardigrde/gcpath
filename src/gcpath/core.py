@@ -13,16 +13,19 @@ logger = logging.getLogger(__name__)
 
 class GCPathError(Exception):
     """Base exception for gcpath."""
+
     pass
 
 
 class ResourceNotFoundError(GCPathError, ValueError):
     """Raised when a resource is not found."""
+
     pass
 
 
 class PathParsingError(GCPathError, ValueError):
     """Raised when a path cannot be parsed."""
+
     pass
 
 
@@ -162,13 +165,23 @@ class Hierarchy:
         # Load Orgs
         org_nodes = []
         try:
+            logger.debug(
+                f"Calling search_organizations() with display_names filter: {display_names}"
+            )
             page_result = org_client.search_organizations(
                 request=resourcemanager_v3.SearchOrganizationsRequest()
             )
+            logger.debug("search_organizations() returned successfully")
             for org in page_result:
                 if display_names and org.display_name not in display_names:
+                    logger.debug(
+                        f"Skipping organization '{org.display_name}' (not in filter)"
+                    )
                     continue
 
+                logger.debug(
+                    f"Processing organization: {org.display_name} (name: {org.name})"
+                )
                 node = OrganizationNode(organization=org)
                 org_nodes.append(node)
 
@@ -176,6 +189,9 @@ class Hierarchy:
                     cls._load_folders_rm(node)
                 else:
                     cls._load_folders_asset(node)
+                logger.debug(
+                    f"Loaded {len(node.folders)} folders for org {node.organization.display_name}"
+                )
         except exceptions.PermissionDenied:
             logger.warning("Permission denied searching organizations")
         except Exception as e:
@@ -189,6 +205,7 @@ class Hierarchy:
                 projects_pager = project_client.search_projects(
                     request=resourcemanager_v3.SearchProjectsRequest()
                 )
+                logger.debug("GCP API: search_projects() returned successfully")
                 for p_proto in projects_pager:
                     # Find parent
                     parent_org = None
@@ -226,17 +243,27 @@ class Hierarchy:
         else:
             # Asset API mode
             for org_node in org_nodes:
-                all_projects.extend(cls._load_projects_asset(org_node))
+                org_projects = cls._load_projects_asset(org_node)
+                all_projects.extend(org_projects)
 
             # Asset API Query REQUIRES a parent (like organization).
             # To find organizationless projects, we always fallback to Resource Manager search_projects.
             existing_project_names = {p.name for p in all_projects}
+            logger.debug(
+                f"Falling back to search_projects() to find organizationless projects. Already have {len(existing_project_names)} projects"
+            )
             try:
                 projects_pager = project_client.search_projects(
                     request=resourcemanager_v3.SearchProjectsRequest()
                 )
+                logger.debug(
+                    "GCP API: search_projects() fallback returned successfully"
+                )
                 for p_proto in projects_pager:
                     if p_proto.name in existing_project_names:
+                        logger.debug(
+                            f"Project {p_proto.project_id} already loaded, skipping"
+                        )
                         continue
 
                     # A project is organizationless if it's not under an organization or folder.
@@ -245,6 +272,9 @@ class Hierarchy:
                     ) and not p_proto.parent.startswith("folders/")
 
                     if is_orgless:
+                        logger.debug(
+                            f"Found organizationless project: {p_proto.project_id}"
+                        )
                         proj = Project(
                             name=p_proto.name,
                             project_id=p_proto.project_id,
@@ -269,6 +299,7 @@ class Hierarchy:
             request = resourcemanager_v3.ListFoldersRequest(parent=parent_name)
             try:
                 page = folders_client.list_folders(request=request)
+                logger.debug(f"GCP API: list_folders() returned for {parent_name}")
                 for folder_proto in page:
                     # ancestors list includes: [folder.Name, parent..., OrgName]
                     new_ancestors = [folder_proto.name] + ancestors
@@ -300,13 +331,17 @@ class Hierarchy:
         )
 
         response = asset_client.query_assets(request=query_request)
+        logger.debug(
+            f"GCP API: query_assets(folders) returned for {node.organization.name}"
+        )
 
         # Iterate directly over the response (pagination is handled automatically)
         if not response.query_result or not response.query_result.rows:
+            logger.debug("No folder rows returned from Asset API")
             return
 
         for row in response.query_result.rows:
-                # The Asset API SQL results are returned in a Struct where the values
+            # The Asset API SQL results are returned in a Struct where the values
             # are in a list named 'f', similar to BigQuery JSON output.
             # 0: name, 1: displayName, 2: ancestors
             # IMPORTANT: The google-cloud-asset library returns MapComposite objects
@@ -323,16 +358,8 @@ class Hierarchy:
                 )
                 continue
 
-            # Accessing struct values directly.
-            # Note: The 'v' key logic depends on the exact unmarshaling.
-            # If the library returns native python types, we might just access them directly.
-            # Based on error reports, it seems to return MapComposite/RepeatedComposite.
-            # We'll try to access safely.
+            # Accessing struct values directly
             try:
-                # Based on typical unmarshaling of Structs:
-                # f_list[0] is the first column (name)
-                # It might be a dict `{'v': '...'}` or just the value if flattened.
-                # Let's assume standard Struct/ListValue structure preserved but unmarshaled as dicts.
                 name_col = f_list[0]
                 dn_col = f_list[1]
                 anc_col = f_list[2]
@@ -340,20 +367,34 @@ class Hierarchy:
                 # Check if it's a dict with 'v' or just potential direct value
                 name_val = name_col.get("v") if isinstance(name_col, dict) else name_col
                 display_name = dn_col.get("v") if isinstance(dn_col, dict) else dn_col
-                ancestors_wrapper = anc_col.get("v") if isinstance(anc_col, dict) else anc_col
+                ancestors_wrapper = (
+                    anc_col.get("v") if isinstance(anc_col, dict) else anc_col
+                )
 
                 # Ancestors might be a list wrapper
-                raw_ancestors_uncleaned = ancestors_wrapper if isinstance(ancestors_wrapper, list) else []
+                raw_ancestors_uncleaned = (
+                    ancestors_wrapper if isinstance(ancestors_wrapper, list) else []
+                )
 
             except (IndexError, AttributeError, TypeError) as e:
-                logger.warning(f"Error parsing Asset API row: {e}")
+                logger.warning(f"Error parsing Asset API folder row: {e}")
                 continue
 
             if not name_val or not display_name:
+                logger.debug("Skipping folder row with missing name or display_name")
                 continue
 
             name = _clean_asset_name(str(name_val))
-            raw_ancestors = [_clean_asset_name(str(item.get("v") if isinstance(item, dict) else item)) for item in raw_ancestors_uncleaned]
+            raw_ancestors = [
+                _clean_asset_name(
+                    str(item.get("v") if isinstance(item, dict) else item)
+                )
+                for item in raw_ancestors_uncleaned
+            ]
+
+            logger.debug(
+                f"Parsed folder from Asset API: name={name}, display_name={display_name}"
+            )
 
             # Ensure consistency with _load_folders_rm structure: [self, parent, ..., org]
             if not raw_ancestors or raw_ancestors[0] != name:
@@ -365,10 +406,9 @@ class Hierarchy:
                 name=name,
                 display_name=display_name,
                 ancestors=ancestors,
-                organization=node
+                organization=node,
             )
             node.folders[f.name] = f
-
 
     @staticmethod
     def _load_projects_asset(node: OrganizationNode) -> List[Project]:
@@ -385,9 +425,13 @@ class Hierarchy:
 
         try:
             response = asset_client.query_assets(request=query_request)
+            logger.debug(
+                f"GCP API: query_assets(projects) returned for {node.organization.name}"
+            )
 
             # Iterate directly over the response
             if not response.query_result or not response.query_result.rows:
+                logger.debug("No project rows returned from Asset API")
                 return projects
 
             for row in response.query_result.rows:
@@ -409,18 +453,30 @@ class Hierarchy:
                     id_col = f_list[2]
                     anc_col = f_list[3]
 
-                    name_val = name_col.get("v") if isinstance(name_col, dict) else name_col
+                    name_val = (
+                        name_col.get("v") if isinstance(name_col, dict) else name_col
+                    )
                     project_id = id_col.get("v") if isinstance(id_col, dict) else id_col
                     display_name = project_id  # Use projectId as displayName
 
-                    ancestors_wrapper = anc_col.get("v") if isinstance(anc_col, dict) else anc_col
-                    raw_ancestors_uncleaned = ancestors_wrapper if isinstance(ancestors_wrapper, list) else []
+                    ancestors_wrapper = (
+                        anc_col.get("v") if isinstance(anc_col, dict) else anc_col
+                    )
+                    raw_ancestors_uncleaned = (
+                        ancestors_wrapper if isinstance(ancestors_wrapper, list) else []
+                    )
 
                     name = _clean_asset_name(str(name_val))
                     raw_ancestors = [
-                        _clean_asset_name(str(item.get("v") if isinstance(item, dict) else item))
+                        _clean_asset_name(
+                            str(item.get("v") if isinstance(item, dict) else item)
+                        )
                         for item in raw_ancestors_uncleaned
                     ]
+
+                    logger.debug(
+                        f"Parsed project from Asset API: project_id={project_id}, name={name}"
+                    )
 
                 except (IndexError, AttributeError, TypeError) as e:
                     logger.warning(f"Error parsing Asset API project row: {e}")
@@ -457,6 +513,9 @@ class Hierarchy:
                         organization=node,
                         folder=parent_folder,
                     )
+                    logger.debug(
+                        f"Added project {project_id} to hierarchy from Asset API (parent: {parent_res})"
+                    )
                     projects.append(proj)
                 except (IndexError, AttributeError, TypeError) as e:
                     logger.warning(f"Error processing project {name}: {e}")
@@ -474,7 +533,9 @@ class Hierarchy:
 
         trimmed = path[2:]
         if not trimmed:
-            raise PathParsingError("Path must contain an organization name (e.g., //example.com)")
+            raise PathParsingError(
+                "Path must contain an organization name (e.g., //example.com)"
+            )
 
         parts = trimmed.split("/", 1)
         org_name = parts[0]
@@ -490,7 +551,9 @@ class Hierarchy:
             for proj in self.projects:
                 if not proj.organization and proj.path == path:
                     return proj.name
-            raise ResourceNotFoundError(f"Project path '{path}' not found in organizationless scope")
+            raise ResourceNotFoundError(
+                f"Project path '{path}' not found in organizationless scope"
+            )
 
         org_node = next(
             (o for o in self.organizations if o.organization.display_name == org_name),
@@ -549,55 +612,71 @@ class Hierarchy:
         if current_resource_name.startswith("organizations/"):
             try:
                 org = org_client.get_organization(name=current_resource_name)
+                logger.debug(
+                    f"GCP API: get_organization({current_resource_name}) returned"
+                )
                 return "//" + path_escape(org.display_name)
             except exceptions.PermissionDenied:
-                 logger.warning(f"Permission denied accessing organization {current_resource_name}")
-                 return f"//_unknown_org_({current_resource_name})" # Fallback
+                logger.warning(
+                    f"Permission denied accessing organization {current_resource_name}"
+                )
+                return f"//_unknown_org_({current_resource_name})"  # Fallback
             except Exception as e:
-                 logger.error(f"Error fetching organization {current_resource_name}: {e}")
-                 raise
+                logger.error(
+                    f"Error fetching organization {current_resource_name}: {e}"
+                )
+                raise
 
         # Helper to fetch display name and parent
         def get_resource_info(name: str):
             if name.startswith("projects/"):
                 try:
                     p = projects_client.get_project(name=name)
+                    logger.debug(f"GCP API: get_project({name}) returned")
                     # Project display_name is optional, fallback to projectId
                     d_name = p.display_name or p.project_id
                     return d_name, p.parent
                 except exceptions.PermissionDenied:
-                     # If we can't see the project, we can't resolve its path
-                     raise ResourceNotFoundError(f"Permission denied accessing project {name}")
+                    # If we can't see the project, we can't resolve its path
+                    raise ResourceNotFoundError(
+                        f"Permission denied accessing project {name}"
+                    )
 
             elif name.startswith("folders/"):
                 try:
                     f = folders_client.get_folder(name=name)
+                    logger.debug(f"GCP API: get_folder({name}) returned")
                     return f.display_name, f.parent
                 except exceptions.PermissionDenied:
-                     raise ResourceNotFoundError(f"Permission denied accessing folder {name}")
+                    raise ResourceNotFoundError(
+                        f"Permission denied accessing folder {name}"
+                    )
 
             elif name.startswith("organizations/"):
                 try:
                     o = org_client.get_organization(name=name)
+                    logger.debug(f"GCP API: get_organization({name}) returned")
                     return o.display_name, None
                 except exceptions.PermissionDenied:
-                     # This might happen at the top of the chain
-                     return f"_unknown_org_({name})", None
-            
+                    # This might happen at the top of the chain
+                    return f"_unknown_org_({name})", None
+
             raise ResourceNotFoundError(f"Unknown resource type: {name}")
 
         # Traverse up
         while current_resource_name:
             try:
                 display_name, parent = get_resource_info(current_resource_name)
-                # We build the path relevant to the resource itself, 
+                # We build the path relevant to the resource itself,
                 # but we need to handle the root (Org).
                 # If it's an organization, it becomes the prefix //Org
                 if current_resource_name.startswith("organizations/"):
                     # We reached the top
                     path_prefix = "//" + path_escape(display_name)
                     # Prepend prefix to existing segments
-                    full_path = path_prefix + (("/" + "/".join(segments)) if segments else "")
+                    full_path = path_prefix + (
+                        ("/" + "/".join(segments)) if segments else ""
+                    )
                     return full_path
 
                 # If it's a project or folder, add to segments
@@ -607,19 +686,21 @@ class Hierarchy:
                 # But we build segments usually as [Folder, Subfolder, Resource]
                 # Here we get Resource, then Parent (Folder), etc.
                 segments.insert(0, path_escape(display_name))
-                
+
                 # Check for organizationless project
                 if not parent:
-                     # Missing parent usually implies Organizationless (or error)
-                     # If we are at a project and it has no parent or parent is not org/folder
-                     # (though get_resource_info handles standard types)
-                     return "//_/" + "/".join(segments)
+                    # Missing parent usually implies Organizationless (or error)
+                    # If we are at a project and it has no parent or parent is not org/folder
+                    # (though get_resource_info handles standard types)
+                    return "//_/" + "/".join(segments)
 
                 current_resource_name = parent
 
             except exceptions.NotFound:
-                raise ResourceNotFoundError(f"Resource not found: {current_resource_name}")
+                raise ResourceNotFoundError(
+                    f"Resource not found: {current_resource_name}"
+                )
             except Exception:
                 raise
 
-        return "//?/" + "/".join(segments) # Should not be reached ideally
+        return "//?/" + "/".join(segments)  # Should not be reached ideally
