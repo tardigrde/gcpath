@@ -79,3 +79,36 @@ def test_tree_command(mock_load, mock_hierarchy):
     assert result.exit_code == 0
     assert "example.com" in result.stdout
     assert "f1" in result.stdout
+
+@patch("gcpath.core.Hierarchy.load")
+def test_ls_orgless(mock_load):
+    p1 = Project(name="projects/p1", project_id="p1", display_name="Project 1", parent="organizations/0", organization=None, folder=None)
+    h = Hierarchy([], [p1])
+    mock_load.return_value = h
+    
+    result = runner.invoke(app, ["ls"])
+    assert result.exit_code == 0
+    assert "//_/Project%201" in result.stdout
+
+@patch("gcpath.core.Hierarchy.load")
+def test_tree_orgless(mock_load):
+    p1 = Project(name="projects/p1", project_id="p1", display_name="Project 1", parent="organizations/0", organization=None, folder=None)
+    h = Hierarchy([], [p1])
+    mock_load.return_value = h
+    
+    result = runner.invoke(app, ["tree"])
+    assert result.exit_code == 0
+    assert "(organizationless)" in result.stdout
+    assert "Project 1" in result.stdout
+
+@patch("gcpath.core.Hierarchy.load")
+def test_name_multiple_paths(mock_load, mock_hierarchy):
+    org_node = mock_hierarchy.organizations[0]
+    f2 = Folder(name="folders/2", display_name="f2", ancestors=["folders/2", "organizations/123"], organization=org_node)
+    org_node.folders["folders/2"] = f2
+    mock_load.return_value = mock_hierarchy
+    
+    result = runner.invoke(app, ["name", "//example.com/f1", "//example.com/f2"])
+    assert result.exit_code == 0
+    assert "folders/1" in result.stdout
+    assert "folders/2" in result.stdout

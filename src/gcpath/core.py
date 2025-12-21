@@ -17,6 +17,14 @@ def path_escape(s: str) -> str:
     import urllib.parse
     return urllib.parse.quote(s, safe="")
 
+
+def _clean_asset_name(name: str) -> str:
+    """Strips the Asset API prefix from resource names."""
+    prefix = "//cloudresourcemanager.googleapis.com/"
+    if name.startswith(prefix):
+        return name[len(prefix):]
+    return name
+
 @dataclass
 class OrganizationNode:
     organization: resourcemanager_v3.Organization
@@ -177,22 +185,31 @@ class Hierarchy:
                 all_projects.extend(cls._load_projects_asset(org_node))
             
             # Asset API Query REQUIRES a parent (like organization).
-            # So for organizationless projects, we have to use Resource Manager search_projects or similar.
-            if not org_nodes:
-                 try:
-                     projects_pager = project_client.search_projects(request=resourcemanager_v3.SearchProjectsRequest())
-                     for p_proto in projects_pager:
-                         proj = Project(
-                             name=p_proto.name,
-                             project_id=p_proto.project_id,
-                             display_name=p_proto.display_name or p_proto.project_id,
-                             parent=p_proto.parent,
-                             organization=None,
-                             folder=None
-                         )
-                         all_projects.append(proj)
-                 except Exception as e:
-                     logger.error(f"Error searching projects: {e}")
+            # To find organizationless projects, we always fallback to Resource Manager search_projects.
+            existing_project_names = {p.name for p in all_projects}
+            try:
+                projects_pager = project_client.search_projects(request=resourcemanager_v3.SearchProjectsRequest())
+                for p_proto in projects_pager:
+                    if p_proto.name in existing_project_names:
+                        continue
+                    
+                    # A project is organizationless if it's not under an organization or folder.
+                    is_orgless = not p_proto.parent.startswith("organizations/") and not p_proto.parent.startswith("folders/")
+                    
+                    if is_orgless:
+                        proj = Project(
+                            name=p_proto.name,
+                            project_id=p_proto.project_id,
+                            display_name=p_proto.display_name or p_proto.project_id,
+                            parent=p_proto.parent,
+                            organization=None,
+                            folder=None
+                        )
+                        all_projects.append(proj)
+            except exceptions.PermissionDenied:
+                logger.warning("Permission denied searching organizationless projects")
+            except Exception as e:
+                logger.error(f"Error searching organizationless projects: {e}")
 
         return cls(organizations=org_nodes, projects=all_projects)
 
@@ -241,34 +258,38 @@ class Hierarchy:
                  continue
                  
              for row in page.query_result.rows:
+                 # The Asset API SQL results are returned in a Struct where the values
+                 # are in a list named 'f', similar to BigQuery JSON output.
                  row_dict = dict(row.fields)
+                 if "f" not in row_dict:
+                     continue
                  
-                 if "f" in row_dict:
-                      f_list = row_dict["f"].list_value.values
-                      if len(f_list) != 3:
-                          logger.warning("Unexpected number of columns in Asset API row")
-                          continue
-                      
-                      name_val = f_list[0].struct_value.fields["v"].string_value
-                      display_name_val = f_list[1].struct_value.fields["v"].string_value
-                      ancestors_val = f_list[2].struct_value.fields["v"].list_value.values
-                      
-                      if name_val.startswith("//cloudresourcemanager.googleapis.com/"):
-                           name = name_val[len("//cloudresourcemanager.googleapis.com/"):]
-                      else:
-                           name = name_val
-                           
-                      ancestors = [item.struct_value.fields["v"].string_value for item in ancestors_val]
-                      
-                      f = Folder(
-                          name=name,
-                          display_name=display_name_val,
-                          ancestors=ancestors,
-                          organization=node
-                      )
-                      node.folders[f.name] = f
+                 f_list = row_dict["f"].list_value.values
+                 if len(f_list) < 3:
+                     logger.warning(f"Unexpected number of columns in Asset API row: {len(f_list)}")
+                     continue
+                 
+                 # 0: name, 1: displayName, 2: ancestors
+                 name_val = f_list[0].struct_value.fields["v"].string_value
+                 display_name = f_list[1].struct_value.fields["v"].string_value
+                 ancestors_val = f_list[2].struct_value.fields["v"].list_value.values
+                       
+                 name = _clean_asset_name(name_val)
+                 raw_ancestors = [_clean_asset_name(item.struct_value.fields["v"].string_value) for item in ancestors_val]
+                 
+                 # Ensure consistency with _load_folders_rm structure: [self, parent, ..., org]
+                 if not raw_ancestors or raw_ancestors[0] != name:
+                     ancestors = [name] + raw_ancestors
                  else:
-                      pass
+                     ancestors = raw_ancestors
+                 
+                 f = Folder(
+                     name=name,
+                     display_name=display_name,
+                     ancestors=ancestors,
+                     organization=node
+                 )
+                 node.folders[f.name] = f
 
     @staticmethod
     def _load_projects_asset(node: OrganizationNode) -> List[Project]:
@@ -289,36 +310,43 @@ class Hierarchy:
                     
                 for row in page.query_result.rows:
                     row_dict = dict(row.fields)
-                    if "f" in row_dict:
-                        f_list = row_dict["f"].list_value.values
-                        
-                        name_val = f_list[0].struct_value.fields["v"].string_value
-                        project_id_val = f_list[2].struct_value.fields["v"].string_value
-                        display_name_val = f_list[3].struct_value.fields["v"].string_value or project_id_val
-                        ancestors_val = f_list[4].struct_value.fields["v"].list_value.values
-                        
-                        if name_val.startswith("//cloudresourcemanager.googleapis.com/"):
-                            name = name_val[len("//cloudresourcemanager.googleapis.com/"):]
-                        else:
-                            name = name_val
-                            
-                        ancestors = [item.struct_value.fields["v"].string_value for item in ancestors_val]
-                        
-                        parent_folder = None
-                        if len(ancestors) > 1:
-                            parent_res = ancestors[1]
-                            if parent_res.startswith("folders/"):
-                                parent_folder = node.folders.get(parent_res)
+                    if "f" not in row_dict:
+                        continue
+                    
+                    f_list = row_dict["f"].list_value.values
+                    if len(f_list) < 5:
+                        logger.warning(f"Unexpected number of columns in Asset API project row: {len(f_list)}")
+                        continue
+                    
+                    # 0: name, 1: projectNumber, 2: projectId, 3: displayName, 4: ancestors
+                    name_val = f_list[0].struct_value.fields["v"].string_value
+                    project_id = f_list[2].struct_value.fields["v"].string_value
+                    display_name = f_list[3].struct_value.fields["v"].string_value or project_id
+                    ancestors_val = f_list[4].struct_value.fields["v"].list_value.values
+                    
+                    name = _clean_asset_name(name_val)
+                    raw_ancestors = [_clean_asset_name(item.struct_value.fields["v"].string_value) for item in ancestors_val]
+                    
+                    # For projects, we want the first ancestor that is NOT the project itself.
+                    # Typically raw_ancestors[0] is the parent, but if it's the project itself, pick [1].
+                    if raw_ancestors and raw_ancestors[0] == name:
+                        parent_res = raw_ancestors[1] if len(raw_ancestors) > 1 else node.organization.name
+                    else:
+                        parent_res = raw_ancestors[0] if raw_ancestors else node.organization.name
+                    
+                    parent_folder = None
+                    if parent_res.startswith("folders/"):
+                        parent_folder = node.folders.get(parent_res)
 
-                        proj = Project(
-                            name=name,
-                            project_id=project_id_val,
-                            display_name=display_name_val,
-                            parent=ancestors[1] if len(ancestors) > 1 else node.organization.name,
-                            organization=node,
-                            folder=parent_folder
-                        )
-                        projects.append(proj)
+                    proj = Project(
+                        name=name,
+                        project_id=project_id,
+                        display_name=display_name,
+                        parent=parent_res,
+                        organization=node,
+                        folder=parent_folder
+                    )
+                    projects.append(proj)
         except Exception as e:
             logger.error(f"Error querying projects via Asset API: {e}")
             
