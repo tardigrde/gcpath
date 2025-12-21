@@ -352,8 +352,8 @@ class Hierarchy:
             if not name_val or not display_name:
                 continue
 
-            name = _clean_asset_name(name_val)
-            raw_ancestors = [_clean_asset_name(item.get("v") if isinstance(item, dict) else item) for item in raw_ancestors_uncleaned]
+            name = _clean_asset_name(str(name_val))
+            raw_ancestors = [_clean_asset_name(str(item.get("v") if isinstance(item, dict) else item)) for item in raw_ancestors_uncleaned]
 
             # Ensure consistency with _load_folders_rm structure: [self, parent, ..., org]
             if not raw_ancestors or raw_ancestors[0] != name:
@@ -416,9 +416,9 @@ class Hierarchy:
                     ancestors_wrapper = anc_col.get("v") if isinstance(anc_col, dict) else anc_col
                     raw_ancestors_uncleaned = ancestors_wrapper if isinstance(ancestors_wrapper, list) else []
 
-                    name = _clean_asset_name(name_val)
+                    name = _clean_asset_name(str(name_val))
                     raw_ancestors = [
-                        _clean_asset_name(item.get("v") if isinstance(item, dict) else item)
+                        _clean_asset_name(str(item.get("v") if isinstance(item, dict) else item))
                         for item in raw_ancestors_uncleaned
                     ]
 
@@ -451,8 +451,8 @@ class Hierarchy:
 
                     proj = Project(
                         name=name,
-                        project_id=project_id,
-                        display_name=display_name,
+                        project_id=str(project_id),
+                        display_name=str(display_name),
                         parent=parent_res,
                         organization=node,
                         folder=parent_folder,
@@ -542,7 +542,7 @@ class Hierarchy:
         projects_client = resourcemanager_v3.ProjectsClient()
         org_client = resourcemanager_v3.OrganizationsClient()
 
-        segments = []
+        segments: List[str] = []
         current_resource_name = resource_name
 
         # First, allow organizations/ID directly

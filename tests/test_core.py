@@ -1,5 +1,7 @@
 import pytest
-from gcpath.core import Folder, OrganizationNode, Hierarchy, Project
+from unittest.mock import patch, MagicMock
+from google.api_core import exceptions
+from gcpath.core import Folder, OrganizationNode, Hierarchy, Project, ResourceNotFoundError
 from google.cloud import resourcemanager_v3
 
 
@@ -148,9 +150,7 @@ def test_organizationless_project_path():
     h = Hierarchy([], [p1])
     assert h.get_resource_name("//_/Project%201") == "projects/p1"
 
-from unittest.mock import patch, MagicMock
-from google.api_core import exceptions
-from gcpath.core import Hierarchy, ResourceNotFoundError
+
 
 @patch("gcpath.core.resourcemanager_v3")
 def test_resolve_ancestry_project(mock_rm):
