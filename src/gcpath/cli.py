@@ -1,10 +1,12 @@
 import typer
+import logging
 from typing import Optional, List, Dict
 from typing_extensions import Annotated
 from rich.console import Console
 from rich import print as rprint
+from google.api_core import exceptions as gcp_exceptions
 
-from gcpath.core import Hierarchy, path_escape, Project
+from gcpath.core import Hierarchy, path_escape, Project, GCPathError
 
 app = typer.Typer(
     name="gcpath",
@@ -14,27 +16,50 @@ app = typer.Typer(
 console = Console()
 error_console = Console(stderr=True)
 
-# Global state for flags
-state = {"use_asset_api": True}
+
+def handle_error(e: Exception) -> None:
+    """Central error handler for CLI."""
+    if isinstance(e, GCPathError):
+        error_console.print(f"[red]Error:[/red] {e}")
+    elif isinstance(e, gcp_exceptions.PermissionDenied):
+        error_console.print(
+            "[red]Permission Denied:[/red] Ensure you have the required permissions and are authenticated."
+        )
+        error_console.print("[dim]Hint: Run 'gcloud auth application-default login'[/dim]")
+    elif isinstance(e, gcp_exceptions.ServiceUnavailable):
+        error_console.print("[red]Service Unavailable:[/red] The GCP API is currently unreachable.")
+    elif isinstance(e, Exception):
+        error_console.print(f"[red]Unexpected Error:[/red] {e}")
+        logging.exception("Unexpected error occurred")
+    raise typer.Exit(code=1)
 
 
 @app.callback()
 def main(
+    ctx: typer.Context,
     use_asset_api: bool = typer.Option(
         True,
         "--use-asset-api/--no-use-asset-api",
         "-u/-U",
         help="Use Cloud Asset API to load folders (faster) or Resource Manager (slower)",
     ),
-):
+    debug: bool = typer.Option(False, "--debug", help="Enable debug logging"),
+) -> None:
     """
     gcpath - Google Cloud Platform resource hierarchy utility
     """
-    state["use_asset_api"] = use_asset_api
+    ctx.ensure_object(dict)
+    ctx.obj["use_asset_api"] = use_asset_api
+    
+    if debug:
+        logging.basicConfig(level=logging.DEBUG)
+    else:
+        logging.basicConfig(level=logging.ERROR)
 
 
 @app.command()
 def ls(
+    ctx: typer.Context,
     organizations: Annotated[
         Optional[List[str]],
         typer.Argument(help="Organization display names to filter (optional)"),
@@ -45,13 +70,14 @@ def ls(
     recursive: bool = typer.Option(
         True, "--recursive/--no-recursive", "-R/-r", help="List resources recursively"
     ),
-):
+) -> None:
     """
     List all folders and projects in your organizations.
     """
     try:
         hierarchy = Hierarchy.load(
-            display_names=organizations, via_resource_manager=not state["use_asset_api"]
+            display_names=organizations, 
+            via_resource_manager=not ctx.obj["use_asset_api"]
         )
 
         if not hierarchy.organizations and not hierarchy.projects:
@@ -64,8 +90,8 @@ def ls(
                 if hasattr(credentials, "account") and credentials.account:
                     if credentials.account.endswith("@gmail.com"):
                         account_msg = f" (Account: {credentials.account})"
-            except Exception as e:
-                error_console.print(f"Error checking account: {e}")
+            except Exception:
+                pass
 
             rprint(
                 f"[yellow]No organizations or projects found accessible to your account{account_msg}.[/yellow]"
@@ -111,12 +137,12 @@ def ls(
                 print(path)
 
     except Exception as e:
-        error_console.print(f"[red]Error:[/red] {e}")
-        raise typer.Exit(code=1)
+        handle_error(e)
 
 
 @app.command()
 def tree(
+    ctx: typer.Context,
     organizations: Annotated[
         Optional[List[str]],
         typer.Argument(help="Organization display names to filter (optional)"),
@@ -127,7 +153,7 @@ def tree(
     show_ids: bool = typer.Option(
         False, "--ids", "-i", help="Show resource names in the tree"
     ),
-):
+) -> None:
     """
     Display the resource hierarchy in a tree format.
     """
@@ -135,7 +161,8 @@ def tree(
 
     try:
         hierarchy = Hierarchy.load(
-            display_names=organizations, via_resource_manager=not state["use_asset_api"]
+            display_names=organizations, 
+            via_resource_manager=not ctx.obj["use_asset_api"]
         )
 
         root_tree = Tree("[bold cyan]GCP Hierarchy[/bold cyan]")
@@ -148,11 +175,6 @@ def tree(
         def add_folders(tree_node, org_node, parent_name, current_depth):
             if level is not None and current_depth > level:
                 return
-
-            # Find folders with this parent
-            # Ancestors: [leaf, ..., parent, org]
-            # folder.ancestors[1] is the parent if len > 1
-            # If parent is Org, len == 1 and ancestors[0] is folder, parent is org.
 
             subfolders = []
             for f in org_node.folders.values():
@@ -211,25 +233,26 @@ def tree(
         console.print(root_tree)
 
     except Exception as e:
-        error_console.print(f"[red]Error:[/red] {e}")
-        raise typer.Exit(code=1)
+        handle_error(e)
 
 
 @app.command(name="name")
 def get_resource_name(
+    ctx: typer.Context,
     paths: Annotated[
         List[str], typer.Argument(help="Paths to resolve, e.g. //example.com/folder")
     ],
     id_only: bool = typer.Option(
         False, "--id", help="Print only the resource ID number"
     ),
-):
+) -> None:
     """
     Get Google Cloud Platform resource name by path.
     """
     try:
         hierarchy = Hierarchy.load(
-            display_names=None, via_resource_manager=not state["use_asset_api"]
+            display_names=None, 
+            via_resource_manager=not ctx.obj["use_asset_api"]
         )
 
         for path in paths:
@@ -240,22 +263,33 @@ def get_resource_name(
             print(res_name)
 
     except Exception as e:
-        error_console.print(f"[red]Error:[/red] {e}")
-        raise typer.Exit(code=1)
+        handle_error(e)
+
+
+@app.command(name="get-resource-name", hidden=True)
+def get_resource_name_alias(
+    ctx: typer.Context,
+    paths: Annotated[List[str], typer.Argument()],
+    id_only: bool = typer.Option(False, "--id"),
+) -> None:
+    """Alias for 'name' command for Go compatibility."""
+    get_resource_name(ctx, paths, id_only)
 
 
 @app.command(name="path")
 def get_path_command(
+    ctx: typer.Context,
     resource_names: Annotated[
         List[str], typer.Argument(help="Resource names to resolve, e.g. folders/123")
     ],
-):
+) -> None:
     """
     Get path of a resource name.
     """
     try:
         hierarchy = Hierarchy.load(
-            display_names=None, via_resource_manager=not state["use_asset_api"]
+            display_names=None, 
+            via_resource_manager=not ctx.obj["use_asset_api"]
         )
 
         for name in resource_names:
@@ -263,11 +297,19 @@ def get_path_command(
             print(p)
 
     except Exception as e:
-        error_console.print(f"[red]Error:[/red] {e}")
-        raise typer.Exit(code=1)
+        handle_error(e)
 
 
-def run():
+@app.command(name="get-path", hidden=True)
+def get_path_alias(
+    ctx: typer.Context,
+    resource_names: Annotated[List[str], typer.Argument()],
+) -> None:
+    """Alias for 'path' command for Go compatibility."""
+    get_path_command(ctx, resource_names)
+
+
+def run() -> None:
     app()
 
 
