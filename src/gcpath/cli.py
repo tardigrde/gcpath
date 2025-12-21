@@ -1,12 +1,14 @@
 import typer
 import logging
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Union
 from typing_extensions import Annotated
 from rich.console import Console
 from rich import print as rprint
 from google.api_core import exceptions as gcp_exceptions
 
-from gcpath.core import Hierarchy, path_escape, Project, GCPathError
+
+from gcpath.core import Hierarchy, path_escape, Project, GCPathError, OrganizationNode, Folder
+from rich.table import Table
 
 app = typer.Typer(
     name="gcpath",
@@ -60,23 +62,46 @@ def main(
 @app.command()
 def ls(
     ctx: typer.Context,
-    organizations: Annotated[
-        Optional[List[str]],
-        typer.Argument(help="Organization display names to filter (optional)"),
+    resource: Annotated[
+        Optional[str],
+        typer.Argument(help="Resource name (e.g. folders/123) or path to list children from."),
     ] = None,
     long: bool = typer.Option(
-        False, "--long", "-l", help="Show resource names along with paths"
+        False, "--long", "-l", help="Show resource IDs and numbers (for projects)"
     ),
     recursive: bool = typer.Option(
-        True, "--recursive/--no-recursive", "-R/-r", help="List resources recursively"
+        False, "--recursive", "-R", help="List resources recursively"
     ),
 ) -> None:
     """
-    List all folders and projects in your organizations.
+    List folders and projects. Defaults to the root organization.
     """
     try:
+        target_org_name = None
+        target_resource_name = None
+
+        if resource:
+            # Check if it's already a GCP resource name
+            if any(resource.startswith(p) for p in ["organizations/", "folders/", "projects/"]):
+                target_resource_name = resource
+                try:
+                    target_path = Hierarchy.resolve_ancestry(resource)
+                    if target_path.startswith("//"):
+                        path_parts = target_path[2:].split("/")
+                        if path_parts:
+                            from urllib.parse import unquote
+                            target_org_name = unquote(path_parts[0])
+                except Exception:
+                    pass
+            # If it's a path, we'd need to resolve it back to resource name
+            # For simplicity, we mostly support resource names or defaults to org load
+            elif resource.startswith("//"):
+                # Handle path to name resolution if needed, but SPEC emphasizes resource name args
+                pass
+
+        filter_orgs = [target_org_name] if target_org_name else None
         hierarchy = Hierarchy.load(
-            display_names=organizations, 
+            display_names=filter_orgs, 
             via_resource_manager=not ctx.obj["use_asset_api"]
         )
 
@@ -102,38 +127,117 @@ def ls(
                 )
             return
 
-        items = []
-        for org in hierarchy.organizations:
-            if recursive:
-                # Add org itself
-                items.append(
-                    (
-                        f"//{path_escape(org.organization.display_name)}",
-                        org.organization.name,
-                    )
-                )
-                for folder in org.folders.values():
-                    items.append((folder.path, folder.name))
+        # If a specific resource was targeted, we list its children
+        if target_resource_name:
+            if target_resource_name.startswith("projects/"):
+                # projects don't have children in this context
+                return
+            
+            # Find the starting point
+            current_folders = []
+            current_projects = []
+            
+            if target_resource_name.startswith("organizations/"):
+                for org in hierarchy.organizations:
+                    if org.organization.name == target_resource_name:
+                        # Top-level folders and projects of this org
+                        current_folders = [f for f in org.folders.values() if len(f.ancestors) == 2]
+                        current_projects = [p for p in hierarchy.projects if p.parent == target_resource_name]
+                        break
+            elif target_resource_name.startswith("folders/"):
+                for org in hierarchy.organizations:
+                    if target_resource_name in org.folders:
+                        # Direct children of this folder
+                        current_folders = [f for f in org.folders.values() if len(f.ancestors) > 1 and f.ancestors[1] == target_resource_name]
+                        current_projects = [p for p in hierarchy.projects if p.parent == target_resource_name]
+                        break
+        else:
+            # Default: list all organizations and projects directly under them
+            current_folders = []
+            current_projects = []
+            for org in hierarchy.organizations:
+                current_folders.extend([f for f in org.folders.values() if len(f.ancestors) == 2])
+                current_projects.extend([p for p in hierarchy.projects if p.organization and p.parent == org.organization.name])
+            
+            # Add organizationless projects at the top level
+            current_projects.extend([p for p in hierarchy.projects if not p.organization])
+
+        # Prepare items for display
+        items: List[tuple[str, Union[OrganizationNode, Folder, Project]]] = []
+        if recursive:
+            # Recursive listing - simplified approach: list everything under the target
+            if target_resource_name:
+                # Find all descendants
+                if target_resource_name.startswith("organizations/"):
+                    for org in hierarchy.organizations:
+                        if org.organization.name == target_resource_name:
+                            items.append((f"//{path_escape(org.organization.display_name)}", org))
+                            for f in org.folders.values():
+                                items.append((f.path, f))
+                            for p in hierarchy.projects:
+                                if p.organization and p.organization.organization.name == target_resource_name:
+                                    items.append((p.path, p))
+                elif target_resource_name.startswith("folders/"):
+                    for org in hierarchy.organizations:
+                        if target_resource_name in org.folders:
+                            target_f = org.folders[target_resource_name]
+                            items.append((target_f.path, target_f))
+                            for f in org.folders.values():
+                                if target_resource_name in f.ancestors and f.name != target_resource_name:
+                                    items.append((f.path, f))
+                            for p in hierarchy.projects:
+                                if p.folder and target_resource_name in [a for a in p.folder.ancestors]:
+                                    items.append((p.path, p))
             else:
-                # Only top level
-                items.append(
-                    (
-                        f"//{path_escape(org.organization.display_name)}",
-                        org.organization.name,
-                    )
-                )
+                # Full recursive list
+                for org in hierarchy.organizations:
+                    items.append((f"//{path_escape(org.organization.display_name)}", org))
+                    for f in org.folders.values():
+                        items.append((f.path, f))
+                for p in hierarchy.projects:
+                    items.append((p.path, p))
+        else:
+            # Non-recursive
+            if not target_resource_name:
+                for org in hierarchy.organizations:
+                    items.append((f"//{path_escape(org.organization.display_name)}", org))
+            
+            for f in current_folders:
+                items.append((f.path, f))
+            for p in current_projects:
+                items.append((p.path, p))
 
-        for proj in hierarchy.projects:
-            if recursive or not proj.folder:
-                items.append((proj.path, proj.name))
-
-        # Sort items for consistent output
+        # Sort items
         items.sort(key=lambda x: x[0])
 
-        for path, res_name in items:
-            if long:
-                print(f"{path:<60} {res_name}")
-            else:
+        if long:
+            table = Table(show_header=True, header_style="bold magenta", box=None, padding=(0, 1))
+            table.add_column("Path", width=35)
+            table.add_column("ID", width=15)
+            table.add_column("NAME", width=15)
+            table.add_column("NUMBER", width=15)
+            
+            for path, obj in items:
+                res_id = ""
+                res_name = ""
+                res_num = ""
+                
+                if isinstance(obj, OrganizationNode):
+                    res_id = obj.organization.name.split("/")[-1]
+                    res_name = obj.organization.display_name
+                elif isinstance(obj, Folder):
+                    res_id = obj.name.split("/")[-1]
+                    res_name = obj.display_name
+                elif isinstance(obj, Project):
+                    res_id = obj.project_id
+                    res_name = obj.display_name
+                    res_num = obj.name.split("/")[-1] if obj.name.startswith("projects/") else ""
+                
+                table.add_row(path, res_id, res_name, res_num)
+            
+            console.print(table)
+        else:
+            for path, _ in items:
                 print(path)
 
     except Exception as e:
@@ -143,9 +247,9 @@ def ls(
 @app.command()
 def tree(
     ctx: typer.Context,
-    organizations: Annotated[
-        Optional[List[str]],
-        typer.Argument(help="Organization display names to filter (optional)"),
+    resource: Annotated[
+        Optional[str],
+        typer.Argument(help="Resource name (e.g. folders/123) or path to start tree from."),
     ] = None,
     level: int = typer.Option(
         None, "--level", "-L", help="Max display depth of the tree"
@@ -160,75 +264,129 @@ def tree(
     from rich.tree import Tree
 
     try:
+        # Enforce SPEC max depth
+        if level is not None and level > 3:
+            level = 3
+
+        target_org_name = None
+        target_resource_name = None
+        target_path = None
+
+        if resource:
+            if resource.startswith("projects/"):
+                 rprint("[red]Error:[/red] 'tree' command does not support starting from a project (projects are leaf nodes).")
+                 raise typer.Exit(code=1)
+
+            try:
+                target_path = Hierarchy.resolve_ancestry(resource)
+                if target_path.startswith("//"):
+                    path_parts = target_path[2:].split("/")
+                    if path_parts:
+                        from urllib.parse import unquote
+                        target_org_name = unquote(path_parts[0])
+                
+                if resource.startswith("folders/") or resource.startswith("organizations/"):
+                    target_resource_name = resource
+            except Exception:
+                if resource.startswith("//"):
+                    target_path = resource
+                else:
+                    raise
+
+        filter_orgs = [target_org_name] if target_org_name else None
         hierarchy = Hierarchy.load(
-            display_names=organizations, 
+            display_names=filter_orgs, 
             via_resource_manager=not ctx.obj["use_asset_api"]
         )
+        
+        nodes_to_process: List[Union[OrganizationNode, Folder]] = []
+        if target_resource_name:
+            if target_resource_name.startswith("organizations/"):
+                 for o in hierarchy.organizations:
+                     if o.organization.name == target_resource_name:
+                         nodes_to_process = [o]
+                         break
+            elif target_resource_name.startswith("folders/"):
+                 for o in hierarchy.organizations:
+                     if target_resource_name in o.folders:
+                         nodes_to_process = [o.folders[target_resource_name]]
+                         break
+            
+            if not nodes_to_process:
+                rprint(f"[red]Error:[/red] Target resource '{target_resource_name}' not found.")
+                raise typer.Exit(code=1)
+        else:
+            nodes_to_process = list(hierarchy.organizations)
 
-        root_tree = Tree("[bold cyan]GCP Hierarchy[/bold cyan]")
+        root_tree = Tree("[bold cyan]Query Result[/bold cyan]" if target_resource_name else "[bold cyan]GCP Hierarchy[/bold cyan]")
 
-        # Group projects by parent
-        projects_by_parent: Dict[str, List[Project]] = {}
-        for proj in hierarchy.projects:
-            projects_by_parent.setdefault(proj.parent, []).append(proj)
-
-        def add_folders(tree_node, org_node, parent_name, current_depth):
-            if level is not None and current_depth > level:
+        def build_tree(tree_node, current_node, current_depth):
+            if level is not None and current_depth >= level:
                 return
 
-            subfolders = []
-            for f in org_node.folders.values():
-                if len(f.ancestors) == 1 and parent_name == org_node.organization.name:
-                    subfolders.append(f)
-                elif len(f.ancestors) > 1 and f.ancestors[1] == parent_name:
-                    subfolders.append(f)
+            parent_name = current_node.name if hasattr(current_node, "name") else current_node.organization.name
+            
+            # Projects
+            children_projects = projects_by_parent.get(parent_name, [])
+            children_projects.sort(key=lambda x: x.display_name)
+            
+            # Folders
+            children_folders = []
+            org_node_ref = current_node if isinstance(current_node, OrganizationNode) else current_node.organization
+            
+            if org_node_ref:
+                for f in org_node_ref.folders.values():
+                     if len(f.ancestors) > 1 and f.ancestors[1] == parent_name:
+                         children_folders.append(f)
+            
+            children_folders.sort(key=lambda x: x.display_name)
 
-            subfolders.sort(key=lambda x: x.display_name)
-
-            for f in subfolders:
+            for f in children_folders:
                 label = f"[bold blue]{f.display_name}[/bold blue]"
                 if show_ids:
                     label += f" [dim]({f.name})[/dim]"
                 sub_node = tree_node.add(label)
+                build_tree(sub_node, f, current_depth + 1)
 
-                # Add projects in this folder
-                add_projects(sub_node, f.name, current_depth + 1)
-
-                # Recurse
-                add_folders(sub_node, org_node, f.name, current_depth + 1)
-
-        def add_projects(tree_node, parent_name, current_depth):
-            if level is not None and current_depth > level:
-                return
-            projs = projects_by_parent.get(parent_name, [])
-            projs.sort(key=lambda x: x.display_name)
-            for p in projs:
+            for p in children_projects:
                 label = f"[green]{p.display_name}[/green]"
                 if show_ids:
                     label += f" [dim]({p.name})[/dim]"
                 tree_node.add(label)
 
-        # Add Organizations
-        for org in hierarchy.organizations:
-            label = f"[bold magenta]{org.organization.display_name}[/bold magenta]"
+        projects_by_parent: Dict[str, List[Project]] = {}
+        for proj in hierarchy.projects:
+            projects_by_parent.setdefault(proj.parent, []).append(proj)
+
+        for node in nodes_to_process:
+            if isinstance(node, OrganizationNode):
+                node_id = node.organization.name
+                if target_resource_name:
+                    safe_path = f"//{path_escape(node.organization.display_name)}"
+                    label = f"[bold cyan]{safe_path}[/bold cyan]"
+                else:
+                    label = f"[bold magenta]//{path_escape(node.organization.display_name)}[/bold magenta]"
+            else:
+                node_id = node.name
+                label = f"[bold cyan]{node.path}[/bold cyan]"
+            
             if show_ids:
-                label += f" [dim]({org.organization.name})[/dim]"
-            org_tree = root_tree.add(label)
+                label += f" [dim]({node_id})[/dim]"
+                
+            node_tree = root_tree.add(label)
+            build_tree(node_tree, node, 0)
 
-            add_projects(org_tree, org.organization.name, 1)
-            add_folders(org_tree, org, org.organization.name, 1)
-
-        # Add Organizationless projects
-        if any(not p.organization for p in hierarchy.projects):
-            orgless_node = root_tree.add(
-                "[bold yellow](organizationless)[/bold yellow]"
-            )
-            for p in hierarchy.projects:
-                if not p.organization:
-                    label = f"[green]{p.display_name}[/green]"
-                    if show_ids:
-                        label += f" [dim]({p.name})[/dim]"
-                    orgless_node.add(label)
+        # Organizationless projects
+        if not target_resource_name and any(not p.organization for p in hierarchy.projects):
+            orgless_node = root_tree.add("[bold yellow](organizationless)[/bold yellow]")
+            if level is None or level >= 1:
+                orgless_projs = [p for p in hierarchy.projects if not p.organization]
+                orgless_projs.sort(key=lambda x: x.display_name)
+                for p in orgless_projs:
+                     label = f"[green]{p.display_name}[/green]"
+                     if show_ids:
+                         label += f" [dim]({p.name})[/dim]"
+                     orgless_node.add(label)
 
         console.print(root_tree)
 
