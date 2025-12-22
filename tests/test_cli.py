@@ -21,6 +21,7 @@ def mock_hierarchy():
         display_name="f1",
         ancestors=["folders/1", "organizations/123"],
         organization=org_node,
+        parent="organizations/123",
     )
     # F11 (depth 2)
     f11 = Folder(
@@ -28,6 +29,7 @@ def mock_hierarchy():
         display_name="f11",
         ancestors=["folders/11", "folders/1", "organizations/123"],
         organization=org_node,
+        parent="folders/1",
     )
 
     org_node.folders["folders/1"] = f1
@@ -122,6 +124,14 @@ def test_tree_depth_limit(mock_load, mock_hierarchy):
     assert result.exit_code == 0
     assert "f1" in result.stdout
     assert "f11" not in result.stdout
+
+
+def test_tree_max_level_validation():
+    """Test that tree command rejects level > 3"""
+    result = runner.invoke(app, ["tree", "-L", "4"])
+    assert result.exit_code == 1
+    assert "Maximum tree depth is 3" in result.stderr
+    assert "Requested level 4" in result.stderr
 
 
 @patch("gcpath.core.Hierarchy.load")

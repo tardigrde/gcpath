@@ -70,6 +70,9 @@ def main(
         logging.basicConfig(level=logging.DEBUG)
     else:
         logging.basicConfig(level=logging.ERROR)
+    
+    # Always suppress urllib3 debug logs
+    logging.getLogger("urllib3").setLevel(logging.WARNING)
 
 
 @app.command()
@@ -120,13 +123,22 @@ def ls(
 
         filter_orgs = [target_org_name] if target_org_name else None
         logger.debug(
-            f"ls: loading hierarchy for resource='{resource}', filter_orgs={filter_orgs}"
+            f"ls: loading hierarchy for resource='{resource}', filter_orgs={filter_orgs}, recursive={recursive}"
         )
+        
+        # Determine scope_resource for API-level filtering
+        # If targeting a specific resource, pass it as scope_resource
+        # so the API only returns direct children (or all descendants if recursive)
+        scope_resource = target_resource_name if target_resource_name else None
+        
         hierarchy = Hierarchy.load(
-            display_names=filter_orgs, via_resource_manager=not ctx.obj["use_asset_api"]
+            display_names=filter_orgs,
+            via_resource_manager=not ctx.obj["use_asset_api"],
+            scope_resource=scope_resource,
+            recursive=recursive,
         )
         logger.debug(
-            f"ls: hierarchy loaded with {len(hierarchy.organizations)} orgs, {len(hierarchy.projects)} projects"
+            f"ls: hierarchy loaded with {len(hierarchy.organizations)} orgs, {len(hierarchy.projects)} projects, {len(hierarchy.folders)} folders"
         )
 
         if not hierarchy.organizations and not hierarchy.projects:
@@ -152,6 +164,8 @@ def ls(
             return
 
         # If a specific resource was targeted, we list its children
+        # Get the target path prefix for proper path display
+        target_path_prefix = ""
         if target_resource_name:
             logger.debug(
                 f"ls command: targeting specific resource {target_resource_name}"
@@ -159,120 +173,90 @@ def ls(
             if target_resource_name.startswith("projects/"):
                 # projects don't have children in this context
                 return
+            
+            # Get the full path for the target resource to use as prefix
+            try:
+                target_path_prefix = Hierarchy.resolve_ancestry(target_resource_name)
+                logger.debug(f"ls: target path prefix: {target_path_prefix}")
+            except Exception as e:
+                logger.warning(f"Could not resolve target path: {e}")
 
-            # Find the starting point
-            current_folders = []
-            current_projects = []
-
-            if target_resource_name.startswith("organizations/"):
-                for org in hierarchy.organizations:
-                    if org.organization.name == target_resource_name:
-                        # Top-level folders and projects of this org
-                        current_folders = [
-                            f for f in org.folders.values() if len(f.ancestors) == 2
-                        ]
-                        current_projects = [
-                            p
-                            for p in hierarchy.projects
-                            if p.parent == target_resource_name
-                        ]
-                        break
-            elif target_resource_name.startswith("folders/"):
-                for org in hierarchy.organizations:
-                    if target_resource_name in org.folders:
-                        # Direct children of this folder
-                        current_folders = [
-                            f
-                            for f in org.folders.values()
-                            if len(f.ancestors) > 1
-                            and f.ancestors[1] == target_resource_name
-                        ]
-                        current_projects = [
-                            p
-                            for p in hierarchy.projects
-                            if p.parent == target_resource_name
-                        ]
-                        break
+        # Filter folders and projects to show
+        # For Asset API mode, the hierarchy is pre-filtered, but we still need to filter
+        # to only direct children for non-recursive mode
+        current_folders = []
+        current_projects = []
+        
+        if target_resource_name:
+            # Find direct children of the target resource
+            for f in hierarchy.folders:
+                if f.parent == target_resource_name:
+                    current_folders.append(f)
+            for p in hierarchy.projects:
+                if p.parent == target_resource_name:
+                    current_projects.append(p)
         else:
-            # Default: list all organizations and projects directly under them
-            current_folders = []
-            current_projects = []
+            # No target: show org-level resources
             for org in hierarchy.organizations:
-                current_folders.extend(
-                    [f for f in org.folders.values() if len(f.ancestors) == 2]
-                )
-                current_projects.extend(
-                    [
-                        p
-                        for p in hierarchy.projects
-                        if p.organization and p.parent == org.organization.name
-                    ]
-                )
-
-            # Add organizationless projects at the top level
+                for f in org.folders.values():
+                    if f.parent == org.organization.name:
+                        current_folders.append(f)
+            for p in hierarchy.projects:
+                if p.organization and p.parent == p.organization.organization.name:
+                    current_projects.append(p)
+            # Add organizationless projects
             current_projects.extend(
                 [p for p in hierarchy.projects if not p.organization]
             )
 
+        # Helper function to build path for display
+        def get_display_path(item: Union[OrganizationNode, Folder, Project], is_direct_child: bool = False) -> str:
+            if isinstance(item, OrganizationNode):
+                return f"//{path_escape(item.organization.display_name)}"
+            elif isinstance(item, Folder):
+                # For non-recursive mode with direct children, use target prefix
+                # For recursive mode, always use the computed path from hierarchy
+                if target_path_prefix and target_resource_name and is_direct_child and not recursive:
+                    return f"{target_path_prefix}/{path_escape(item.display_name)}"
+                return item.path
+            elif isinstance(item, Project):
+                # For non-recursive mode with direct children, use target prefix
+                # For recursive mode, always use the computed path from hierarchy
+                if target_path_prefix and target_resource_name and is_direct_child and not recursive:
+                    return f"{target_path_prefix}/{path_escape(item.display_name)}"
+                return item.path
+            return ""
+
         # Prepare items for display
         items: List[tuple[str, Union[OrganizationNode, Folder, Project]]] = []
         if recursive:
-            # Recursive listing - simplified approach: list everything under the target
+            # Recursive listing - list everything under the target
+            # Since we loaded with recursive=True, all descendants are in the hierarchy
             if target_resource_name:
-                # Find all descendants
-                if target_resource_name.startswith("organizations/"):
-                    for org in hierarchy.organizations:
-                        if org.organization.name == target_resource_name:
-                            items.append(
-                                (f"//{path_escape(org.organization.display_name)}", org)
-                            )
-                            for f in org.folders.values():
-                                items.append((f.path, f))
-                            for p in hierarchy.projects:
-                                if (
-                                    p.organization
-                                    and p.organization.organization.name
-                                    == target_resource_name
-                                ):
-                                    items.append((p.path, p))
-                elif target_resource_name.startswith("folders/"):
-                    for org in hierarchy.organizations:
-                        if target_resource_name in org.folders:
-                            target_f = org.folders[target_resource_name]
-                            items.append((target_f.path, target_f))
-                            for f in org.folders.values():
-                                if (
-                                    target_resource_name in f.ancestors
-                                    and f.name != target_resource_name
-                                ):
-                                    items.append((f.path, f))
-                            for p in hierarchy.projects:
-                                if p.folder and target_resource_name in [
-                                    a for a in p.folder.ancestors
-                                ]:
-                                    items.append((p.path, p))
+                # All loaded folders and projects are descendants
+                # Use item.path for recursive mode (not is_direct_child logic)
+                for f in hierarchy.folders:
+                    items.append((get_display_path(f, is_direct_child=False), f))
+                for p in hierarchy.projects:
+                    items.append((get_display_path(p, is_direct_child=False), p))
             else:
                 # Full recursive list
                 for org in hierarchy.organizations:
-                    items.append(
-                        (f"//{path_escape(org.organization.display_name)}", org)
-                    )
+                    items.append((get_display_path(org, is_direct_child=False), org))
                     for f in org.folders.values():
-                        items.append((f.path, f))
+                        items.append((get_display_path(f, is_direct_child=False), f))
                 for p in hierarchy.projects:
-                    items.append((p.path, p))
+                    items.append((get_display_path(p, is_direct_child=False), p))
         else:
-            # Non-recursive
+            # Non-recursive - only direct children
             if not target_resource_name:
                 for org in hierarchy.organizations:
-                    items.append(
-                        (f"//{path_escape(org.organization.display_name)}", org)
-                    )
+                    items.append((get_display_path(org, is_direct_child=False), org))
 
             for f in current_folders:
-                items.append((f.path, f))
+                items.append((get_display_path(f, is_direct_child=True), f))
             for p in current_projects:
-                items.append((p.path, p))
+                items.append((get_display_path(p, is_direct_child=True), p))
 
         # Sort items
         items.sort(key=lambda x: x[0])
@@ -343,8 +327,10 @@ def tree(
     try:
         # Enforce SPEC max depth
         if level is not None and level > 3:
-            logger.debug(f"tree command: limiting level from {level} to 3 (SPEC max)")
-            level = 3
+            error_console.print(
+                f"[red]Error:[/red] Maximum tree depth is 3. Requested level {level} exceeds the limit."
+            )
+            raise typer.Exit(code=1)
 
         target_org_name = None
         target_resource_name = None
@@ -381,11 +367,16 @@ def tree(
         logger.debug(
             f"tree: loading hierarchy for resource='{resource}', filter_orgs={filter_orgs}"
         )
+        
+        # Tree always needs recursive loading to show the full subtree
         hierarchy = Hierarchy.load(
-            display_names=filter_orgs, via_resource_manager=not ctx.obj["use_asset_api"]
+            display_names=filter_orgs,
+            via_resource_manager=not ctx.obj["use_asset_api"],
+            scope_resource=target_resource_name,
+            recursive=True,  # Tree always needs full subtree
         )
         logger.debug(
-            f"tree: hierarchy loaded with {len(hierarchy.organizations)} orgs, {len(hierarchy.projects)} projects"
+            f"tree: hierarchy loaded with {len(hierarchy.organizations)} orgs, {len(hierarchy.projects)} projects, {len(hierarchy.folders)} folders"
         )
 
         nodes_to_process: List[Union[OrganizationNode, Folder]] = []
@@ -400,6 +391,8 @@ def tree(
                         nodes_to_process = [o]
                         break
             elif target_resource_name.startswith("folders/"):
+                # When using ancestors_filter, the scope folder itself is not in the loaded hierarchy.
+                # We need to create a synthetic folder node for display purposes.
                 for o in hierarchy.organizations:
                     if target_resource_name in o.folders:
                         logger.debug(
@@ -407,6 +400,26 @@ def tree(
                         )
                         nodes_to_process = [o.folders[target_resource_name]]
                         break
+                
+                # If not found in loaded hierarchy, create a synthetic folder from resolved path
+                if not nodes_to_process and target_path and hierarchy.organizations:
+                    logger.debug("tree command: creating synthetic folder node for scope")
+                    # Extract display name from the resolved path
+                    path_parts = target_path[2:].split("/") if target_path.startswith("//") else []
+                    display_name = path_parts[-1] if path_parts else target_resource_name.split("/")[-1]
+                    
+                    org_node = hierarchy.organizations[0]
+                    synthetic_folder = Folder(
+                        name=target_resource_name,
+                        display_name=display_name,
+                        ancestors=[target_resource_name, org_node.organization.name],
+                        organization=org_node,
+                        parent=org_node.organization.name,
+                    )
+                    # Add to org's folders so build_tree can find children
+                    org_node.folders[target_resource_name] = synthetic_folder
+                    nodes_to_process = [synthetic_folder]
+                    logger.debug(f"tree command: created synthetic folder {synthetic_folder.name}")
 
             if not nodes_to_process:
                 logger.warning(
@@ -442,7 +455,7 @@ def tree(
             children_projects = projects_by_parent.get(parent_name, [])
             children_projects.sort(key=lambda x: x.display_name)
 
-            # Folders
+            # Folders - find direct children using the parent field
             children_folders = []
             org_node_ref = (
                 current_node
@@ -452,7 +465,8 @@ def tree(
 
             if org_node_ref:
                 for f in org_node_ref.folders.values():
-                    if len(f.ancestors) > 1 and f.ancestors[1] == parent_name:
+                    # Use the parent field to find direct children
+                    if f.parent == parent_name:
                         children_folders.append(f)
 
             children_folders.sort(key=lambda x: x.display_name)
@@ -530,7 +544,9 @@ def get_resource_name(
     try:
         logger.debug(f"name: resolving paths={paths}")
         hierarchy = Hierarchy.load(
-            display_names=None, via_resource_manager=not ctx.obj["use_asset_api"]
+            display_names=None,
+            via_resource_manager=not ctx.obj["use_asset_api"],
+            recursive=True  # Load all folders including nested ones for path resolution
         )
         logger.debug("name: hierarchy loaded successfully")
 

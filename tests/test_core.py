@@ -344,31 +344,14 @@ def test_hierarchy_load_asset_api(mock_asset, mock_rm):
 
     # Mock Asset API for folders
     asset_client = mock_asset.AssetServiceClient.return_value
-    mock_row = MagicMock()
-    mock_row.__iter__.return_value = iter(
-        [
-            ("name", "//cloudresourcemanager.googleapis.com/folders/1"),
-            (
-                "f",
-                [
-                    {"v": "//cloudresourcemanager.googleapis.com/folders/1"},
-                    {"v": "f1"},
-                    {
-                        "v": [
-                            "//cloudresourcemanager.googleapis.com/folders/1",
-                            "//cloudresourcemanager.googleapis.com/organizations/123",
-                        ]
-                    },
-                ],
-            ),
-        ]
-    )
     # Simplified row mock that dict(row) can handle
+    # Format: name, displayName, parent, ancestors
     row_data = {
         "f": [
             {"v": "//cloudresourcemanager.googleapis.com/folders/1"},
             {"v": "f1"},
-            {"v": [{"v": "folders/1"}, {"v": "organizations/123"}]},
+            {"v": "organizations/123"},  # parent
+            {"v": [{"v": "folders/1"}, {"v": "organizations/123"}]},  # ancestors
         ]
     }
 

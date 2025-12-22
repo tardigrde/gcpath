@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.2] - 2025-12-22
+
+### Added
+- **Scoped Loading**: Added support for incremental/scoped loading of the resource hierarchy. The `ls`, `tree`, and `path` commands now only load the necessary descendants when a specific resource is targeted, significantly improving performance for large organizations.
+- **SQL Robustness**: Implemented `lifecycleState = 'ACTIVE'` filtering in Asset API queries to exclude deleted or recovering resources.
+- **Parent Resolution**: Improved project parent resolution by fetching and parsing the `resource.data.parent` STRUCT directly from the Asset API, reducing reliance on the `ancestors` array.
+
+### Changed
+- Refactored `Hierarchy.load` to support a `target_resource_name` parameter for targeted descendant loading.
+
 ## [0.2.1] - 2025-12-21
 
 ### Optimized
