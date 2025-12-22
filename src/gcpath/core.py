@@ -80,6 +80,7 @@ class Folder:
     display_name: str
     ancestors: List[str]
     organization: "OrganizationNode"
+    parent: str = ""  # Parent resource name (e.g., 'organizations/123' or 'folders/456')
 
     def is_path_match(self, path_parts: List[str]) -> bool:
         # path matching logic
@@ -158,7 +159,21 @@ class Hierarchy:
         ctx_ignored=None,
         display_names: Optional[List[str]] = None,
         via_resource_manager: bool = True,
+        scope_resource: Optional[str] = None,
+        recursive: bool = False,
     ) -> "Hierarchy":
+        """Load the GCP resource hierarchy.
+        
+        Args:
+            ctx_ignored: Unused, for backward compatibility.
+            display_names: Filter to only load these organization display names.
+            via_resource_manager: If True, use Resource Manager API. If False, use Asset API.
+            scope_resource: If provided, only load direct children of this resource
+                           (e.g., 'organizations/123' or 'folders/456').
+                           If None, defaults to loading from organization level.
+            recursive: If True, load all descendants. If False, only load direct children.
+                      Only applies when via_resource_manager=False (Asset API mode).
+        """
         org_client = resourcemanager_v3.OrganizationsClient()
         project_client = resourcemanager_v3.ProjectsClient()
 
@@ -188,7 +203,69 @@ class Hierarchy:
                 if via_resource_manager:
                     cls._load_folders_rm(node)
                 else:
-                    cls._load_folders_asset(node)
+                    # Determine filters for Asset API based on scope_resource and recursive
+                    folder_parent_filter = None
+                    folder_ancestors_filter = None
+                    
+                    if scope_resource:
+                        if recursive:
+                            # Load all descendants of the scope_resource
+                            folder_ancestors_filter = scope_resource
+                        else:
+                            # Load only direct children of the scope_resource
+                            folder_parent_filter = scope_resource
+                    elif not recursive:
+                        # Default non-recursive: load only direct children of the org
+                        folder_parent_filter = node.organization.name
+                    # else: recursive without scope = load everything (no filter)
+                    
+                    cls._load_folders_asset(node, parent_filter=folder_parent_filter, ancestors_filter=folder_ancestors_filter)
+
+                    # When doing recursive scoped load, the scope folder itself is excluded from results
+                    # We need to load it separately so projects can find their parent folder
+                    if scope_resource and scope_resource.startswith("folders/") and recursive:
+                        if scope_resource not in node.folders:
+                            logger.debug(f"Recursive scoped load: loading scope folder {scope_resource} separately")
+                            try:
+                                folders_client = resourcemanager_v3.FoldersClient()
+                                folder_proto = folders_client.get_folder(name=scope_resource)
+
+                                # Build ancestors by traversing parent chain
+                                ancestors_chain = [folder_proto.name]
+                                current_parent = folder_proto.parent
+                                while current_parent and current_parent.startswith("folders/"):
+                                    ancestors_chain.append(current_parent)
+                                    # Check if parent is already loaded
+                                    if current_parent in node.folders:
+                                        # Use the loaded parent's ancestors
+                                        loaded_folder = node.folders[current_parent]
+                                        # Add remaining ancestors from parent (excluding the parent itself)
+                                        ancestors_chain.extend([a for a in loaded_folder.ancestors if a != current_parent and a not in ancestors_chain])
+                                        break
+                                    else:
+                                        # Fetch the parent folder
+                                        try:
+                                            parent_proto = folders_client.get_folder(name=current_parent)
+                                            current_parent = parent_proto.parent
+                                        except Exception:
+                                            break
+
+                                # Add organization at the end
+                                if not ancestors_chain or ancestors_chain[-1] != node.organization.name:
+                                    ancestors_chain.append(node.organization.name)
+
+                                folder_obj = Folder(
+                                    name=folder_proto.name,
+                                    display_name=folder_proto.display_name,
+                                    ancestors=ancestors_chain,
+                                    organization=node,
+                                    parent=folder_proto.parent,
+                                )
+                                node.folders[folder_proto.name] = folder_obj
+                                logger.debug(f"Added scope folder {scope_resource} with ancestors {ancestors_chain}")
+                            except Exception as e:
+                                logger.warning(f"Could not load scope folder {scope_resource}: {e}")
+
                 logger.debug(
                     f"Loaded {len(node.folders)} folders for org {node.organization.display_name}"
                 )
@@ -243,7 +320,23 @@ class Hierarchy:
         else:
             # Asset API mode
             for org_node in org_nodes:
-                org_projects = cls._load_projects_asset(org_node)
+                # Determine filters for projects based on scope_resource and recursive
+                project_parent_filter = None
+                project_ancestors_filter = None
+                
+                if scope_resource:
+                    if recursive:
+                        # Load all descendants of the scope_resource
+                        project_ancestors_filter = scope_resource
+                    else:
+                        # Load only direct children of the scope_resource
+                        project_parent_filter = scope_resource
+                elif not recursive:
+                    # Default non-recursive: load only direct children of the org
+                    project_parent_filter = org_node.organization.name
+                # else: recursive without scope = load everything (no filter)
+                
+                org_projects = cls._load_projects_asset(org_node, parent_filter=project_parent_filter, ancestors_filter=project_ancestors_filter)
                 all_projects.extend(org_projects)
 
             # Asset API Query REQUIRES a parent (like organization).
@@ -309,6 +402,7 @@ class Hierarchy:
                         display_name=folder_proto.display_name,
                         ancestors=new_ancestors,
                         organization=node,
+                        parent=parent_name,  # The parent we're listing under
                     )
                     node.folders[f.name] = f
                     recurse(f.name, new_ancestors)
@@ -320,11 +414,38 @@ class Hierarchy:
         recurse(node.organization.name, [node.organization.name])
 
     @staticmethod
-    def _load_folders_asset(node: OrganizationNode):
+    def _load_folders_asset(node: OrganizationNode, parent_filter: Optional[str] = None, ancestors_filter: Optional[str] = None):
+        """Load folders from Asset API.
+        
+        Args:
+            node: The organization node to load folders into.
+            parent_filter: If provided, only load folders directly under this parent
+                          (e.g., 'organizations/123' or 'folders/456').
+            ancestors_filter: If provided, only load folders that have this resource
+                             in their ancestors (all descendants recursively).
+            
+        Note: parent_filter and ancestors_filter are mutually exclusive.
+              If neither is provided, loads ALL folders under the org.
+        """
         asset_client = asset_v1.AssetServiceClient()
-        # "SELECT name, resource.data.displayName, ancestors FROM `cloudresourcemanager_googleapis_com_Folder`"
-
-        statement = "SELECT name, resource.data.displayName, ancestors FROM `cloudresourcemanager_googleapis_com_Folder`"
+        
+        # Build SQL query - always filter by lifecycle state
+        # Include resource.data.parent to get the parent resource name
+        base_query = "SELECT name, resource.data.displayName, resource.data.parent, ancestors FROM `cloudresourcemanager_googleapis_com_Folder` WHERE resource.data.lifecycleState = 'ACTIVE'"
+        
+        if parent_filter:
+            # Scoped query: only direct children of the specified parent
+            statement = f"{base_query} AND resource.data.parent = '{parent_filter}'"
+        elif ancestors_filter:
+            # Recursive query: all descendants of the specified ancestor
+            # Use IN UNNEST() for array membership check in BigQuery SQL
+            # Exclude the ancestor folder itself from results
+            statement = f"{base_query} AND '{ancestors_filter}' IN UNNEST(ancestors) AND name != '//cloudresourcemanager.googleapis.com/{ancestors_filter}'"
+        else:
+            # Unscoped query: all folders under the org
+            statement = base_query
+        
+        logger.debug(f"Folders query: {statement}")
         query_request = asset_v1.QueryAssetsRequest(
             parent=node.organization.name,
             statement=statement,
@@ -343,7 +464,7 @@ class Hierarchy:
         for row in response.query_result.rows:
             # The Asset API SQL results are returned in a Struct where the values
             # are in a list named 'f', similar to BigQuery JSON output.
-            # 0: name, 1: displayName, 2: ancestors
+            # 0: name, 1: displayName, 2: parent, 3: ancestors
             # IMPORTANT: The google-cloud-asset library returns MapComposite objects
             # which behave like dicts. Do NOT access .fields on them.
             row_dict = dict(row)
@@ -352,7 +473,7 @@ class Hierarchy:
 
             # row_dict["f"] is a list of values
             f_list = row_dict["f"]
-            if len(f_list) < 3:
+            if len(f_list) < 4:
                 logger.warning(
                     f"Unexpected number of columns in Asset API row: {len(f_list)}"
                 )
@@ -362,19 +483,23 @@ class Hierarchy:
             try:
                 name_col = f_list[0]
                 dn_col = f_list[1]
-                anc_col = f_list[2]
+                parent_col = f_list[2]
+                anc_col = f_list[3]
 
-                # Check if it's a dict with 'v' or just potential direct value
-                name_val = name_col.get("v") if isinstance(name_col, dict) else name_col
-                display_name = dn_col.get("v") if isinstance(dn_col, dict) else dn_col
+                # Extract values from MapComposite/dict-like objects
+                # MapComposite behaves like a dict but isn't a dict instance
+                name_val = name_col.get("v") if hasattr(name_col, "get") else name_col
+                display_name = dn_col.get("v") if hasattr(dn_col, "get") else dn_col
+                parent_val = parent_col.get("v") if hasattr(parent_col, "get") else parent_col
                 ancestors_wrapper = (
-                    anc_col.get("v") if isinstance(anc_col, dict) else anc_col
+                    anc_col.get("v") if hasattr(anc_col, "get") else anc_col
                 )
 
                 # Ancestors might be a list wrapper
                 raw_ancestors_uncleaned = (
                     ancestors_wrapper if isinstance(ancestors_wrapper, list) else []
                 )
+                logger.debug(f"Found folder. Name: {name_val}, Display Name: {display_name}, Parent: {parent_val}, Ancestors: {raw_ancestors_uncleaned}")
 
             except (IndexError, AttributeError, TypeError) as e:
                 logger.warning(f"Error parsing Asset API folder row: {e}")
@@ -385,15 +510,19 @@ class Hierarchy:
                 continue
 
             name = _clean_asset_name(str(name_val))
+            
+            # Get the parent - either from the API response or from parent_filter
+            folder_parent = str(parent_val) if parent_val else (parent_filter if parent_filter else node.organization.name)
+            
             raw_ancestors = [
                 _clean_asset_name(
-                    str(item.get("v") if isinstance(item, dict) else item)
+                    str(item.get("v") if hasattr(item, "get") else item)
                 )
                 for item in raw_ancestors_uncleaned
             ]
 
             logger.debug(
-                f"Parsed folder from Asset API: name={name}, display_name={display_name}"
+                f"Parsed folder from Asset API: name={name}, display_name={display_name}, parent={folder_parent}"
             )
 
             # Ensure consistency with _load_folders_rm structure: [self, parent, ..., org]
@@ -402,22 +531,113 @@ class Hierarchy:
             else:
                 ancestors = raw_ancestors
 
+            # If we filtered by parent or have empty ancestors, build the full chain
+            if not ancestors or (len(ancestors) == 1 and ancestors[0] == name):
+                # Build full ancestor chain by traversing parents
+                ancestors = [name]
+                current_parent = folder_parent
+
+                # Traverse up the parent chain
+                while current_parent and current_parent.startswith("folders/"):
+                    ancestors.append(current_parent)
+                    # Check if this parent is already in node.folders
+                    if current_parent in node.folders:
+                        parent_folder = node.folders[current_parent]
+                        # Add remaining ancestors from the parent (excluding duplicates)
+                        for anc in parent_folder.ancestors:
+                            if anc != current_parent and anc not in ancestors:
+                                ancestors.append(anc)
+                        break
+                    else:
+                        # Parent not loaded yet, will need to continue in next pass
+                        # For now, just add org at the end
+                        ancestors.append(node.organization.name)
+                        break
+
+                # If we didn't find any folders in the chain, add org
+                if len(ancestors) == 1 or (len(ancestors) > 1 and not ancestors[-1].startswith("organizations/")):
+                    ancestors.append(node.organization.name)
+
             f = Folder(
                 name=name,
                 display_name=display_name,
                 ancestors=ancestors,
                 organization=node,
+                parent=folder_parent,
             )
             node.folders[f.name] = f
 
+        # Second pass: fix up ancestors for all folders by traversing parent chain
+        # This is needed because Asset API returns empty ancestors for full recursive loads
+        for folder in list(node.folders.values()):
+            # Only fix if this folder has a folder parent and ancestors seem incomplete
+            if not folder.parent.startswith("folders/"):
+                continue
+
+            # Build full ancestor chain by traversing parents
+            ancestors = [folder.name]
+            current_parent = folder.parent
+            visited = {folder.name}  # Prevent infinite loops
+
+            while current_parent and current_parent.startswith("folders/"):
+                if current_parent in visited:
+                    logger.warning(f"Circular parent reference detected for {folder.name}")
+                    break
+                visited.add(current_parent)
+                ancestors.append(current_parent)
+
+                # Look up the parent to continue the chain
+                if current_parent in node.folders:
+                    parent_folder = node.folders[current_parent]
+                    current_parent = parent_folder.parent
+                else:
+                    # Parent not in folders, stop here
+                    break
+
+            # Add org at the end
+            if not ancestors[-1].startswith("organizations/"):
+                ancestors.append(node.organization.name)
+
+            # Update if the ancestors changed
+            if ancestors != folder.ancestors:
+                folder.ancestors = ancestors
+                logger.debug(f"Fixed ancestors for {folder.name} ({folder.display_name}): {ancestors}")
+
     @staticmethod
-    def _load_projects_asset(node: OrganizationNode) -> List[Project]:
+    def _load_projects_asset(node: OrganizationNode, parent_filter: Optional[str] = None, ancestors_filter: Optional[str] = None) -> List[Project]:
+        """Load projects from Asset API.
+        
+        Args:
+            node: The organization node to associate projects with.
+            parent_filter: If provided, only load projects directly under this parent
+                          (e.g., 'organizations/123' or 'folders/456').
+            ancestors_filter: If provided, only load projects that have this resource
+                             in their ancestors (all descendants recursively).
+            
+        Note: parent_filter and ancestors_filter are mutually exclusive.
+              If neither is provided, loads ALL projects under the org.
+        """
         asset_client = asset_v1.AssetServiceClient()
         projects: List[Project] = []
-        # Query Projects
-        # Note: displayName is not in resource.data for Projects in Asset API query results
-        # We'll use projectId as the display name fallback
-        statement = "SELECT name, resource.data.projectNumber, resource.data.projectId, ancestors FROM `cloudresourcemanager_googleapis_com_Project`"
+        
+        # Build SQL query - always filter by lifecycle state
+        # Include resource.data.parent to get parent info when ancestors is empty
+        base_query = "SELECT name, resource.data.projectNumber, resource.data.projectId, resource.data.parent, ancestors FROM `cloudresourcemanager_googleapis_com_Project` WHERE resource.data.lifecycleState = 'ACTIVE'"
+        
+        if parent_filter:
+            # Scoped query: only direct children of the specified parent
+            # Note: parent is a STRUCT with 'type' and 'id' fields
+            parent_id = parent_filter.split('/')[-1]
+            statement = f"{base_query} AND resource.data.parent.id = '{parent_id}'"
+        elif ancestors_filter:
+            # Recursive query: all descendants of the specified ancestor
+            # Use IN UNNEST() for array membership check in BigQuery SQL
+            statement = f"{base_query} AND '{ancestors_filter}' IN UNNEST(ancestors)"
+        else:
+            # Unscoped query: all projects under the org
+            statement = base_query
+        
+        logger.debug(f"Projects query: {statement}")
         query_request = asset_v1.QueryAssetsRequest(
             parent=node.organization.name,
             statement=statement,
@@ -432,6 +652,7 @@ class Hierarchy:
             # Iterate directly over the response
             if not response.query_result or not response.query_result.rows:
                 logger.debug("No project rows returned from Asset API")
+                logger.debug(f"Query result: {response.query_result}")
                 return projects
 
             for row in response.query_result.rows:
@@ -441,26 +662,74 @@ class Hierarchy:
                         continue
 
                     f_list = row_dict["f"]
-                    if len(f_list) < 4:
+                    if len(f_list) < 5:
                         logger.warning(
                             f"Unexpected number of columns in Asset API project row: {len(f_list)}"
                         )
                         continue
 
-                    # 0: name, 1: projectNumber, 2: projectId, 3: ancestors
+                    # 0: name, 1: projectNumber, 2: projectId, 3: parent (STRUCT), 4: ancestors
                     name_col = f_list[0]
                     # num_col = f_list[1] # unused
                     id_col = f_list[2]
-                    anc_col = f_list[3]
+                    parent_col = f_list[3]
+                    anc_col = f_list[4]
 
+                    # Extract values from MapComposite/dict-like objects
                     name_val = (
-                        name_col.get("v") if isinstance(name_col, dict) else name_col
+                        name_col.get("v") if hasattr(name_col, "get") else name_col
                     )
-                    project_id = id_col.get("v") if isinstance(id_col, dict) else id_col
+                    project_id = id_col.get("v") if hasattr(id_col, "get") else id_col
                     display_name = project_id  # Use projectId as displayName
+                    
+                    # Parent is a STRUCT with 'type' and 'id' fields
+                    # The STRUCT is wrapped in {"v": {"f": [{"v": type}, {"v": id}]}} format
+                    parent_struct_raw = parent_col.get("v") if hasattr(parent_col, "get") else parent_col
+                    parent_from_api = None
+
+                    if parent_struct_raw:
+                        # Convert MapComposite to dict for easier access
+                        parent_dict = dict(parent_struct_raw) if hasattr(parent_struct_raw, "keys") else {}
+
+                        # Handle nested STRUCT format from Asset API: {"f": [{"v": type}, {"v": id}]}
+                        # Note: parent_dict["f"] can be a list, RepeatedComposite, or similar iterable
+                        if "f" in parent_dict and hasattr(parent_dict["f"], "__len__") and len(parent_dict["f"]) >= 2:
+                            struct_fields = parent_dict["f"]
+
+                            # Handle both dict and MapComposite objects in the list
+                            type_field = struct_fields[0]
+                            id_field = struct_fields[1]
+
+                            # Extract 'v' value, handling MapComposite or dict
+                            if hasattr(type_field, "get"):
+                                type_val = type_field.get("v")
+                            elif isinstance(type_field, dict):
+                                type_val = type_field.get("v")
+                            else:
+                                type_val = type_field
+
+                            if hasattr(id_field, "get"):
+                                id_val = id_field.get("v")
+                            elif isinstance(id_field, dict):
+                                id_val = id_field.get("v")
+                            else:
+                                id_val = id_field
+
+                            if type_val and id_val:
+                                parent_type_plural = f"{type_val}s" if not type_val.endswith("s") else type_val
+                                parent_from_api = f"{parent_type_plural}/{id_val}"
+                                logger.debug(f"Project {project_id} parsed parent from nested format: {parent_from_api}")
+                        # Also try direct access for simpler formats (for backwards compatibility with tests)
+                        elif "type" in parent_dict and "id" in parent_dict:
+                            parent_type = parent_dict["type"]
+                            parent_id_val = parent_dict["id"]
+                            if parent_type and parent_id_val:
+                                parent_type_plural = f"{parent_type}s" if not parent_type.endswith("s") else parent_type
+                                parent_from_api = f"{parent_type_plural}/{parent_id_val}"
+                                logger.debug(f"Project {project_id} parsed parent from simple format: {parent_from_api}")
 
                     ancestors_wrapper = (
-                        anc_col.get("v") if isinstance(anc_col, dict) else anc_col
+                        anc_col.get("v") if hasattr(anc_col, "get") else anc_col
                     )
                     raw_ancestors_uncleaned = (
                         ancestors_wrapper if isinstance(ancestors_wrapper, list) else []
@@ -469,13 +738,13 @@ class Hierarchy:
                     name = _clean_asset_name(str(name_val))
                     raw_ancestors = [
                         _clean_asset_name(
-                            str(item.get("v") if isinstance(item, dict) else item)
+                            str(item.get("v") if hasattr(item, "get") else item)
                         )
                         for item in raw_ancestors_uncleaned
                     ]
 
                     logger.debug(
-                        f"Parsed project from Asset API: project_id={project_id}, name={name}"
+                        f"Parsed project from Asset API: project_id={project_id}, name={name}, parent_from_api={parent_from_api}, ancestors={raw_ancestors}"
                     )
 
                 except (IndexError, AttributeError, TypeError) as e:
@@ -483,22 +752,23 @@ class Hierarchy:
                     continue
 
                 try:
-                    # For projects, we want the first ancestor that is NOT the project itself.
-                    # Typically raw_ancestors[0] is the parent, but if it's the project itself, pick [1].
-                    if not raw_ancestors:
-                        # Should not happen for a valid project
-                        continue
-                    elif raw_ancestors and raw_ancestors[0] == name:
+                    # Determine parent - prefer parent_from_api, then ancestors, then fallback
+                    if parent_from_api:
+                        parent_res = parent_from_api
+                    elif not raw_ancestors:
+                        # No ancestors and no parent from API - use parent_filter if set, otherwise org
+                        parent_res = parent_filter if parent_filter else node.organization.name
+                    elif raw_ancestors[0] == name:
                         parent_res = (
                             raw_ancestors[1]
                             if len(raw_ancestors) > 1
-                            else node.organization.name
+                            else (parent_filter if parent_filter else node.organization.name)
                         )
                     else:
                         parent_res = (
                             raw_ancestors[0]
                             if raw_ancestors
-                            else node.organization.name
+                            else (parent_filter if parent_filter else node.organization.name)
                         )
 
                     parent_folder = None
