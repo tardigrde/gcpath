@@ -5,6 +5,36 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.3] - 2025-12-22
+
+### Fixed
+- Fixed `ls -l` formatting: simplified to 2 columns (Path, Resource Name) for better readability. Previously showed 4 columns with redundant information and path truncation.
+- Removed artificial tree depth limit of 3 levels. Tree command now accepts unlimited depth.
+
+### Changed
+- Tree command now prompts user before loading large hierarchies (when no level limit is specified or level >= 4). This prevents accidentally loading massive hierarchies that could take a long time.
+- Tree command accepts `-y/--yes` flag to skip confirmation prompts for automation/scripting use cases.
+- Improved `ls -l` output: full paths are now visible without truncation, resource names show complete GCP identifiers (e.g., `organizations/123`, `folders/456`, `projects/789`).
+
+### Documentation
+- Updated README.md with expanded API modes section explaining when to use each API.
+- Updated CONTRIBUTING.md with development setup, testing guidelines, and instructions for testing both API modes.
+- Enhanced permission documentation with complete permission requirements for both APIs.
+
+### Refactoring
+- **Modular Architecture**: Reorganized codebase from 2 monolithic files into 5 focused modules for better maintainability and testability.
+  - Created `parsers.py`: Centralized all Asset API response parsing logic with 8 pure functions for handling STRUCT/MapComposite complexity.
+  - Created `loaders.py`: Extracted all GCP API loading logic with 8 functions for Resource Manager and Asset API operations.
+  - Created `formatters.py`: Extracted display formatting logic with 6 functions for path formatting, tree visualization, and resource filtering.
+  - Simplified `cli.py`: Removed nested functions, now uses formatters module for display logic.
+  - Simplified `core.py`: Removed loader/parser logic, now focuses on data structures and coordination.
+- **Code Quality**: All functions are following single responsibility principle.
+- **Test Organization**: Restructured tests to match source organization:
+  - Created `test_parsers.py` for parsing logic.
+  - Created `test_loaders.py` for loading logic.
+  - Created `test_formatters.py` for formatting logic.
+  - Removed obsolete `test_loading.py` after migrating all tests.
+
 ## [0.2.2] - 2025-12-22
 
 ### Added

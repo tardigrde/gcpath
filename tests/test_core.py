@@ -239,8 +239,13 @@ def test_resolve_ancestry_organizationless(mock_rm):
     assert path == "//_/Standalone"
 
 
+@patch("gcpath.loaders.resourcemanager_v3")
 @patch("gcpath.core.resourcemanager_v3")
-def test_hierarchy_load_rm(mock_rm):
+def test_hierarchy_load_rm(mock_core_rm, mock_loaders_rm):
+    # Use the same mock for both core and loaders
+    mock_rm = mock_core_rm
+    mock_loaders_rm.FoldersClient = mock_rm.FoldersClient
+
     # Mock Org
     org_client = mock_rm.OrganizationsClient.return_value
     org_proto = resourcemanager_v3.Organization(
@@ -332,9 +337,17 @@ def test_hierarchy_get_path_errors():
         h.get_path_by_resource_name("invalid/123")
 
 
+@patch("gcpath.loaders.resourcemanager_v3")
+@patch("gcpath.loaders.asset_v1")
 @patch("gcpath.core.resourcemanager_v3")
-@patch("gcpath.core.asset_v1")
-def test_hierarchy_load_asset_api(mock_asset, mock_rm):
+def test_hierarchy_load_asset_api(
+    mock_core_rm, mock_loaders_asset, mock_loaders_rm
+):
+    # Use the same mocks for both core and loaders
+    mock_asset = mock_loaders_asset
+    mock_rm = mock_core_rm
+    mock_loaders_rm.ProjectsClient = mock_rm.ProjectsClient
+
     # Mock Org
     org_client = mock_rm.OrganizationsClient.return_value
     org_proto = resourcemanager_v3.Organization(
@@ -360,6 +373,9 @@ def test_hierarchy_load_asset_api(mock_asset, mock_rm):
     mock_resp = MagicMock()
     mock_resp.query_result.rows = [row_data]
     asset_client.query_assets.return_value = mock_resp
+
+    # Mock search_projects to return empty for organizationless projects
+    mock_rm.ProjectsClient.return_value.search_projects.return_value = []
 
     # Load
     h = Hierarchy.load(via_resource_manager=False)
