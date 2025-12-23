@@ -99,15 +99,42 @@ def test_ls_long_format(mock_load, mock_hierarchy):
     result = runner.invoke(app, ["ls", "-l"])
     assert result.exit_code == 0
     assert "Path" in result.stdout
-    assert "ID" in result.stdout
-    assert "NAME" in result.stdout
-    assert "NUMBER" in result.stdout
+    assert "Resource Name" in result.stdout
     assert "example.com" in result.stdout
-    assert "123" in result.stdout
+    assert "organizations/123" in result.stdout
 
 
 @patch("gcpath.core.Hierarchy.load")
-def test_tree_command_full(mock_load, mock_hierarchy):
+def test_ls_long_format_shows_org_resource_names(mock_load, mock_hierarchy):
+    """Verify organization resource names appear in long format"""
+    mock_load.return_value = mock_hierarchy
+    result = runner.invoke(app, ["ls", "-l"])
+    assert result.exit_code == 0
+    assert "organizations/123" in result.stdout
+
+
+@patch("gcpath.core.Hierarchy.load")
+def test_ls_long_format_shows_folder_resource_names(mock_load, mock_hierarchy):
+    """Verify folder resource names appear in long format"""
+    mock_load.return_value = mock_hierarchy
+    result = runner.invoke(app, ["ls", "-l", "organizations/123"])
+    assert result.exit_code == 0
+    assert "folders/1" in result.stdout
+
+
+@patch("gcpath.core.Hierarchy.load")
+def test_ls_long_format_shows_project_resource_names(mock_load, mock_hierarchy):
+    """Verify project resource names appear in long format"""
+    mock_load.return_value = mock_hierarchy
+    result = runner.invoke(app, ["ls", "-l", "folders/1"])
+    assert result.exit_code == 0
+    assert "projects/p1" in result.stdout
+
+
+@patch("gcpath.core.Hierarchy.load")
+@patch("typer.confirm")
+def test_tree_command_full(mock_confirm, mock_load, mock_hierarchy):
+    mock_confirm.return_value = True  # User confirms the prompt
     mock_load.return_value = mock_hierarchy
     result = runner.invoke(app, ["tree"])
     assert result.exit_code == 0
@@ -126,12 +153,67 @@ def test_tree_depth_limit(mock_load, mock_hierarchy):
     assert "f11" not in result.stdout
 
 
-def test_tree_max_level_validation():
-    """Test that tree command rejects level > 3"""
+@patch("gcpath.core.Hierarchy.load")
+def test_tree_accepts_level_greater_than_3(mock_load, mock_hierarchy):
+    """Test that tree command accepts level > 3 (no more artificial limit)"""
+    mock_load.return_value = mock_hierarchy
+    # Use -y to skip the prompt that would trigger for level >= 4
+    result = runner.invoke(app, ["tree", "-L", "5", "-y"])
+    assert result.exit_code == 0
+
+
+@patch("gcpath.core.Hierarchy.load")
+@patch("typer.confirm")
+def test_tree_prompts_on_unlimited_load(mock_confirm, mock_load, mock_hierarchy):
+    """Test that tree prompts when loading full org tree without limit"""
+    mock_confirm.return_value = True
+    mock_load.return_value = mock_hierarchy
+    result = runner.invoke(app, ["tree"])
+    assert mock_confirm.called
+    assert result.exit_code == 0
+
+
+@patch("gcpath.core.Hierarchy.load")
+@patch("typer.confirm")
+def test_tree_prompts_on_large_level(mock_confirm, mock_load, mock_hierarchy):
+    """Test that tree prompts when level >= 4"""
+    mock_confirm.return_value = True
+    mock_load.return_value = mock_hierarchy
     result = runner.invoke(app, ["tree", "-L", "4"])
-    assert result.exit_code == 1
-    assert "Maximum tree depth is 3" in result.stderr
-    assert "Requested level 4" in result.stderr
+    assert mock_confirm.called
+    assert result.exit_code == 0
+
+
+@patch("gcpath.core.Hierarchy.load")
+@patch("typer.confirm")
+def test_tree_yes_flag_skips_prompt(mock_confirm, mock_load, mock_hierarchy):
+    """Test that --yes skips prompt"""
+    mock_load.return_value = mock_hierarchy
+    result = runner.invoke(app, ["tree", "-y"])
+    assert not mock_confirm.called
+    assert result.exit_code == 0
+
+
+@patch("gcpath.core.Hierarchy.load")
+@patch("gcpath.cli.Hierarchy.resolve_ancestry")
+@patch("typer.confirm")
+def test_tree_scoped_load_no_prompt(
+    mock_confirm, mock_resolve, mock_load, mock_hierarchy
+):
+    """Test that scoped loads don't prompt"""
+    mock_load.return_value = mock_hierarchy
+    mock_resolve.return_value = "//example.com/f1"
+    result = runner.invoke(app, ["tree", "folders/1"])
+    assert not mock_confirm.called
+    assert result.exit_code == 0
+
+
+@patch("typer.confirm")
+def test_tree_user_declines_prompt(mock_confirm):
+    """Test that declining prompt exits cleanly"""
+    mock_confirm.return_value = False
+    result = runner.invoke(app, ["tree"])
+    assert result.exit_code == 0  # Clean exit
 
 
 @patch("gcpath.core.Hierarchy.load")
@@ -245,7 +327,9 @@ def test_handle_error_service_unavailable():
 
 
 @patch("gcpath.core.Hierarchy.load")
-def test_tree_with_ids(mock_load, mock_hierarchy):
+@patch("typer.confirm")
+def test_tree_with_ids(mock_confirm, mock_load, mock_hierarchy):
+    mock_confirm.return_value = True  # User confirms the prompt
     mock_load.return_value = mock_hierarchy
     result = runner.invoke(app, ["tree", "--ids"])
     assert result.exit_code == 0
