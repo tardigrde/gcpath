@@ -162,10 +162,14 @@ def test_tree_accepts_level_greater_than_3(mock_load, mock_hierarchy):
     assert result.exit_code == 0
 
 
+@patch("gcpath.cli.CACHE_FILE")
 @patch("gcpath.core.Hierarchy.load")
 @patch("typer.confirm")
-def test_tree_prompts_on_unlimited_load(mock_confirm, mock_load, mock_hierarchy):
+def test_tree_prompts_on_unlimited_load(
+    mock_confirm, mock_load, mock_cache_file, mock_hierarchy
+):
     """Test that tree prompts when loading full org tree without limit"""
+    mock_cache_file.exists.return_value = False
     mock_confirm.return_value = True
     mock_load.return_value = mock_hierarchy
     result = runner.invoke(app, ["tree"])
@@ -173,10 +177,14 @@ def test_tree_prompts_on_unlimited_load(mock_confirm, mock_load, mock_hierarchy)
     assert result.exit_code == 0
 
 
+@patch("gcpath.cli.CACHE_FILE")
 @patch("gcpath.core.Hierarchy.load")
 @patch("typer.confirm")
-def test_tree_prompts_on_large_level(mock_confirm, mock_load, mock_hierarchy):
+def test_tree_prompts_on_large_level(
+    mock_confirm, mock_load, mock_cache_file, mock_hierarchy
+):
     """Test that tree prompts when level >= 4"""
+    mock_cache_file.exists.return_value = False
     mock_confirm.return_value = True
     mock_load.return_value = mock_hierarchy
     result = runner.invoke(app, ["tree", "-L", "4"])

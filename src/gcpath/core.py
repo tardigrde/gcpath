@@ -162,6 +162,7 @@ class Hierarchy:
         via_resource_manager: bool = True,
         scope_resource: Optional[str] = None,
         recursive: bool = False,
+        force_refresh: bool = False,
     ) -> "Hierarchy":
         """Load the GCP resource hierarchy.
 
@@ -173,7 +174,18 @@ class Hierarchy:
                            If None, defaults to loading from organization level.
             recursive: If True, load all descendants. If False, only load direct children.
                       Only applies when via_resource_manager=False (Asset API mode).
+            force_refresh: If True, ignore cache and fetch fresh data from GCP.
         """
+        from gcpath.cache import read_cache, write_cache
+
+        if not force_refresh:
+            if not scope_resource:
+                cached_hierarchy = read_cache()
+                if cached_hierarchy:
+                    logger.debug("Hierarchy loaded from cache.")
+                    return cached_hierarchy
+
+        logger.debug("Cache empty or refresh forced, loading from GCP API.")
         org_client = resourcemanager_v3.OrganizationsClient()
         project_client = resourcemanager_v3.ProjectsClient()
 
@@ -187,7 +199,10 @@ class Hierarchy:
             project_client, org_nodes, via_resource_manager, scope_resource, recursive
         )
 
-        return cls(organizations=org_nodes, projects=all_projects)
+        hierarchy = cls(organizations=org_nodes, projects=all_projects)
+        if not scope_resource:
+            write_cache(hierarchy)
+        return hierarchy
 
     @classmethod
     def _load_organizations(

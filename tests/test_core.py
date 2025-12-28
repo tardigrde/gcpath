@@ -239,9 +239,11 @@ def test_resolve_ancestry_organizationless(mock_rm):
     assert path == "//_/Standalone"
 
 
+@patch("gcpath.cache.read_cache")
 @patch("gcpath.loaders.resourcemanager_v3")
 @patch("gcpath.core.resourcemanager_v3")
-def test_hierarchy_load_rm(mock_core_rm, mock_loaders_rm):
+def test_hierarchy_load_rm(mock_core_rm, mock_loaders_rm, mock_read_cache):
+    mock_read_cache.return_value = None
     # Use the same mock for both core and loaders
     mock_rm = mock_core_rm
     mock_loaders_rm.FoldersClient = mock_rm.FoldersClient
@@ -275,8 +277,10 @@ def test_hierarchy_load_rm(mock_core_rm, mock_loaders_rm):
     assert h.projects[0].folder.name == "folders/1"
 
 
+@patch("gcpath.cache.read_cache")
 @patch("gcpath.core.resourcemanager_v3")
-def test_hierarchy_load_permission_denied(mock_rm):
+def test_hierarchy_load_permission_denied(mock_rm, mock_read_cache):
+    mock_read_cache.return_value = None
     org_client = mock_rm.OrganizationsClient.return_value
     org_client.search_organizations.side_effect = exceptions.PermissionDenied("denied")
 
@@ -337,12 +341,14 @@ def test_hierarchy_get_path_errors():
         h.get_path_by_resource_name("invalid/123")
 
 
+@patch("gcpath.cache.read_cache")
 @patch("gcpath.loaders.resourcemanager_v3")
 @patch("gcpath.loaders.asset_v1")
 @patch("gcpath.core.resourcemanager_v3")
 def test_hierarchy_load_asset_api(
-    mock_core_rm, mock_loaders_asset, mock_loaders_rm
+    mock_core_rm, mock_loaders_asset, mock_loaders_rm, mock_read_cache
 ):
+    mock_read_cache.return_value = None
     # Use the same mocks for both core and loaders
     mock_asset = mock_loaders_asset
     mock_rm = mock_core_rm
