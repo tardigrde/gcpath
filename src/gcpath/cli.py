@@ -33,12 +33,6 @@ app = typer.Typer(
     help="Google Cloud Platform resource hierarchy utility",
     add_completion=False,
 )
-cache_app = typer.Typer(
-    name="cache",
-    help="Manage the local resource cache",
-    no_args_is_help=True,
-)
-app.add_typer(cache_app)
 console = Console()
 error_console = Console(stderr=True)
 
@@ -91,15 +85,27 @@ def main(
     logging.getLogger("urllib3").setLevel(logging.WARNING)
 
 
-@cache_app.command("clear")
-def cache_clear() -> None:
+@app.command()
+def cache(
+    action: Annotated[
+        str,
+        typer.Argument(
+            help="The action to perform on the cache (e.g., 'clear')",
+            case_sensitive=False,
+        ),
+    ]
+) -> None:
     """
-    Clear the local resource cache.
+    Manage the local resource cache.
     """
-    if clear_cache():
-        rprint(f"[green]Cache cleared successfully at {CACHE_FILE}[/green]")
+    if action.lower() == "clear":
+        if clear_cache():
+            rprint(f"[green]Cache cleared successfully at {CACHE_FILE}[/green]")
+        else:
+            rprint(f"[yellow]No cache file to clear at {CACHE_FILE}[/yellow]")
     else:
-        rprint(f"[yellow]No cache file to clear at {CACHE_FILE}[/yellow]")
+        rprint(f"[red]Unknown cache action: {action}[/red]")
+        raise typer.Exit(code=1)
 
 
 def _load_hierarchy(

@@ -17,7 +17,7 @@ CACHE_DIR = Path.home() / ".gcpath"
 CACHE_FILE = CACHE_DIR / "cache.json"
 
 
-class SimpleOrg:
+class SerializableOrganization:
     """A duck-typed object to replace the non-serializable Organization proto."""
 
     def __init__(self, name: str, display_name: str):
@@ -71,7 +71,7 @@ def _dict_to_hierarchy(data: Dict[str, Any]) -> Hierarchy:
 
     for org_data in data.get("organizations", []):
         org_proto_data = org_data["organization"]
-        org_proto = SimpleOrg(
+        org_proto = SerializableOrganization(
             name=org_proto_data["name"], display_name=org_proto_data["display_name"]
         )
         node = OrganizationNode(organization=org_proto)
