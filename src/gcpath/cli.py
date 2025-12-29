@@ -93,7 +93,7 @@ def cache(
             help="The action to perform on the cache (e.g., 'clear')",
             case_sensitive=False,
         ),
-    ]
+    ],
 ) -> None:
     """
     Manage the local resource cache.

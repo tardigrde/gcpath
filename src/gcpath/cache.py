@@ -6,8 +6,11 @@ This module handles reading from and writing to the cache file.
 
 import json
 import logging
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, Any, Dict, List
+
+from google.cloud import resourcemanager_v3  # type: ignore
 
 from gcpath.core import Hierarchy, OrganizationNode, Folder, Project
 
@@ -15,24 +18,41 @@ logger = logging.getLogger(__name__)
 
 CACHE_DIR = Path.home() / ".gcpath"
 CACHE_FILE = CACHE_DIR / "cache.json"
-
-
-class SerializableOrganization:
-    """A duck-typed object to replace the non-serializable Organization proto."""
-
-    def __init__(self, name: str, display_name: str):
-        self.name = name
-        self.display_name = display_name
+CACHE_VERSION = 1
 
 
 def _hierarchy_to_dict(hierarchy: Hierarchy) -> Dict[str, Any]:
     """Serializes the Hierarchy object to a dictionary."""
     organizations_data = []
+
+    # Map projects to their organizations for nested storage
+    org_projects: Dict[str, List[Dict[str, Any]]] = {}
+    orgless_projects_data: List[Dict[str, Any]] = []
+
+    for project in hierarchy.projects:
+        project_data = {
+            "name": project.name,
+            "project_id": project.project_id,
+            "display_name": project.display_name,
+            "parent": project.parent,
+            "folder_name": project.folder.name if project.folder else None,
+        }
+
+        if project.organization:
+            org_name = project.organization.organization.name
+            if org_name not in org_projects:
+                org_projects[org_name] = []
+            org_projects[org_name].append(project_data)
+        else:
+            orgless_projects_data.append(project_data)
+
     for org_node in hierarchy.organizations:
+        org_name = org_node.organization.name
         org_proto_data = {
-            "name": org_node.organization.name,
+            "name": org_name,
             "display_name": org_node.organization.display_name,
         }
+
         folders_data = {
             name: {
                 "name": folder.name,
@@ -42,72 +62,83 @@ def _hierarchy_to_dict(hierarchy: Hierarchy) -> Dict[str, Any]:
             }
             for name, folder in org_node.folders.items()
         }
-        organizations_data.append(
-            {"organization": org_proto_data, "folders": folders_data}
-        )
 
-    projects_data = []
-    for project in hierarchy.projects:
-        projects_data.append(
+        organizations_data.append(
             {
-                "name": project.name,
-                "project_id": project.project_id,
-                "display_name": project.display_name,
-                "parent": project.parent,
-                "organization_name": project.organization.organization.name
-                if project.organization
-                else None,
-                "folder_name": project.folder.name if project.folder else None,
+                "organization": org_proto_data,
+                "folders": folders_data,
+                "projects": org_projects.get(org_name, []),
             }
         )
 
-    return {"organizations": organizations_data, "projects": projects_data}
+    return {
+        "version": CACHE_VERSION,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "organizations": organizations_data,
+        "organizationless_projects": orgless_projects_data,
+    }
 
 
-def _dict_to_hierarchy(data: Dict[str, Any]) -> Hierarchy:
+def _dict_to_hierarchy(data: Dict[str, Any]) -> Optional[Hierarchy]:
     """Deserializes a dictionary to a Hierarchy object."""
+    if data.get("version") != CACHE_VERSION:
+        logger.warning(
+            f"Cache version mismatch (expected {CACHE_VERSION}, got {data.get('version')}). Ignoring cache."
+        )
+        return None
+
     org_nodes: List[OrganizationNode] = []
-    org_map: Dict[str, OrganizationNode] = {}
+    projects: List[Project] = []
+
+    # We explicitly recreate the protobuf object.
+    # Note: resourcemanager_v3.Organization is a specialized Map/Message class.
+    # We can instantiate it with kwargs matching the fields.
 
     for org_data in data.get("organizations", []):
-        org_proto_data = org_data["organization"]
-        org_proto = SerializableOrganization(
-            name=org_proto_data["name"], display_name=org_proto_data["display_name"]
+        org_info = org_data["organization"]
+        # Reconstruct Organization protobuf
+        org_proto = resourcemanager_v3.Organization(
+            name=org_info["name"], display_name=org_info["display_name"]
         )
+
         node = OrganizationNode(organization=org_proto)
         org_nodes.append(node)
-        org_map[node.organization.name] = node
 
-    for i, org_data in enumerate(data.get("organizations", [])):
-        org_node = org_nodes[i]
+        # Reconstruct Folders
         for folder_name, folder_data in org_data.get("folders", {}).items():
             folder = Folder(
                 name=folder_data["name"],
                 display_name=folder_data["display_name"],
                 ancestors=folder_data["ancestors"],
                 parent=folder_data["parent"],
-                organization=org_node,
+                organization=node,
             )
-            org_node.folders[folder_name] = folder
+            node.folders[folder_name] = folder
 
-    projects: List[Project] = []
-    all_folders: Dict[str, Folder] = {}
-    for org_node in org_nodes:
-        all_folders.update(org_node.folders)
+        # Reconstruct Projects for this Org
+        for p_data in org_data.get("projects", []):
+            folder_name = p_data.get("folder_name")
+            parent_folder = node.folders.get(folder_name) if folder_name else None
 
-    for project_data in data.get("projects", []):
-        org_name = project_data.get("organization_name")
-        folder_name = project_data.get("folder_name")
-        parent_org = org_map.get(org_name) if org_name else None
-        parent_folder = all_folders.get(folder_name) if folder_name else None
+            project = Project(
+                name=p_data["name"],
+                project_id=p_data["project_id"],
+                display_name=p_data["display_name"],
+                parent=p_data["parent"],
+                organization=node,
+                folder=parent_folder,
+            )
+            projects.append(project)
 
+    # Reconstruct Organizationless Projects
+    for p_data in data.get("organizationless_projects", []):
         project = Project(
-            name=project_data["name"],
-            project_id=project_data["project_id"],
-            display_name=project_data["display_name"],
-            parent=project_data["parent"],
-            organization=parent_org,
-            folder=parent_folder,
+            name=p_data["name"],
+            project_id=p_data["project_id"],
+            display_name=p_data["display_name"],
+            parent=p_data["parent"],
+            organization=None,
+            folder=None,
         )
         projects.append(project)
 
