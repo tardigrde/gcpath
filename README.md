@@ -22,8 +22,8 @@ It helps you translate between GCP resource names (e.g., `folders/12345`) and hu
 
 ### Roadmap
 
-- caching, for lightning fast lookups
-- diagram generation
+- ~~caching, for lightning fast lookups~~
+- ~~diagram generation~~
 - entrypoint configuration (organization or folder)
 - IAM policies
 - other resources
@@ -65,6 +65,12 @@ gcpath tree
 
 # View tree rooted at folder
 gcpath tree folders/123456789
+
+# Generate a Mermaid diagram of the hierarchy
+gcpath diagram
+
+# Generate a D2 diagram scoped to a folder
+gcpath diagram folders/123456789 --format d2
 ```
 
 ## Usage
@@ -108,6 +114,38 @@ Options:
 - `-L, --level N`: Limit depth of the tree (no limit by default).
 - `-i, --ids`: Include resource IDs in the output.
 - `-y, --yes`: Skip confirmation prompts for large hierarchy loads.
+
+### Generate Diagram (`diagram`)
+
+Generate a [Mermaid](https://mermaid.js.org/) or [D2](https://d2lang.com/) diagram of the resource hierarchy.
+
+```bash
+gcpath diagram [RESOURCE_NAME]
+```
+
+Options:
+
+- `-f, --format FORMAT`: Output format: `mermaid` (default) or `d2`.
+- `-L, --level N`: Limit depth of the diagram.
+- `-i, --ids`: Include resource IDs in node labels.
+- `-o, --output FILE`: Write diagram to a file instead of stdout.
+- `-y, --yes`: Skip confirmation prompts for large hierarchy loads.
+
+Examples:
+
+```bash
+# Generate Mermaid diagram of the full hierarchy
+gcpath diagram
+
+# Generate D2 diagram scoped to a folder
+gcpath diagram folders/123456789 --format d2
+
+# Save Mermaid diagram to a file with depth limit
+gcpath diagram -L 3 -o hierarchy.mmd
+
+# Include resource IDs in labels
+gcpath diagram --ids
+```
 
 ### Get Resource Name (`name`)
 

@@ -1,7 +1,8 @@
 """
 Display formatting utilities for gcpath CLI.
 
-This module handles path formatting, resource filtering, and tree visualization.
+This module handles path formatting, resource filtering, tree visualization,
+and diagram generation (Mermaid, D2).
 """
 
 from typing import List, Dict, Tuple, Union, Optional, Any
@@ -333,3 +334,184 @@ def build_tree_view(
     for p in children_projects:
         label = format_tree_label(p, show_ids)
         tree_node.add(label)
+
+
+# --- Diagram generation (Mermaid / D2) ---
+
+
+def _sanitize_node_id(resource_name: str) -> str:
+    """Convert a GCP resource name to a valid diagram node ID.
+
+    Both Mermaid and D2 work best with simple alphanumeric + underscore IDs.
+    """
+    return resource_name.replace("/", "_").replace(".", "_").replace("-", "_")
+
+
+def _get_node_label(
+    item: Union[OrganizationNode, Folder, Project], show_ids: bool = False
+) -> str:
+    """Get display label for a diagram node."""
+    if isinstance(item, OrganizationNode):
+        label = f"//{path_escape(item.organization.display_name)}"
+        if show_ids:
+            label += f" ({item.organization.name})"
+    elif isinstance(item, Folder):
+        label = item.display_name
+        if show_ids:
+            label += f" ({item.name})"
+    elif isinstance(item, Project):
+        label = item.display_name
+        if show_ids:
+            label += f" ({item.name})"
+    else:
+        label = str(item)
+    return label
+
+
+def _collect_diagram_edges(
+    parent_id: str,
+    current_node: Union[OrganizationNode, Folder],
+    hierarchy: Any,
+    projects_by_parent: Dict[str, List[Project]],
+    edges: List[Tuple[str, str]],
+    labels: Dict[str, str],
+    level: Optional[int] = None,
+    current_depth: int = 0,
+    show_ids: bool = False,
+) -> None:
+    """Recursively collect edges and node labels from the hierarchy."""
+    if level is not None and current_depth >= level:
+        return
+
+    parent_name = (
+        current_node.name
+        if hasattr(current_node, "name") and not isinstance(current_node, OrganizationNode)
+        else current_node.organization.name
+        if isinstance(current_node, OrganizationNode)
+        else ""
+    )
+
+    # Find child folders
+    children_folders: List[Folder] = []
+    org_node_ref = (
+        current_node
+        if isinstance(current_node, OrganizationNode)
+        else current_node.organization
+    )
+
+    if org_node_ref:
+        for f in org_node_ref.folders.values():
+            if f.parent == parent_name:
+                children_folders.append(f)
+
+    children_folders.sort(key=lambda x: x.display_name)
+
+    # Find child projects
+    children_projects = sorted(
+        projects_by_parent.get(parent_name, []), key=lambda x: x.display_name
+    )
+
+    for f in children_folders:
+        child_id = _sanitize_node_id(f.name)
+        labels[child_id] = _get_node_label(f, show_ids)
+        edges.append((parent_id, child_id))
+        _collect_diagram_edges(
+            child_id,
+            f,
+            hierarchy,
+            projects_by_parent,
+            edges,
+            labels,
+            level,
+            current_depth + 1,
+            show_ids,
+        )
+
+    for p in children_projects:
+        child_id = _sanitize_node_id(p.name)
+        labels[child_id] = _get_node_label(p, show_ids)
+        edges.append((parent_id, child_id))
+
+
+def _format_mermaid(labels: Dict[str, str], edges: List[Tuple[str, str]]) -> str:
+    """Format collected nodes and edges as a Mermaid flowchart."""
+    lines = ["graph TD"]
+    for node_id, label in labels.items():
+        safe_label = label.replace('"', '#quot;')
+        lines.append(f'    {node_id}["{safe_label}"]')
+    for parent_id, child_id in edges:
+        lines.append(f"    {parent_id} --> {child_id}")
+    return "\n".join(lines)
+
+
+def _format_d2(labels: Dict[str, str], edges: List[Tuple[str, str]]) -> str:
+    """Format collected nodes and edges as a D2 diagram."""
+    lines: List[str] = []
+    for node_id, label in labels.items():
+        lines.append(f'{node_id}: "{label}"')
+    for parent_id, child_id in edges:
+        lines.append(f"{parent_id} -> {child_id}")
+    return "\n".join(lines)
+
+
+def build_diagram(
+    nodes_to_process: List[Union[OrganizationNode, Folder]],
+    hierarchy: Any,
+    projects_by_parent: Dict[str, List[Project]],
+    fmt: str = "mermaid",
+    level: Optional[int] = None,
+    show_ids: bool = False,
+    orgless_projects: Optional[List[Project]] = None,
+) -> str:
+    """Build a diagram string from hierarchy data.
+
+    Args:
+        nodes_to_process: Root nodes (organizations or folders) to include.
+        hierarchy: The loaded Hierarchy object.
+        projects_by_parent: Dict mapping parent resource names to project lists.
+        fmt: Output format, either "mermaid" or "d2".
+        level: Maximum depth to include (None for unlimited).
+        show_ids: Whether to include resource IDs in labels.
+        orgless_projects: Organizationless projects to include.
+
+    Returns:
+        Diagram source string in the requested format.
+    """
+    edges: List[Tuple[str, str]] = []
+    # Use dict to preserve insertion order (Python 3.7+)
+    labels: Dict[str, str] = {}
+
+    for node in nodes_to_process:
+        if isinstance(node, OrganizationNode):
+            node_id = _sanitize_node_id(node.organization.name)
+        else:
+            node_id = _sanitize_node_id(node.name)
+
+        labels[node_id] = _get_node_label(node, show_ids)
+        _collect_diagram_edges(
+            node_id,
+            node,
+            hierarchy,
+            projects_by_parent,
+            edges,
+            labels,
+            level,
+            0,
+            show_ids,
+        )
+
+    # Organizationless projects
+    if orgless_projects:
+        orgless_id = "organizationless"
+        labels[orgless_id] = "(organizationless)"
+        for p in sorted(orgless_projects, key=lambda x: x.display_name):
+            child_id = _sanitize_node_id(p.name)
+            labels[child_id] = _get_node_label(p, show_ids)
+            edges.append((orgless_id, child_id))
+
+    if fmt == "mermaid":
+        return _format_mermaid(labels, edges)
+    elif fmt == "d2":
+        return _format_d2(labels, edges)
+    else:
+        raise ValueError(f"Unsupported diagram format: {fmt}")

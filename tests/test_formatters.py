@@ -10,6 +10,9 @@ from gcpath.formatters import (
     sort_resources,
     format_tree_label,
     build_tree_view,
+    build_diagram,
+    _sanitize_node_id,
+    _get_node_label,
 )
 from google.cloud import resourcemanager_v3
 
@@ -297,3 +300,191 @@ def test_build_tree_view_with_level_limit(mock_org_node, mock_hierarchy):
 
     # With level=0, no children should be added
     assert len(root.children) == 0
+
+
+# Test diagram helpers
+def test_sanitize_node_id():
+    """Test node ID sanitization."""
+    assert _sanitize_node_id("organizations/123") == "organizations_123"
+    assert _sanitize_node_id("folders/456") == "folders_456"
+    assert _sanitize_node_id("projects/my-project") == "projects_my_project"
+    assert _sanitize_node_id("organizations/example.com") == "organizations_example_com"
+
+
+def test_get_node_label_org(mock_org_node):
+    """Test node label for organization."""
+    label = _get_node_label(mock_org_node)
+    assert label == "//example.com"
+
+
+def test_get_node_label_org_with_ids(mock_org_node):
+    """Test node label for organization with IDs."""
+    label = _get_node_label(mock_org_node, show_ids=True)
+    assert "//example.com" in label
+    assert "organizations/123" in label
+
+
+def test_get_node_label_folder(mock_folder):
+    """Test node label for folder."""
+    label = _get_node_label(mock_folder)
+    assert label == "TestFolder"
+
+
+def test_get_node_label_folder_with_ids(mock_folder):
+    """Test node label for folder with IDs."""
+    label = _get_node_label(mock_folder, show_ids=True)
+    assert "TestFolder" in label
+    assert "folders/456" in label
+
+
+def test_get_node_label_project(mock_project):
+    """Test node label for project."""
+    label = _get_node_label(mock_project)
+    assert label == "TestProject"
+
+
+def test_get_node_label_project_with_ids(mock_project):
+    """Test node label for project with IDs."""
+    label = _get_node_label(mock_project, show_ids=True)
+    assert "TestProject" in label
+    assert "projects/789" in label
+
+
+# Test Mermaid diagram generation
+def test_build_diagram_mermaid(mock_org_node, mock_folder, mock_project, mock_hierarchy):
+    """Test Mermaid diagram generation."""
+    mock_org_node.folders = {"folders/456": mock_folder}
+    projects_by_parent = {"folders/456": [mock_project]}
+
+    result = build_diagram(
+        [mock_org_node],
+        mock_hierarchy,
+        projects_by_parent,
+        fmt="mermaid",
+    )
+
+    assert result.startswith("graph TD")
+    assert "organizations_123" in result
+    assert "folders_456" in result
+    assert "projects_789" in result
+    assert "-->" in result
+    assert "example.com" in result
+    assert "TestFolder" in result
+    assert "TestProject" in result
+
+
+def test_build_diagram_d2(mock_org_node, mock_folder, mock_project, mock_hierarchy):
+    """Test D2 diagram generation."""
+    mock_org_node.folders = {"folders/456": mock_folder}
+    projects_by_parent = {"folders/456": [mock_project]}
+
+    result = build_diagram(
+        [mock_org_node],
+        mock_hierarchy,
+        projects_by_parent,
+        fmt="d2",
+    )
+
+    assert "graph TD" not in result
+    assert "organizations_123" in result
+    assert "folders_456" in result
+    assert "projects_789" in result
+    assert "->" in result
+    assert "example.com" in result
+    assert "TestFolder" in result
+    assert "TestProject" in result
+
+
+def test_build_diagram_with_ids(mock_org_node, mock_folder, mock_project, mock_hierarchy):
+    """Test diagram generation with resource IDs in labels."""
+    mock_org_node.folders = {"folders/456": mock_folder}
+    projects_by_parent = {"folders/456": [mock_project]}
+
+    result = build_diagram(
+        [mock_org_node],
+        mock_hierarchy,
+        projects_by_parent,
+        fmt="mermaid",
+        show_ids=True,
+    )
+
+    assert "(organizations/123)" in result
+    assert "(folders/456)" in result
+    assert "(projects/789)" in result
+
+
+def test_build_diagram_with_level_limit(
+    mock_org_node, mock_folder, mock_project, mock_hierarchy
+):
+    """Test diagram generation with depth limit."""
+    mock_org_node.folders = {"folders/456": mock_folder}
+    projects_by_parent = {"folders/456": [mock_project]}
+
+    # Level 0 should only include the root node
+    result = build_diagram(
+        [mock_org_node],
+        mock_hierarchy,
+        projects_by_parent,
+        fmt="mermaid",
+        level=0,
+    )
+
+    assert "organizations_123" in result
+    # Children should not appear
+    assert "folders_456" not in result
+    assert "projects_789" not in result
+
+
+def test_build_diagram_orgless_projects(mock_org_node, mock_hierarchy):
+    """Test diagram includes organizationless projects."""
+    mock_org_node.folders = {}
+
+    orgless_project = Project(
+        name="projects/orgless",
+        project_id="orgless",
+        display_name="Orgless",
+        parent="external/0",
+        organization=None,
+        folder=None,
+    )
+
+    result = build_diagram(
+        [mock_org_node],
+        mock_hierarchy,
+        {},
+        fmt="mermaid",
+        orgless_projects=[orgless_project],
+    )
+
+    assert "organizationless" in result
+    assert "projects_orgless" in result
+    assert "Orgless" in result
+
+
+def test_build_diagram_unsupported_format(mock_org_node, mock_hierarchy):
+    """Test that unsupported format raises ValueError."""
+    with pytest.raises(ValueError, match="Unsupported diagram format"):
+        build_diagram(
+            [mock_org_node],
+            mock_hierarchy,
+            {},
+            fmt="graphviz",
+        )
+
+
+def test_build_diagram_folder_root(mock_org_node, mock_folder, mock_project, mock_hierarchy):
+    """Test diagram generation with a folder as root node."""
+    mock_org_node.folders = {"folders/456": mock_folder}
+    projects_by_parent = {"folders/456": [mock_project]}
+
+    result = build_diagram(
+        [mock_folder],
+        mock_hierarchy,
+        projects_by_parent,
+        fmt="d2",
+    )
+
+    assert "folders_456" in result
+    assert "TestFolder" in result
+    assert "projects_789" in result
+    assert "TestProject" in result
