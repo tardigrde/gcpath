@@ -1,6 +1,6 @@
 [project]
 name = "gcpath"
-version = "0.2.3"
+version = "0.3.0"
 description = "A CLI utility to manage Google Cloud Platform resource hierarchy paths."
 readme = "README.md"
 authors = [
