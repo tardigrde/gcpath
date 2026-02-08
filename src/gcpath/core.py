@@ -163,7 +163,7 @@ class Hierarchy:
         scope_resource: Optional[str] = None,
         recursive: bool = False,
     ) -> "Hierarchy":
-        """Load the GCP resource hierarchy.
+        """Load the GCP resource hierarchy from GCP APIs.
 
         Args:
             display_names: Filter to only load these organization display names.
@@ -174,6 +174,7 @@ class Hierarchy:
             recursive: If True, load all descendants. If False, only load direct children.
                       Only applies when via_resource_manager=False (Asset API mode).
         """
+        logger.debug("Loading hierarchy from GCP API.")
         org_client = resourcemanager_v3.OrganizationsClient()
         project_client = resourcemanager_v3.ProjectsClient()
 

@@ -189,6 +189,10 @@ gcpath ls -U  # short form
 - **For most users:** Use the default (Cloud Asset API) for best performance
 - **If you get permission/API errors:** Use `-U` flag for Resource Manager API
 
+## Acknowledgments
+
+Thanks for [xebia/gcp-path](https://github.com/xebia/gcp-path) for the inspiration!
+
 ## License
 
 [MIT](./LICENSE)

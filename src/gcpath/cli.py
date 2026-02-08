@@ -22,6 +22,13 @@ from gcpath.formatters import (
     format_tree_label,
     build_tree_view,
 )
+from gcpath.cache import (
+    read_cache,
+    write_cache,
+    clear_cache,
+    get_cache_info,
+    CACHE_FILE,
+)
 from rich.table import Table
 
 logger = logging.getLogger(__name__)
@@ -31,6 +38,8 @@ app = typer.Typer(
     help="Google Cloud Platform resource hierarchy utility",
     add_completion=False,
 )
+cache_app = typer.Typer(help="Manage the local resource cache.")
+app.add_typer(cache_app, name="cache")
 console = Console()
 error_console = Console(stderr=True)
 
@@ -54,6 +63,15 @@ def handle_error(e: Exception) -> None:
         error_console.print(f"[red]Unexpected Error:[/red] {e}")
         logging.exception("Unexpected error occurred")
     raise typer.Exit(code=1)
+
+
+def _format_age(seconds: float) -> str:
+    """Format age in seconds to a human-readable string."""
+    hours = int(seconds // 3600)
+    minutes = int((seconds % 3600) // 60)
+    if hours > 0:
+        return f"{hours}h {minutes}m"
+    return f"{minutes}m"
 
 
 @app.callback()
@@ -82,6 +100,98 @@ def main(
     logging.getLogger("urllib3").setLevel(logging.WARNING)
 
 
+@cache_app.command("clear")
+def cache_clear() -> None:
+    """Clear the local resource cache."""
+    if clear_cache():
+        rprint(f"[green]Cache cleared successfully at {CACHE_FILE}[/green]")
+    else:
+        rprint(f"[yellow]No cache file to clear at {CACHE_FILE}[/yellow]")
+
+
+@cache_app.command("status")
+def cache_status() -> None:
+    """Show cache status information."""
+    info = get_cache_info()
+
+    if not info.exists:
+        rprint(f"[yellow]No cache file found at {CACHE_FILE}[/yellow]")
+        return
+
+    table = Table(show_header=False, box=None, padding=(0, 1))
+    table.add_column("Key", style="bold")
+    table.add_column("Value")
+
+    if info.fresh:
+        table.add_row("Status", "[green]Fresh[/green]")
+    else:
+        table.add_row("Status", "[yellow]Stale[/yellow]")
+
+    if info.age_seconds is not None:
+        table.add_row("Age", _format_age(info.age_seconds))
+
+    if info.size_bytes is not None:
+        size_kb = info.size_bytes / 1024
+        if size_kb >= 1024:
+            table.add_row("Size", f"{size_kb / 1024:.1f} MB")
+        else:
+            table.add_row("Size", f"{size_kb:.1f} KB")
+
+    if info.version is not None:
+        table.add_row("Version", str(info.version))
+
+    table.add_row("Organizations", str(info.org_count))
+    table.add_row("Folders", str(info.folder_count))
+    table.add_row("Projects", str(info.project_count))
+    table.add_row("Location", str(CACHE_FILE))
+
+    console.print(table)
+
+
+def _load_hierarchy(
+    ctx: typer.Context,
+    scope_resource: Optional[str],
+    recursive: bool,
+    force_refresh: bool,
+    filter_orgs: Optional[List[str]] = None,
+) -> Hierarchy:
+    """Helper to load hierarchy with cache orchestration.
+
+    Cache is only used for unscoped loads. On cache hit, the age is displayed
+    and filter_orgs is applied post-load. On cache miss, the hierarchy is
+    loaded from GCP APIs and written to cache.
+    """
+    # Try cache for unscoped loads
+    if not force_refresh and not scope_resource:
+        cached_hierarchy = read_cache()
+        if cached_hierarchy is not None:
+            info = get_cache_info()
+            age_str = _format_age(info.age_seconds) if info.age_seconds else "unknown"
+            rprint(f"[dim]Using cached data ({age_str} ago). Use -F to refresh.[/dim]")
+
+            # Apply org filter to cached data
+            if filter_orgs:
+                cached_hierarchy.organizations = [
+                    o
+                    for o in cached_hierarchy.organizations
+                    if o.organization.display_name in filter_orgs
+                ]
+            return cached_hierarchy
+
+    hierarchy = Hierarchy.load(
+        display_names=filter_orgs,
+        via_resource_manager=not ctx.obj["use_asset_api"],
+        scope_resource=scope_resource,
+        recursive=recursive,
+    )
+
+    # Write cache for unscoped loads
+    if not scope_resource:
+        write_cache(hierarchy)
+
+    return hierarchy
+
+
 @app.command()
 def ls(
     ctx: typer.Context,
@@ -96,6 +206,12 @@ def ls(
     ),
     recursive: bool = typer.Option(
         False, "--recursive", "-R", help="List resources recursively"
+    ),
+    force_refresh: bool = typer.Option(
+        False,
+        "--force-refresh",
+        "-F",
+        help="Force a refresh of the cache from the GCP API",
     ),
 ) -> None:
     """
@@ -138,12 +254,14 @@ def ls(
         # so the API only returns direct children (or all descendants if recursive)
         scope_resource = target_resource_name if target_resource_name else None
 
-        hierarchy = Hierarchy.load(
-            display_names=filter_orgs,
-            via_resource_manager=not ctx.obj["use_asset_api"],
+        hierarchy = _load_hierarchy(
+            ctx,
             scope_resource=scope_resource,
             recursive=recursive,
+            force_refresh=force_refresh,
+            filter_orgs=filter_orgs,
         )
+
         logger.debug(
             f"ls: hierarchy loaded with {len(hierarchy.organizations)} orgs, {len(hierarchy.projects)} projects, {len(hierarchy.folders)} folders"
         )
@@ -255,6 +373,12 @@ def tree(
         False, "--ids", "-i", help="Show resource names in the tree"
     ),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompts"),
+    force_refresh: bool = typer.Option(
+        False,
+        "--force-refresh",
+        "-F",
+        help="Force a refresh of the cache from the GCP API",
+    ),
 ) -> None:
     """
     Display the resource hierarchy in a tree format.
@@ -264,9 +388,11 @@ def tree(
     try:
         # Prompt user for potentially long loads
         should_prompt = False
-        if not yes and resource is None:  # Loading full org tree without scope
-            if level is None or level >= 4:
-                should_prompt = True
+        if not yes and resource is None:
+            cache_info = get_cache_info()
+            if not cache_info.fresh:
+                if level is None or level >= 4:
+                    should_prompt = True
 
         if should_prompt:
             confirm = typer.confirm(
@@ -313,12 +439,14 @@ def tree(
         )
 
         # Tree always needs recursive loading to show the full subtree
-        hierarchy = Hierarchy.load(
-            display_names=filter_orgs,
-            via_resource_manager=not ctx.obj["use_asset_api"],
+        hierarchy = _load_hierarchy(
+            ctx,
             scope_resource=target_resource_name,
-            recursive=True,  # Tree always needs full subtree
+            recursive=True,
+            force_refresh=force_refresh,
+            filter_orgs=filter_orgs,
         )
+
         logger.debug(
             f"tree: hierarchy loaded with {len(hierarchy.organizations)} orgs, {len(hierarchy.projects)} projects, {len(hierarchy.folders)} folders"
         )
@@ -452,17 +580,25 @@ def get_resource_name(
     id_only: bool = typer.Option(
         False, "--id", help="Print only the resource ID number"
     ),
+    force_refresh: bool = typer.Option(
+        False,
+        "--force-refresh",
+        "-F",
+        help="Force a refresh of the cache from the GCP API",
+    ),
 ) -> None:
     """
     Get Google Cloud Platform resource name by path.
     """
     try:
         logger.debug(f"name: resolving paths={paths}")
-        hierarchy = Hierarchy.load(
-            display_names=None,
-            via_resource_manager=not ctx.obj["use_asset_api"],
-            recursive=True,  # Load all folders including nested ones for path resolution
+        hierarchy = _load_hierarchy(
+            ctx,
+            scope_resource=None,
+            recursive=True,
+            force_refresh=force_refresh,
         )
+
         logger.debug("name: hierarchy loaded successfully")
 
         for path in paths:
