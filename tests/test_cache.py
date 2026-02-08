@@ -189,7 +189,7 @@ def test_is_cache_fresh_within_ttl():
 
 def test_is_cache_fresh_expired():
     """Test that cache is stale when beyond TTL."""
-    old_time = datetime.now(timezone.utc) - timedelta(hours=5)
+    old_time = datetime.now(timezone.utc) - timedelta(hours=80)
     data = {
         "version": CACHE_VERSION,
         "timestamp": old_time.isoformat(),
@@ -218,7 +218,7 @@ def test_is_cache_fresh_invalid_timestamp():
 def test_read_cache_stale(mock_json_load, mock_open, mock_cache_file):
     """Test that read_cache returns None for stale cache."""
     mock_cache_file.exists.return_value = True
-    old_time = datetime.now(timezone.utc) - timedelta(hours=5)
+    old_time = datetime.now(timezone.utc) - timedelta(hours=80)
     mock_json_load.return_value = {
         "version": CACHE_VERSION,
         "timestamp": old_time.isoformat(),
@@ -315,7 +315,7 @@ def test_get_cache_info_stale(mock_cache_file):
     mock_cache_file.exists.return_value = True
     mock_cache_file.stat.return_value.st_size = 512
 
-    old_time = datetime.now(timezone.utc) - timedelta(hours=5)
+    old_time = datetime.now(timezone.utc) - timedelta(hours=80)
     test_data = {
         "version": CACHE_VERSION,
         "timestamp": old_time.isoformat(),

@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 CACHE_DIR = Path.home() / ".gcpath"
 CACHE_FILE = CACHE_DIR / "cache.json"
 CACHE_VERSION = 1
-DEFAULT_CACHE_TTL_HOURS = 4
+DEFAULT_CACHE_TTL_HOURS = 72
 
 
 @dataclass
