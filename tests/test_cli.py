@@ -230,10 +230,12 @@ def test_tree_scoped_load_no_prompt(
     assert result.exit_code == 0
 
 
+@patch("gcpath.core.Hierarchy.load")
 @patch("typer.confirm")
-def test_tree_user_declines_prompt(mock_confirm):
+def test_tree_user_declines_prompt(mock_confirm, mock_load, mock_hierarchy):
     """Test that declining prompt exits cleanly"""
     mock_confirm.return_value = False
+    mock_load.return_value = mock_hierarchy
     result = runner.invoke(app, ["tree"])
     assert result.exit_code == 0  # Clean exit
 
