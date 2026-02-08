@@ -5,7 +5,6 @@ from typing_extensions import Annotated
 from rich.console import Console
 from rich import print as rprint
 from google.api_core import exceptions as gcp_exceptions
-from pathlib import Path
 
 
 from gcpath.core import (
@@ -23,7 +22,13 @@ from gcpath.formatters import (
     format_tree_label,
     build_tree_view,
 )
-from gcpath.cache import clear_cache, CACHE_FILE
+from gcpath.cache import (
+    read_cache,
+    write_cache,
+    clear_cache,
+    get_cache_info,
+    CACHE_FILE,
+)
 from rich.table import Table
 
 logger = logging.getLogger(__name__)
@@ -33,6 +38,8 @@ app = typer.Typer(
     help="Google Cloud Platform resource hierarchy utility",
     add_completion=False,
 )
+cache_app = typer.Typer(help="Manage the local resource cache.")
+app.add_typer(cache_app, name="cache")
 console = Console()
 error_console = Console(stderr=True)
 
@@ -58,6 +65,15 @@ def handle_error(e: Exception) -> None:
     raise typer.Exit(code=1)
 
 
+def _format_age(seconds: float) -> str:
+    """Format age in seconds to a human-readable string."""
+    hours = int(seconds // 3600)
+    minutes = int((seconds % 3600) // 60)
+    if hours > 0:
+        return f"{hours}h {minutes}m"
+    return f"{minutes}m"
+
+
 @app.callback()
 def main(
     ctx: typer.Context,
@@ -74,7 +90,6 @@ def main(
     """
     ctx.ensure_object(dict)
     ctx.obj["use_asset_api"] = use_asset_api
-    ctx.obj["is_cached"] = False
 
     if debug:
         logging.basicConfig(level=logging.DEBUG)
@@ -85,27 +100,52 @@ def main(
     logging.getLogger("urllib3").setLevel(logging.WARNING)
 
 
-@app.command()
-def cache(
-    action: Annotated[
-        str,
-        typer.Argument(
-            help="The action to perform on the cache (e.g., 'clear')",
-            case_sensitive=False,
-        ),
-    ],
-) -> None:
-    """
-    Manage the local resource cache.
-    """
-    if action.lower() == "clear":
-        if clear_cache():
-            rprint(f"[green]Cache cleared successfully at {CACHE_FILE}[/green]")
-        else:
-            rprint(f"[yellow]No cache file to clear at {CACHE_FILE}[/yellow]")
+@cache_app.command("clear")
+def cache_clear() -> None:
+    """Clear the local resource cache."""
+    if clear_cache():
+        rprint(f"[green]Cache cleared successfully at {CACHE_FILE}[/green]")
     else:
-        rprint(f"[red]Unknown cache action: {action}[/red]")
-        raise typer.Exit(code=1)
+        rprint(f"[yellow]No cache file to clear at {CACHE_FILE}[/yellow]")
+
+
+@cache_app.command("status")
+def cache_status() -> None:
+    """Show cache status information."""
+    info = get_cache_info()
+
+    if not info.exists:
+        rprint(f"[yellow]No cache file found at {CACHE_FILE}[/yellow]")
+        return
+
+    table = Table(show_header=False, box=None, padding=(0, 1))
+    table.add_column("Key", style="bold")
+    table.add_column("Value")
+
+    if info.fresh:
+        table.add_row("Status", "[green]Fresh[/green]")
+    else:
+        table.add_row("Status", "[yellow]Stale[/yellow]")
+
+    if info.age_seconds is not None:
+        table.add_row("Age", _format_age(info.age_seconds))
+
+    if info.size_bytes is not None:
+        size_kb = info.size_bytes / 1024
+        if size_kb >= 1024:
+            table.add_row("Size", f"{size_kb / 1024:.1f} MB")
+        else:
+            table.add_row("Size", f"{size_kb:.1f} KB")
+
+    if info.version is not None:
+        table.add_row("Version", str(info.version))
+
+    table.add_row("Organizations", str(info.org_count))
+    table.add_row("Folders", str(info.folder_count))
+    table.add_row("Projects", str(info.project_count))
+    table.add_row("Location", str(CACHE_FILE))
+
+    console.print(table)
 
 
 def _load_hierarchy(
@@ -115,18 +155,39 @@ def _load_hierarchy(
     force_refresh: bool,
     filter_orgs: Optional[List[str]] = None,
 ) -> Hierarchy:
-    """Helper to load hierarchy and notify user about cache status."""
+    """Helper to load hierarchy with cache orchestration.
+
+    Cache is only used for unscoped loads. On cache hit, the age is displayed
+    and filter_orgs is applied post-load. On cache miss, the hierarchy is
+    loaded from GCP APIs and written to cache.
+    """
+    # Try cache for unscoped loads
+    if not force_refresh and not scope_resource:
+        cached_hierarchy = read_cache()
+        if cached_hierarchy is not None:
+            info = get_cache_info()
+            age_str = _format_age(info.age_seconds) if info.age_seconds else "unknown"
+            rprint(f"[dim]Using cached data ({age_str} ago). Use -F to refresh.[/dim]")
+
+            # Apply org filter to cached data
+            if filter_orgs:
+                cached_hierarchy.organizations = [
+                    o
+                    for o in cached_hierarchy.organizations
+                    if o.organization.display_name in filter_orgs
+                ]
+            return cached_hierarchy
+
     hierarchy = Hierarchy.load(
         display_names=filter_orgs,
         via_resource_manager=not ctx.obj["use_asset_api"],
         scope_resource=scope_resource,
         recursive=recursive,
-        force_refresh=force_refresh,
     )
 
-    is_cached = not force_refresh and not scope_resource and Path(CACHE_FILE).exists()
-    if is_cached:
-        rprint(f"[dim]Using cached data from {CACHE_FILE}[/dim]")
+    # Write cache for unscoped loads
+    if not scope_resource:
+        write_cache(hierarchy)
 
     return hierarchy
 
@@ -327,9 +388,11 @@ def tree(
     try:
         # Prompt user for potentially long loads
         should_prompt = False
-        if not yes and resource is None and not Path(CACHE_FILE).exists():
-            if level is None or level >= 4:
-                should_prompt = True
+        if not yes and resource is None:
+            cache_info = get_cache_info()
+            if not cache_info.fresh:
+                if level is None or level >= 4:
+                    should_prompt = True
 
         if should_prompt:
             confirm = typer.confirm(

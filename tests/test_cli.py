@@ -3,9 +3,17 @@ from typer.testing import CliRunner
 from unittest.mock import patch, MagicMock
 from gcpath.cli import app
 from gcpath.core import Folder, OrganizationNode, Hierarchy, Project, GCPathError
+from gcpath.cache import CacheInfo
 from google.cloud import resourcemanager_v3
 
 runner = CliRunner()
+
+
+@pytest.fixture(autouse=True)
+def mock_read_cache():
+    """Prevent tests from hitting the real cache file."""
+    with patch("gcpath.cli.read_cache", return_value=None):
+        yield
 
 
 @pytest.fixture
@@ -162,14 +170,17 @@ def test_tree_accepts_level_greater_than_3(mock_load, mock_hierarchy):
     assert result.exit_code == 0
 
 
-@patch("gcpath.cli.CACHE_FILE")
+@patch("gcpath.cli.get_cache_info")
 @patch("gcpath.core.Hierarchy.load")
 @patch("typer.confirm")
 def test_tree_prompts_on_unlimited_load(
-    mock_confirm, mock_load, mock_cache_file, mock_hierarchy
+    mock_confirm, mock_load, mock_cache_info, mock_hierarchy
 ):
     """Test that tree prompts when loading full org tree without limit"""
-    mock_cache_file.exists.return_value = False
+    mock_cache_info.return_value = CacheInfo(
+        exists=False, fresh=False, age_seconds=None, size_bytes=None,
+        version=None, org_count=0, folder_count=0, project_count=0
+    )
     mock_confirm.return_value = True
     mock_load.return_value = mock_hierarchy
     result = runner.invoke(app, ["tree"])
@@ -177,14 +188,17 @@ def test_tree_prompts_on_unlimited_load(
     assert result.exit_code == 0
 
 
-@patch("gcpath.cli.CACHE_FILE")
+@patch("gcpath.cli.get_cache_info")
 @patch("gcpath.core.Hierarchy.load")
 @patch("typer.confirm")
 def test_tree_prompts_on_large_level(
-    mock_confirm, mock_load, mock_cache_file, mock_hierarchy
+    mock_confirm, mock_load, mock_cache_info, mock_hierarchy
 ):
     """Test that tree prompts when level >= 4"""
-    mock_cache_file.exists.return_value = False
+    mock_cache_info.return_value = CacheInfo(
+        exists=False, fresh=False, age_seconds=None, size_bytes=None,
+        version=None, org_count=0, folder_count=0, project_count=0
+    )
     mock_confirm.return_value = True
     mock_load.return_value = mock_hierarchy
     result = runner.invoke(app, ["tree", "-L", "4"])
@@ -379,3 +393,52 @@ def test_path_multiple_resources(mock_resolve):
     assert result.exit_code == 0
     assert "//path1" in result.stdout
     assert "//path2" in result.stdout
+
+
+@patch("gcpath.cli.clear_cache")
+def test_cache_clear(mock_clear_cache):
+    """Test cache clear subcommand"""
+    mock_clear_cache.return_value = True
+    result = runner.invoke(app, ["cache", "clear"])
+    assert result.exit_code == 0
+    mock_clear_cache.assert_called_once()
+
+
+@patch("gcpath.cli.get_cache_info")
+def test_cache_status(mock_get_cache_info):
+    """Test cache status subcommand with fresh cache"""
+    mock_get_cache_info.return_value = CacheInfo(
+        exists=True,
+        fresh=True,
+        age_seconds=300.0,  # 5 minutes ago
+        size_bytes=2048,
+        version=1,
+        org_count=2,
+        folder_count=10,
+        project_count=25,
+    )
+    result = runner.invoke(app, ["cache", "status"])
+    assert result.exit_code == 0
+    assert "Fresh" in result.stdout or "5m" in result.stdout
+    assert "2.0 KB" in result.stdout  # 2048 bytes = 2.0 KB
+    assert "2" in result.stdout  # org count
+    assert "10" in result.stdout  # folder count
+    assert "25" in result.stdout  # project count
+
+
+@patch("gcpath.cli.get_cache_info")
+def test_cache_status_no_cache(mock_get_cache_info):
+    """Test cache status subcommand when no cache exists"""
+    mock_get_cache_info.return_value = CacheInfo(
+        exists=False,
+        fresh=False,
+        age_seconds=None,
+        size_bytes=None,
+        version=None,
+        org_count=0,
+        folder_count=0,
+        project_count=0,
+    )
+    result = runner.invoke(app, ["cache", "status"])
+    assert result.exit_code == 0
+    assert "No cache" in result.stdout or "Does not exist" in result.stdout

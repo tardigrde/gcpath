@@ -6,6 +6,7 @@ This module handles reading from and writing to the cache file.
 
 import json
 import logging
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, Any, Dict, List
@@ -19,6 +20,21 @@ logger = logging.getLogger(__name__)
 CACHE_DIR = Path.home() / ".gcpath"
 CACHE_FILE = CACHE_DIR / "cache.json"
 CACHE_VERSION = 1
+DEFAULT_CACHE_TTL_HOURS = 4
+
+
+@dataclass
+class CacheInfo:
+    """Metadata about the cache state."""
+
+    exists: bool
+    fresh: bool
+    age_seconds: Optional[float]
+    size_bytes: Optional[int]
+    version: Optional[int]
+    org_count: int
+    folder_count: int
+    project_count: int
 
 
 def _hierarchy_to_dict(hierarchy: Hierarchy) -> Dict[str, Any]:
@@ -145,8 +161,8 @@ def _dict_to_hierarchy(data: Dict[str, Any]) -> Optional[Hierarchy]:
     return Hierarchy(organizations=org_nodes, projects=projects)
 
 
-def read_cache() -> Optional[Hierarchy]:
-    """Reads the hierarchy from the cache file."""
+def read_cache_raw() -> Optional[Dict[str, Any]]:
+    """Reads the raw JSON data from the cache file without deserializing to Hierarchy."""
     if not CACHE_FILE.exists():
         logger.debug("Cache file not found.")
         return None
@@ -154,8 +170,8 @@ def read_cache() -> Optional[Hierarchy]:
     try:
         with open(CACHE_FILE, "r") as f:
             data = json.load(f)
-        logger.debug("Successfully loaded data from cache file.")
-        return _dict_to_hierarchy(data)
+        logger.debug("Successfully loaded raw data from cache file.")
+        return data
     except (json.JSONDecodeError, KeyError) as e:
         logger.warning(f"Could not read cache file due to an error: {e}")
         return None
@@ -164,7 +180,111 @@ def read_cache() -> Optional[Hierarchy]:
         return None
 
 
-def write_cache(hierarchy: Hierarchy):
+def is_cache_fresh(
+    data: Dict[str, Any], ttl_hours: float = DEFAULT_CACHE_TTL_HOURS
+) -> bool:
+    """Checks if the cache data is within the TTL."""
+    timestamp_str = data.get("timestamp")
+    if not timestamp_str:
+        return False
+
+    try:
+        cached_time = datetime.fromisoformat(timestamp_str)
+        age_seconds = (datetime.now(timezone.utc) - cached_time).total_seconds()
+        return age_seconds < ttl_hours * 3600
+    except (ValueError, TypeError):
+        return False
+
+
+def read_cache(ttl_hours: float = DEFAULT_CACHE_TTL_HOURS) -> Optional[Hierarchy]:
+    """Reads the hierarchy from the cache file. Returns None if stale or missing."""
+    data = read_cache_raw()
+    if data is None:
+        return None
+
+    if not is_cache_fresh(data, ttl_hours):
+        logger.debug("Cache is stale, ignoring.")
+        return None
+
+    return _dict_to_hierarchy(data)
+
+
+def get_cache_info(
+    ttl_hours: float = DEFAULT_CACHE_TTL_HOURS,
+) -> CacheInfo:
+    """Inspects cache state without full deserialization."""
+    if not CACHE_FILE.exists():
+        return CacheInfo(
+            exists=False,
+            fresh=False,
+            age_seconds=None,
+            size_bytes=None,
+            version=None,
+            org_count=0,
+            folder_count=0,
+            project_count=0,
+        )
+
+    try:
+        size_bytes = CACHE_FILE.stat().st_size
+        data = read_cache_raw()
+        if data is None:
+            return CacheInfo(
+                exists=True,
+                fresh=False,
+                age_seconds=None,
+                size_bytes=size_bytes,
+                version=None,
+                org_count=0,
+                folder_count=0,
+                project_count=0,
+            )
+
+        fresh = is_cache_fresh(data, ttl_hours)
+
+        age_seconds: Optional[float] = None
+        timestamp_str = data.get("timestamp")
+        if timestamp_str:
+            try:
+                cached_time = datetime.fromisoformat(timestamp_str)
+                age_seconds = (
+                    datetime.now(timezone.utc) - cached_time
+                ).total_seconds()
+            except (ValueError, TypeError):
+                pass
+
+        # Count resources without full deserialization
+        orgs = data.get("organizations", [])
+        org_count = len(orgs)
+        folder_count = sum(len(org.get("folders", {})) for org in orgs)
+        project_count = sum(len(org.get("projects", [])) for org in orgs) + len(
+            data.get("organizationless_projects", [])
+        )
+
+        return CacheInfo(
+            exists=True,
+            fresh=fresh,
+            age_seconds=age_seconds,
+            size_bytes=size_bytes,
+            version=data.get("version"),
+            org_count=org_count,
+            folder_count=folder_count,
+            project_count=project_count,
+        )
+    except Exception:
+        return CacheInfo(
+            exists=True,
+            fresh=False,
+            age_seconds=None,
+            size_bytes=None,
+            version=None,
+            org_count=0,
+            folder_count=0,
+            project_count=0,
+        )
+
+
+def write_cache(hierarchy: Hierarchy) -> None:
     """Writes the hierarchy to the cache file."""
     try:
         CACHE_DIR.mkdir(parents=True, exist_ok=True)
@@ -176,7 +296,7 @@ def write_cache(hierarchy: Hierarchy):
         logger.error(f"Failed to write to cache file: {e}")
 
 
-def clear_cache():
+def clear_cache() -> bool:
     """Deletes the cache file."""
     try:
         if CACHE_FILE.exists():

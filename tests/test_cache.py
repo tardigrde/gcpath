@@ -3,6 +3,7 @@ Tests for the cache module.
 """
 
 import json
+from datetime import datetime, timezone, timedelta
 from unittest.mock import patch
 from pathlib import Path
 
@@ -13,9 +14,13 @@ from gcpath.cache import (
     _hierarchy_to_dict,
     _dict_to_hierarchy,
     read_cache,
+    read_cache_raw,
     write_cache,
     clear_cache,
+    is_cache_fresh,
+    get_cache_info,
     CACHE_VERSION,
+    DEFAULT_CACHE_TTL_HOURS,
 )
 from gcpath.core import Hierarchy, OrganizationNode, Folder, Project
 
@@ -132,11 +137,12 @@ def test_read_cache_not_found(mock_cache_file):
 @patch("builtins.open")
 @patch("json.load")
 def test_read_cache_success(mock_json_load, mock_open, mock_cache_file):
-    """Test successful reading of the cache."""
+    """Test successful reading of the cache with fresh timestamp."""
     mock_cache_file.exists.return_value = True
-    # Return a minimal valid structure
+    # Return a minimal valid structure with fresh timestamp
     mock_json_load.return_value = {
         "version": CACHE_VERSION,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
         "organizations": [],
         "organizationless_projects": [],
     }
@@ -170,3 +176,157 @@ def test_clear_cache_exists(mock_cache_file):
     mock_cache_file.exists.return_value = True
     assert clear_cache() is True
     mock_cache_file.unlink.assert_called_once()
+
+
+def test_is_cache_fresh_within_ttl():
+    """Test that cache is fresh within TTL."""
+    data = {
+        "version": CACHE_VERSION,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+    assert is_cache_fresh(data, DEFAULT_CACHE_TTL_HOURS) is True
+
+
+def test_is_cache_fresh_expired():
+    """Test that cache is stale when beyond TTL."""
+    old_time = datetime.now(timezone.utc) - timedelta(hours=5)
+    data = {
+        "version": CACHE_VERSION,
+        "timestamp": old_time.isoformat(),
+    }
+    assert is_cache_fresh(data, DEFAULT_CACHE_TTL_HOURS) is False
+
+
+def test_is_cache_fresh_no_timestamp():
+    """Test that cache without timestamp is not fresh."""
+    data = {"version": CACHE_VERSION}
+    assert is_cache_fresh(data) is False
+
+
+def test_is_cache_fresh_invalid_timestamp():
+    """Test that cache with invalid timestamp is not fresh."""
+    data = {
+        "version": CACHE_VERSION,
+        "timestamp": "invalid-timestamp",
+    }
+    assert is_cache_fresh(data) is False
+
+
+@patch("gcpath.cache.CACHE_FILE")
+@patch("builtins.open")
+@patch("json.load")
+def test_read_cache_stale(mock_json_load, mock_open, mock_cache_file):
+    """Test that read_cache returns None for stale cache."""
+    mock_cache_file.exists.return_value = True
+    old_time = datetime.now(timezone.utc) - timedelta(hours=5)
+    mock_json_load.return_value = {
+        "version": CACHE_VERSION,
+        "timestamp": old_time.isoformat(),
+        "organizations": [],
+        "organizationless_projects": [],
+    }
+
+    hierarchy = read_cache()
+    assert hierarchy is None
+
+
+@patch("gcpath.cache.CACHE_FILE")
+@patch("builtins.open")
+@patch("json.load")
+def test_read_cache_raw_success(mock_json_load, mock_open, mock_cache_file):
+    """Test successful reading of raw cache data."""
+    mock_cache_file.exists.return_value = True
+    test_data = {
+        "version": CACHE_VERSION,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "organizations": [],
+        "organizationless_projects": [],
+    }
+    mock_json_load.return_value = test_data
+
+    data = read_cache_raw()
+    assert data == test_data
+
+
+@patch("gcpath.cache.CACHE_FILE")
+def test_get_cache_info_not_exists(mock_cache_file):
+    """Test get_cache_info when cache file does not exist."""
+    mock_cache_file.exists.return_value = False
+
+    info = get_cache_info()
+    assert info.exists is False
+    assert info.fresh is False
+    assert info.age_seconds is None
+    assert info.size_bytes is None
+    assert info.version is None
+    assert info.org_count == 0
+
+
+@patch("gcpath.cache.CACHE_FILE")
+def test_get_cache_info_fresh(mock_cache_file):
+    """Test get_cache_info for fresh cache."""
+    mock_cache_file.exists.return_value = True
+    mock_cache_file.stat.return_value.st_size = 1024
+
+    test_data = {
+        "version": CACHE_VERSION,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "organizations": [
+            {
+                "organization": {"name": "organizations/123", "display_name": "org1"},
+                "folders": {
+                    "folders/1": {
+                        "name": "folders/1",
+                        "display_name": "f1",
+                        "ancestors": ["folders/1", "organizations/123"],
+                        "parent": "organizations/123",
+                    }
+                },
+                "projects": [
+                    {
+                        "name": "projects/p1",
+                        "project_id": "p1",
+                        "display_name": "P1",
+                        "parent": "organizations/123",
+                        "folder_name": None,
+                    }
+                ],
+            }
+        ],
+        "organizationless_projects": [],
+    }
+
+    with patch("gcpath.cache.read_cache_raw", return_value=test_data):
+        info = get_cache_info()
+
+    assert info.exists is True
+    assert info.fresh is True
+    assert info.age_seconds is not None
+    assert info.size_bytes == 1024
+    assert info.version == CACHE_VERSION
+    assert info.org_count == 1
+    assert info.folder_count == 1
+    assert info.project_count == 1
+
+
+@patch("gcpath.cache.CACHE_FILE")
+def test_get_cache_info_stale(mock_cache_file):
+    """Test get_cache_info for stale cache."""
+    mock_cache_file.exists.return_value = True
+    mock_cache_file.stat.return_value.st_size = 512
+
+    old_time = datetime.now(timezone.utc) - timedelta(hours=5)
+    test_data = {
+        "version": CACHE_VERSION,
+        "timestamp": old_time.isoformat(),
+        "organizations": [],
+        "organizationless_projects": [],
+    }
+
+    with patch("gcpath.cache.read_cache_raw", return_value=test_data):
+        info = get_cache_info()
+
+    assert info.exists is True
+    assert info.fresh is False
+    assert info.age_seconds is not None
+    assert info.size_bytes == 512

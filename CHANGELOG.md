@@ -5,20 +5,6 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.3.0] - 2025-12-29
-
-### Added
-- **Local Caching**: Implemented a local caching layer for the GCP resource hierarchy to significantly speed up repeated CLI calls. 
-  - Cache is stored as a structured JSON file in `~/.gcpath/cache.json`.
-  - Automatic cache invalidation via versioning.
-  - Performance: Subsequent calls for the same hierarchy are near-instant.
-- **Cache Management**: Added `gcpath cache clear` command to manually invalidate the local cache.
-- **Manual Refresh**: Added `-F/--force-refresh` flag to `ls`, `tree`, and `name` commands to bypass the cache and fetch fresh data from GCP APIs.
-
-### Changed
-- Improved `Hierarchy.load` to automatically handle read/write of the local cache.
-- CLI now notifies the user when cached data is being used.
-
 ## [0.2.3] - 2025-12-22
 
 ### Fixed
