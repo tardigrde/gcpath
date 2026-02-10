@@ -21,6 +21,7 @@ from gcpath.formatters import (
     sort_resources,
     format_tree_label,
     build_tree_view,
+    build_diagram,
 )
 from gcpath.cache import (
     read_cache,
@@ -566,6 +567,184 @@ def tree(
                     orgless_node.add(label)
 
         console.print(root_tree)
+
+    except Exception as e:
+        handle_error(e)
+
+
+@app.command()
+def diagram(
+    ctx: typer.Context,
+    resource: Annotated[
+        Optional[str],
+        typer.Argument(
+            help="Resource name (e.g. folders/123) or path to generate diagram from."
+        ),
+    ] = None,
+    fmt: str = typer.Option(
+        "mermaid",
+        "--format",
+        "-f",
+        help="Diagram output format: mermaid or d2",
+    ),
+    level: int = typer.Option(
+        None,
+        "--level",
+        "-L",
+        help="Max display depth of the diagram (no limit by default)",
+    ),
+    show_ids: bool = typer.Option(
+        False, "--ids", "-i", help="Show resource names in node labels"
+    ),
+    output: Optional[str] = typer.Option(
+        None, "--output", "-o", help="Write diagram to a file instead of stdout"
+    ),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompts"),
+    force_refresh: bool = typer.Option(
+        False,
+        "--force-refresh",
+        "-F",
+        help="Force a refresh of the cache from the GCP API",
+    ),
+) -> None:
+    """
+    Generate a Mermaid or D2 diagram of the resource hierarchy.
+    """
+    try:
+        if fmt not in ("mermaid", "d2"):
+            rprint(
+                f"[red]Error:[/red] Unsupported format '{fmt}'. Use 'mermaid' or 'd2'."
+            )
+            raise typer.Exit(code=1)
+
+        # Prompt user for potentially long loads (same logic as tree)
+        should_prompt = False
+        if not yes and resource is None:
+            cache_info = get_cache_info()
+            if not cache_info.fresh:
+                if level is None or level >= 4:
+                    should_prompt = True
+
+        if should_prompt:
+            confirm = typer.confirm(
+                "This will load all folders and projects in the hierarchy, which may take a long time. Continue?"
+            )
+            if not confirm:
+                return
+
+        target_org_name = None
+        target_resource_name = None
+        target_path = None
+
+        if resource:
+            logger.debug(f"diagram command: processing resource argument {resource}")
+            if resource.startswith("projects/"):
+                rprint(
+                    "[red]Error:[/red] 'diagram' command does not support starting from a project (projects are leaf nodes)."
+                )
+                raise typer.Exit(code=1)
+
+            try:
+                target_path = Hierarchy.resolve_ancestry(resource)
+                if target_path.startswith("//"):
+                    path_parts = target_path[2:].split("/")
+                    if path_parts:
+                        from urllib.parse import unquote
+
+                        target_org_name = unquote(path_parts[0])
+
+                if resource.startswith("folders/") or resource.startswith(
+                    "organizations/"
+                ):
+                    target_resource_name = resource
+            except Exception:
+                if resource.startswith("//"):
+                    target_path = resource
+                else:
+                    raise
+
+        filter_orgs = [target_org_name] if target_org_name else None
+
+        hierarchy = _load_hierarchy(
+            ctx,
+            scope_resource=target_resource_name,
+            recursive=True,
+            force_refresh=force_refresh,
+            filter_orgs=filter_orgs,
+        )
+
+        nodes_to_process: List[Union[OrganizationNode, Folder]] = []
+        if target_resource_name:
+            if target_resource_name.startswith("organizations/"):
+                for o in hierarchy.organizations:
+                    if o.organization.name == target_resource_name:
+                        nodes_to_process = [o]
+                        break
+            elif target_resource_name.startswith("folders/"):
+                for o in hierarchy.organizations:
+                    if target_resource_name in o.folders:
+                        nodes_to_process = [o.folders[target_resource_name]]
+                        break
+
+                # Synthetic folder for scoped loads (same as tree)
+                if not nodes_to_process and target_path and hierarchy.organizations:
+                    path_parts = (
+                        target_path[2:].split("/")
+                        if target_path.startswith("//")
+                        else []
+                    )
+                    display_name = (
+                        path_parts[-1]
+                        if path_parts
+                        else target_resource_name.split("/")[-1]
+                    )
+                    org_node = hierarchy.organizations[0]
+                    synthetic_folder = Folder(
+                        name=target_resource_name,
+                        display_name=display_name,
+                        ancestors=[target_resource_name, org_node.organization.name],
+                        organization=org_node,
+                        parent=org_node.organization.name,
+                    )
+                    org_node.folders[target_resource_name] = synthetic_folder
+                    nodes_to_process = [synthetic_folder]
+
+            if not nodes_to_process:
+                rprint(
+                    f"[red]Error:[/red] Target resource '{target_resource_name}' not found."
+                )
+                raise typer.Exit(code=1)
+        else:
+            nodes_to_process = list(hierarchy.organizations)
+
+        # Build projects_by_parent mapping
+        projects_by_parent: Dict[str, List[Project]] = {}
+        for proj in hierarchy.projects:
+            projects_by_parent.setdefault(proj.parent, []).append(proj)
+
+        # Collect organizationless projects
+        orgless_projects = None
+        if not target_resource_name:
+            orgless = [p for p in hierarchy.projects if not p.organization]
+            if orgless:
+                orgless_projects = orgless
+
+        diagram_output = build_diagram(
+            nodes_to_process,
+            hierarchy,
+            projects_by_parent,
+            fmt=fmt,
+            level=level,
+            show_ids=show_ids,
+            orgless_projects=orgless_projects,
+        )
+
+        if output:
+            with open(output, "w", encoding="utf-8") as f:
+                f.write(diagram_output + "\n")
+            rprint(f"[green]Diagram written to {output}[/green]")
+        else:
+            print(diagram_output)
 
     except Exception as e:
         handle_error(e)
