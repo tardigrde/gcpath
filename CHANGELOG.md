@@ -1,6 +1,23 @@
 # CHANGELOG
 
 
+## v0.5.0 (2026-02-16)
+
+### Features
+
+- Add folder entrypoint support for folder admins without org access
+  ([`e15c6ca`](https://github.com/tardigrde/gcpath/commit/e15c6cab83245539e49df8250f3e6ba870c5d602))
+
+Allow users who only have access to a folder (not the parent organization) to use ls, tree, diagram,
+  and name commands by configuring a folder as the default entrypoint. When org loading fails and
+  the scope is a folder, a fallback path creates a synthetic OrganizationNode and queries the Asset
+  API directly from the folder scope.
+
+Adds config subcommands (set-entrypoint, show, clear-entrypoint) and a global --entrypoint/-e flag.
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+
+
 ## v0.4.1 (2026-02-16)
 
 ### Bug Fixes
