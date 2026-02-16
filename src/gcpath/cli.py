@@ -1,6 +1,8 @@
 import typer
 import logging
+from dataclasses import dataclass
 from typing import Optional, List, Dict, Union
+from urllib.parse import unquote
 from typing_extensions import Annotated
 from rich.console import Console
 from rich import print as rprint
@@ -21,6 +23,7 @@ from gcpath.formatters import (
     sort_resources,
     format_tree_label,
     build_tree_view,
+    build_diagram,
 )
 from gcpath.cache import (
     read_cache,
@@ -192,6 +195,174 @@ def _load_hierarchy(
     return hierarchy
 
 
+@dataclass
+class _HierarchyCommandContext:
+    """Shared context produced by _prepare_hierarchy_command."""
+
+    hierarchy: Hierarchy
+    nodes_to_process: List[Union[OrganizationNode, Folder]]
+    projects_by_parent: Dict[str, List[Project]]
+    target_resource_name: Optional[str]
+    target_path: Optional[str]
+
+
+def _prepare_hierarchy_command(
+    ctx: typer.Context,
+    command_name: str,
+    resource: Optional[str],
+    level: Optional[int],
+    yes: bool,
+    force_refresh: bool,
+) -> Optional[_HierarchyCommandContext]:
+    """Shared setup for tree-like commands (tree, diagram).
+
+    Handles confirmation prompting, resource argument parsing, hierarchy loading,
+    nodes_to_process construction (including synthetic folders), and
+    projects_by_parent building.
+
+    Returns None if the user declines the confirmation prompt.
+    Raises typer.Exit(code=1) for invalid or not-found resources.
+    """
+    # Prompt user for potentially long loads
+    if not yes and resource is None:
+        cache_info = get_cache_info()
+        if not cache_info.fresh and (level is None or level >= 4):
+            confirm = typer.confirm(
+                "This will load all folders and projects in the hierarchy, "
+                "which may take a long time. Continue?"
+            )
+            if not confirm:
+                return None
+
+    # Parse resource argument
+    target_org_name = None
+    target_resource_name = None
+    target_path = None
+
+    if resource:
+        logger.debug(f"{command_name} command: processing resource argument {resource}")
+        if resource.startswith("projects/"):
+            rprint(
+                f"[red]Error:[/red] '{command_name}' command does not support starting "
+                "from a project (projects are leaf nodes)."
+            )
+            raise typer.Exit(code=1)
+
+        try:
+            target_path = Hierarchy.resolve_ancestry(resource)
+            if target_path.startswith("//"):
+                path_parts = target_path[2:].split("/")
+                if path_parts:
+                    target_org_name = unquote(path_parts[0])
+
+            if resource.startswith("folders/") or resource.startswith(
+                "organizations/"
+            ):
+                target_resource_name = resource
+        except Exception:
+            if resource.startswith("//"):
+                target_path = resource
+            else:
+                raise
+
+    # Load hierarchy
+    filter_orgs = [target_org_name] if target_org_name else None
+    logger.debug(
+        f"{command_name}: loading hierarchy for resource='{resource}', filter_orgs={filter_orgs}"
+    )
+
+    hierarchy = _load_hierarchy(
+        ctx,
+        scope_resource=target_resource_name,
+        recursive=True,
+        force_refresh=force_refresh,
+        filter_orgs=filter_orgs,
+    )
+
+    logger.debug(
+        f"{command_name}: hierarchy loaded with {len(hierarchy.organizations)} orgs, "
+        f"{len(hierarchy.projects)} projects, {len(hierarchy.folders)} folders"
+    )
+
+    # Build nodes_to_process
+    nodes_to_process: List[Union[OrganizationNode, Folder]] = []
+    if target_resource_name:
+        logger.debug(
+            f"{command_name} command: looking for target resource {target_resource_name}"
+        )
+        if target_resource_name.startswith("organizations/"):
+            for o in hierarchy.organizations:
+                if o.organization.name == target_resource_name:
+                    logger.debug(f"{command_name} command: found target organization")
+                    nodes_to_process = [o]
+                    break
+        elif target_resource_name.startswith("folders/"):
+            for o in hierarchy.organizations:
+                if target_resource_name in o.folders:
+                    logger.debug(
+                        f"{command_name} command: found target folder in organization"
+                    )
+                    nodes_to_process = [o.folders[target_resource_name]]
+                    break
+
+            # If not found in loaded hierarchy, create a synthetic folder from resolved path
+            if not nodes_to_process and target_path and hierarchy.organizations:
+                logger.debug(
+                    f"{command_name} command: creating synthetic folder node for scope"
+                )
+                path_parts = (
+                    target_path[2:].split("/")
+                    if target_path.startswith("//")
+                    else []
+                )
+                display_name = (
+                    path_parts[-1]
+                    if path_parts
+                    else target_resource_name.split("/")[-1]
+                )
+
+                org_node = hierarchy.organizations[0]
+                synthetic_folder = Folder(
+                    name=target_resource_name,
+                    display_name=display_name,
+                    ancestors=[target_resource_name, org_node.organization.name],
+                    organization=org_node,
+                    parent=org_node.organization.name,
+                )
+                org_node.folders[target_resource_name] = synthetic_folder
+                nodes_to_process = [synthetic_folder]
+                logger.debug(
+                    f"{command_name} command: created synthetic folder {synthetic_folder.name}"
+                )
+
+        if not nodes_to_process:
+            logger.warning(
+                f"{command_name} command: target resource '{target_resource_name}' not found"
+            )
+            rprint(
+                f"[red]Error:[/red] Target resource '{target_resource_name}' not found."
+            )
+            raise typer.Exit(code=1)
+    else:
+        logger.debug(
+            f"{command_name} command: processing all {len(hierarchy.organizations)} organizations"
+        )
+        nodes_to_process = list(hierarchy.organizations)
+
+    # Build projects_by_parent mapping
+    projects_by_parent: Dict[str, List[Project]] = {}
+    for proj in hierarchy.projects:
+        projects_by_parent.setdefault(proj.parent, []).append(proj)
+
+    return _HierarchyCommandContext(
+        hierarchy=hierarchy,
+        nodes_to_process=nodes_to_process,
+        projects_by_parent=projects_by_parent,
+        target_resource_name=target_resource_name,
+        target_path=target_path,
+    )
+
+
 @app.command()
 def ls(
     ctx: typer.Context,
@@ -233,8 +404,6 @@ def ls(
                     if target_path.startswith("//"):
                         path_parts = target_path[2:].split("/")
                         if path_parts:
-                            from urllib.parse import unquote
-
                             target_org_name = unquote(path_parts[0])
                 except Exception:
                     pass
@@ -386,155 +555,23 @@ def tree(
     from rich.tree import Tree
 
     try:
-        # Prompt user for potentially long loads
-        should_prompt = False
-        if not yes and resource is None:
-            cache_info = get_cache_info()
-            if not cache_info.fresh:
-                if level is None or level >= 4:
-                    should_prompt = True
-
-        if should_prompt:
-            confirm = typer.confirm(
-                "This will load all folders and projects in the hierarchy, which may take a long time. Continue?"
-            )
-            if not confirm:
-                # User declined - exit cleanly without loading
-                return
-
-        target_org_name = None
-        target_resource_name = None
-        target_path = None
-
-        if resource:
-            logger.debug(f"tree command: processing resource argument {resource}")
-            if resource.startswith("projects/"):
-                rprint(
-                    "[red]Error:[/red] 'tree' command does not support starting from a project (projects are leaf nodes)."
-                )
-                raise typer.Exit(code=1)
-
-            try:
-                target_path = Hierarchy.resolve_ancestry(resource)
-                if target_path.startswith("//"):
-                    path_parts = target_path[2:].split("/")
-                    if path_parts:
-                        from urllib.parse import unquote
-
-                        target_org_name = unquote(path_parts[0])
-
-                if resource.startswith("folders/") or resource.startswith(
-                    "organizations/"
-                ):
-                    target_resource_name = resource
-            except Exception:
-                if resource.startswith("//"):
-                    target_path = resource
-                else:
-                    raise
-
-        filter_orgs = [target_org_name] if target_org_name else None
-        logger.debug(
-            f"tree: loading hierarchy for resource='{resource}', filter_orgs={filter_orgs}"
+        hctx = _prepare_hierarchy_command(
+            ctx, "tree", resource, level, yes, force_refresh
         )
-
-        # Tree always needs recursive loading to show the full subtree
-        hierarchy = _load_hierarchy(
-            ctx,
-            scope_resource=target_resource_name,
-            recursive=True,
-            force_refresh=force_refresh,
-            filter_orgs=filter_orgs,
-        )
-
-        logger.debug(
-            f"tree: hierarchy loaded with {len(hierarchy.organizations)} orgs, {len(hierarchy.projects)} projects, {len(hierarchy.folders)} folders"
-        )
-
-        nodes_to_process: List[Union[OrganizationNode, Folder]] = []
-        if target_resource_name:
-            logger.debug(
-                f"tree command: looking for target resource {target_resource_name}"
-            )
-            if target_resource_name.startswith("organizations/"):
-                for o in hierarchy.organizations:
-                    if o.organization.name == target_resource_name:
-                        logger.debug("tree command: found target organization")
-                        nodes_to_process = [o]
-                        break
-            elif target_resource_name.startswith("folders/"):
-                # When using ancestors_filter, the scope folder itself is not in the loaded hierarchy.
-                # We need to create a synthetic folder node for display purposes.
-                for o in hierarchy.organizations:
-                    if target_resource_name in o.folders:
-                        logger.debug(
-                            "tree command: found target folder in organization"
-                        )
-                        nodes_to_process = [o.folders[target_resource_name]]
-                        break
-
-                # If not found in loaded hierarchy, create a synthetic folder from resolved path
-                if not nodes_to_process and target_path and hierarchy.organizations:
-                    logger.debug(
-                        "tree command: creating synthetic folder node for scope"
-                    )
-                    # Extract display name from the resolved path
-                    path_parts = (
-                        target_path[2:].split("/")
-                        if target_path.startswith("//")
-                        else []
-                    )
-                    display_name = (
-                        path_parts[-1]
-                        if path_parts
-                        else target_resource_name.split("/")[-1]
-                    )
-
-                    org_node = hierarchy.organizations[0]
-                    synthetic_folder = Folder(
-                        name=target_resource_name,
-                        display_name=display_name,
-                        ancestors=[target_resource_name, org_node.organization.name],
-                        organization=org_node,
-                        parent=org_node.organization.name,
-                    )
-                    # Add to org's folders so build_tree can find children
-                    org_node.folders[target_resource_name] = synthetic_folder
-                    nodes_to_process = [synthetic_folder]
-                    logger.debug(
-                        f"tree command: created synthetic folder {synthetic_folder.name}"
-                    )
-
-            if not nodes_to_process:
-                logger.warning(
-                    f"tree command: target resource '{target_resource_name}' not found"
-                )
-                rprint(
-                    f"[red]Error:[/red] Target resource '{target_resource_name}' not found."
-                )
-                raise typer.Exit(code=1)
-        else:
-            logger.debug(
-                f"tree command: processing all {len(hierarchy.organizations)} organizations"
-            )
-            nodes_to_process = list(hierarchy.organizations)
+        if hctx is None:
+            return
 
         root_tree = Tree(
             "[bold cyan]Query Result[/bold cyan]"
-            if target_resource_name
+            if hctx.target_resource_name
             else "[bold cyan]GCP Hierarchy[/bold cyan]"
         )
 
-        # Build projects_by_parent mapping for tree building
-        projects_by_parent: Dict[str, List[Project]] = {}
-        for proj in hierarchy.projects:
-            projects_by_parent.setdefault(proj.parent, []).append(proj)
-
         # Add root nodes to tree
-        for node in nodes_to_process:
+        for node in hctx.nodes_to_process:
             if isinstance(node, OrganizationNode):
                 node_id = node.organization.name
-                if target_resource_name:
+                if hctx.target_resource_name:
                     safe_path = f"//{path_escape(node.organization.display_name)}"
                     label = f"[bold cyan]{safe_path}[/bold cyan]"
                 else:
@@ -548,24 +585,111 @@ def tree(
 
             node_tree = root_tree.add(label)
             build_tree_view(
-                node_tree, node, hierarchy, projects_by_parent, level, 0, show_ids
+                node_tree,
+                node,
+                hctx.hierarchy,
+                hctx.projects_by_parent,
+                level,
+                0,
+                show_ids,
             )
 
         # Organizationless projects
-        if not target_resource_name and any(
-            not p.organization for p in hierarchy.projects
+        if not hctx.target_resource_name and any(
+            not p.organization for p in hctx.hierarchy.projects
         ):
             orgless_node = root_tree.add(
                 "[bold yellow](organizationless)[/bold yellow]"
             )
             if level is None or level >= 1:
-                orgless_projs = [p for p in hierarchy.projects if not p.organization]
+                orgless_projs = [
+                    p for p in hctx.hierarchy.projects if not p.organization
+                ]
                 orgless_projs.sort(key=lambda x: x.display_name)
                 for p in orgless_projs:
                     label = format_tree_label(p, show_ids)
                     orgless_node.add(label)
 
         console.print(root_tree)
+
+    except Exception as e:
+        handle_error(e)
+
+
+@app.command()
+def diagram(
+    ctx: typer.Context,
+    resource: Annotated[
+        Optional[str],
+        typer.Argument(
+            help="Resource name (e.g. folders/123) or path to generate diagram from."
+        ),
+    ] = None,
+    fmt: str = typer.Option(
+        "mermaid",
+        "--format",
+        "-f",
+        help="Diagram output format: mermaid or d2",
+    ),
+    level: int = typer.Option(
+        None,
+        "--level",
+        "-L",
+        help="Max display depth of the diagram (no limit by default)",
+    ),
+    show_ids: bool = typer.Option(
+        False, "--ids", "-i", help="Show resource names in node labels"
+    ),
+    output: Optional[str] = typer.Option(
+        None, "--output", "-o", help="Write diagram to a file instead of stdout"
+    ),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompts"),
+    force_refresh: bool = typer.Option(
+        False,
+        "--force-refresh",
+        "-F",
+        help="Force a refresh of the cache from the GCP API",
+    ),
+) -> None:
+    """
+    Generate a Mermaid or D2 diagram of the resource hierarchy.
+    """
+    try:
+        if fmt not in ("mermaid", "d2"):
+            rprint(
+                f"[red]Error:[/red] Unsupported format '{fmt}'. Use 'mermaid' or 'd2'."
+            )
+            raise typer.Exit(code=1)
+
+        hctx = _prepare_hierarchy_command(
+            ctx, "diagram", resource, level, yes, force_refresh
+        )
+        if hctx is None:
+            return
+
+        # Collect organizationless projects
+        orgless_projects = None
+        if not hctx.target_resource_name:
+            orgless = [p for p in hctx.hierarchy.projects if not p.organization]
+            if orgless:
+                orgless_projects = orgless
+
+        diagram_output = build_diagram(
+            hctx.nodes_to_process,
+            hctx.hierarchy,
+            hctx.projects_by_parent,
+            fmt=fmt,
+            level=level,
+            show_ids=show_ids,
+            orgless_projects=orgless_projects,
+        )
+
+        if output:
+            with open(output, "w", encoding="utf-8") as f:
+                f.write(diagram_output + "\n")
+            rprint(f"[green]Diagram written to {output}[/green]")
+        else:
+            print(diagram_output)
 
     except Exception as e:
         handle_error(e)

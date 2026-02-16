@@ -444,3 +444,107 @@ def test_cache_status_no_cache(mock_get_cache_info):
     result = runner.invoke(app, ["cache", "status"])
     assert result.exit_code == 0
     assert "No cache" in result.stdout or "Does not exist" in result.stdout
+
+
+# --- Diagram command tests ---
+
+
+@patch("gcpath.core.Hierarchy.load")
+@patch("typer.confirm")
+def test_diagram_mermaid_default(mock_confirm, mock_load, mock_hierarchy):
+    """Test diagram command produces Mermaid output by default."""
+    mock_confirm.return_value = True
+    mock_load.return_value = mock_hierarchy
+    result = runner.invoke(app, ["diagram"])
+    assert result.exit_code == 0
+    assert "graph TD" in result.stdout
+    assert "organizations_123" in result.stdout
+    assert "example.com" in result.stdout
+
+
+@patch("gcpath.core.Hierarchy.load")
+@patch("typer.confirm")
+def test_diagram_d2(mock_confirm, mock_load, mock_hierarchy):
+    """Test diagram command with D2 format."""
+    mock_confirm.return_value = True
+    mock_load.return_value = mock_hierarchy
+    result = runner.invoke(app, ["diagram", "--format", "d2"])
+    assert result.exit_code == 0
+    assert "graph TD" not in result.stdout
+    assert "organizations_123" in result.stdout
+    assert "->" in result.stdout
+
+
+@patch("gcpath.core.Hierarchy.load")
+@patch("typer.confirm")
+def test_diagram_with_ids(mock_confirm, mock_load, mock_hierarchy):
+    """Test diagram command with resource IDs."""
+    mock_confirm.return_value = True
+    mock_load.return_value = mock_hierarchy
+    result = runner.invoke(app, ["diagram", "--ids"])
+    assert result.exit_code == 0
+    assert "(organizations/123)" in result.stdout
+
+
+@patch("gcpath.core.Hierarchy.load")
+@patch("typer.confirm")
+def test_diagram_with_level(mock_confirm, mock_load, mock_hierarchy):
+    """Test diagram with depth limit."""
+    mock_confirm.return_value = True
+    mock_load.return_value = mock_hierarchy
+    result = runner.invoke(app, ["diagram", "-L", "1"])
+    assert result.exit_code == 0
+    assert "f1" in result.stdout
+    # f11 is at depth 2, should not appear
+    assert "f11" not in result.stdout
+
+
+@patch("gcpath.core.Hierarchy.load")
+@patch("gcpath.cli.Hierarchy.resolve_ancestry")
+def test_diagram_scoped(mock_resolve, mock_load, mock_hierarchy):
+    """Test diagram with scoped resource."""
+    mock_load.return_value = mock_hierarchy
+    mock_resolve.return_value = "//example.com/f1"
+    result = runner.invoke(app, ["diagram", "folders/1"])
+    assert result.exit_code == 0
+    assert "folders_1" in result.stdout
+
+
+@patch("gcpath.core.Hierarchy.load")
+@patch("typer.confirm")
+def test_diagram_output_file(mock_confirm, mock_load, mock_hierarchy, tmp_path):
+    """Test diagram output to file."""
+    mock_confirm.return_value = True
+    mock_load.return_value = mock_hierarchy
+    out_file = tmp_path / "test.mmd"
+    result = runner.invoke(app, ["diagram", "-o", str(out_file)])
+    assert result.exit_code == 0
+    assert out_file.exists()
+    content = out_file.read_text()
+    assert "graph TD" in content
+
+
+@patch("gcpath.core.Hierarchy.load")
+@patch("typer.confirm")
+def test_diagram_includes_orgless(mock_confirm, mock_load, mock_hierarchy):
+    """Test that diagram includes organizationless projects."""
+    mock_confirm.return_value = True
+    mock_load.return_value = mock_hierarchy
+    result = runner.invoke(app, ["diagram"])
+    assert result.exit_code == 0
+    assert "organizationless" in result.stdout
+    assert "Standalone" in result.stdout
+
+
+def test_diagram_invalid_format():
+    """Test diagram command rejects invalid format."""
+    result = runner.invoke(app, ["diagram", "--format", "svg", "-y"])
+    assert result.exit_code == 1
+
+
+@patch("gcpath.core.Hierarchy.load")
+def test_diagram_yes_flag_skips_prompt(mock_load, mock_hierarchy):
+    """Test that --yes skips prompt."""
+    mock_load.return_value = mock_hierarchy
+    result = runner.invoke(app, ["diagram", "-y"])
+    assert result.exit_code == 0
