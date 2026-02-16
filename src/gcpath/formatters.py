@@ -6,11 +6,11 @@ and diagram generation (Mermaid, D2).
 """
 
 from typing import List, Dict, Tuple, Union, Optional, Any
-from gcpath.core import OrganizationNode, Folder, Project, path_escape
+from gcpath.core import OrganizationNode, Folder, Project, path_escape, Hierarchy
 
 
 def filter_direct_children(
-    hierarchy, target_resource_name: Optional[str] = None
+    hierarchy: Hierarchy, target_resource_name: Optional[str] = None
 ) -> Tuple[List[Folder], List[Project]]:
     """Filter hierarchy to get direct children of a target resource.
 
@@ -94,7 +94,7 @@ def get_display_path(
 
 
 def build_items_list(
-    hierarchy,
+    hierarchy: Hierarchy,
     current_folders: List[Folder],
     current_projects: List[Project],
     target_path_prefix: str = "",
@@ -272,7 +272,7 @@ def format_tree_label(item: Union[Folder, Project], show_ids: bool = False) -> s
 def build_tree_view(
     tree_node,
     current_node: Union[OrganizationNode, Folder],
-    hierarchy,
+    hierarchy: Hierarchy,
     projects_by_parent: Dict[str, List[Project]],
     level: Optional[int] = None,
     current_depth: int = 0,
@@ -292,11 +292,10 @@ def build_tree_view(
     if level is not None and current_depth >= level:
         return
 
-    parent_name = (
-        current_node.name
-        if hasattr(current_node, "name")
-        else current_node.organization.name
-    )
+    if isinstance(current_node, OrganizationNode):
+        parent_name = current_node.organization.name
+    else:
+        parent_name = current_node.name
 
     # Projects
     children_projects = projects_by_parent.get(parent_name, [])
@@ -371,7 +370,7 @@ def _get_node_label(
 def _collect_diagram_edges(
     parent_id: str,
     current_node: Union[OrganizationNode, Folder],
-    hierarchy: Any,
+    hierarchy: Hierarchy,
     projects_by_parent: Dict[str, List[Project]],
     edges: List[Tuple[str, str]],
     labels: Dict[str, str],
@@ -383,13 +382,10 @@ def _collect_diagram_edges(
     if level is not None and current_depth >= level:
         return
 
-    parent_name = (
-        current_node.name
-        if hasattr(current_node, "name") and not isinstance(current_node, OrganizationNode)
-        else current_node.organization.name
-        if isinstance(current_node, OrganizationNode)
-        else ""
-    )
+    if isinstance(current_node, OrganizationNode):
+        parent_name = current_node.organization.name
+    else:
+        parent_name = current_node.name
 
     # Find child folders
     children_folders: List[Folder] = []
@@ -456,7 +452,7 @@ def _format_d2(labels: Dict[str, str], edges: List[Tuple[str, str]]) -> str:
 
 def build_diagram(
     nodes_to_process: List[Union[OrganizationNode, Folder]],
-    hierarchy: Any,
+    hierarchy: Hierarchy,
     projects_by_parent: Dict[str, List[Project]],
     fmt: str = "mermaid",
     level: Optional[int] = None,

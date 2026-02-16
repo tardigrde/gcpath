@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.3.0] - 2026-02-08
+
+### Bug Fixes
+
+- Add missing mock in test_tree_user_declines_prompt ([`c7aa4c8`](https://github.com/tardigrde/gcpath/commit/c7aa4c84622bb87067654f3f182a765d90726455))
+
+- Address linting errors ([`242db12`](https://github.com/tardigrde/gcpath/commit/242db1270e8f3475d79a94f3eaea8c7a85fdd18e))
+
+### Chores
+
+- Refactor code into modules (v0.2.3) ([`ac156e7`](https://github.com/tardigrde/gcpath/commit/ac156e714b2752ddf3458cc03e31dad7205dae18))
+
+### Features
+
+- Add local caching for GCP resource hierarchy ([`385b3be`](https://github.com/tardigrde/gcpath/commit/385b3be810c6507ab292ee04b432a0e918e2469c))
+
+### Refactoring
+
+- Address PR feedback ([`c37ab27`](https://github.com/tardigrde/gcpath/commit/c37ab27401a352046029e93a30edbb5664abdaf2))
+
+- Implement robust caching layer with TTL and architectural improvements ([`caa73c8`](https://github.com/tardigrde/gcpath/commit/caa73c8c79a66269e250fc36b9ff644c4ed06af7))
+
+---
+
+**Detailed Changes**: [v0.2.3...v0.3.0](https://github.com/tardigrde/gcpath/compare/v0.2.3...v0.3.0)
+
 ## [0.2.3] - 2025-12-22
 
 ### Fixed
