@@ -381,3 +381,126 @@ def test_hierarchy_load_asset_api(
     h = Hierarchy.load(via_resource_manager=False)
     assert len(h.organizations) == 1
     assert "folders/1" in h.organizations[0].folders
+
+
+@patch("gcpath.loaders.resourcemanager_v3")
+@patch("gcpath.loaders.asset_v1")
+@patch("gcpath.core.resourcemanager_v3")
+def test_load_from_folder_scope_with_org_access(
+    mock_core_rm, mock_loaders_asset, mock_loaders_rm
+):
+    """Folder-scoped loading when org is accessible creates real org node."""
+    mock_rm = mock_core_rm
+    mock_loaders_rm.FoldersClient = mock_rm.FoldersClient
+    mock_loaders_rm.ProjectsClient = mock_rm.ProjectsClient
+
+    # Let the real Organization class through for construction
+    mock_rm.Organization = resourcemanager_v3.Organization
+
+    # search_organizations returns empty (triggers fallback)
+    org_client = mock_rm.OrganizationsClient.return_value
+    org_client.search_organizations.return_value = []
+
+    # get_folder for entrypoint
+    folders_client = mock_rm.FoldersClient.return_value
+    mock_folder = MagicMock()
+    mock_folder.name = "folders/100"
+    mock_folder.display_name = "Team Folder"
+    mock_folder.parent = "organizations/123"
+    folders_client.get_folder.return_value = mock_folder
+
+    # get_organization succeeds (user has access)
+    mock_org = MagicMock()
+    mock_org.name = "organizations/123"
+    mock_org.display_name = "Example Org"
+    org_client.get_organization.return_value = mock_org
+
+    # Asset API returns empty (no children)
+    asset_client = mock_loaders_asset.AssetServiceClient.return_value
+    mock_resp = MagicMock()
+    mock_resp.query_result.rows = []
+    asset_client.query_assets.return_value = mock_resp
+
+    # search_projects returns empty for organizationless
+    mock_rm.ProjectsClient.return_value.search_projects.return_value = []
+
+    h = Hierarchy.load(
+        via_resource_manager=False,
+        scope_resource="folders/100",
+    )
+
+    assert len(h.organizations) == 1
+    assert h.organizations[0].organization.name == "organizations/123"
+    assert h.organizations[0].organization.display_name == "Example Org"
+    assert "folders/100" in h.organizations[0].folders
+
+
+@patch("gcpath.loaders.resourcemanager_v3")
+@patch("gcpath.loaders.asset_v1")
+@patch("gcpath.core.resourcemanager_v3")
+def test_load_from_folder_scope_no_org_access(
+    mock_core_rm, mock_loaders_asset, mock_loaders_rm
+):
+    """Folder-scoped loading when org is NOT accessible uses synthetic org."""
+    from gcpath.core import SYNTHETIC_ORG_NAME
+
+    mock_rm = mock_core_rm
+    mock_loaders_rm.FoldersClient = mock_rm.FoldersClient
+    mock_loaders_rm.ProjectsClient = mock_rm.ProjectsClient
+
+    # Let the real Organization class through for construction
+    mock_rm.Organization = resourcemanager_v3.Organization
+
+    # search_organizations returns empty (triggers fallback)
+    org_client = mock_rm.OrganizationsClient.return_value
+    org_client.search_organizations.return_value = []
+
+    # get_folder for entrypoint
+    folders_client = mock_rm.FoldersClient.return_value
+    mock_folder = MagicMock()
+    mock_folder.name = "folders/100"
+    mock_folder.display_name = "Team Folder"
+    mock_folder.parent = "organizations/123"
+    folders_client.get_folder.return_value = mock_folder
+
+    # get_organization raises PermissionDenied
+    org_client.get_organization.side_effect = exceptions.PermissionDenied("denied")
+
+    # Asset API returns empty
+    asset_client = mock_loaders_asset.AssetServiceClient.return_value
+    mock_resp = MagicMock()
+    mock_resp.query_result.rows = []
+    asset_client.query_assets.return_value = mock_resp
+
+    # search_projects returns empty for organizationless
+    mock_rm.ProjectsClient.return_value.search_projects.return_value = []
+
+    h = Hierarchy.load(
+        via_resource_manager=False,
+        scope_resource="folders/100",
+    )
+
+    assert len(h.organizations) == 1
+    assert h.organizations[0].organization.name == SYNTHETIC_ORG_NAME
+    assert h.organizations[0].organization.display_name == "Team Folder"
+    assert "folders/100" in h.organizations[0].folders
+    # Entrypoint folder ancestors should be just itself
+    assert h.organizations[0].folders["folders/100"].ancestors == ["folders/100"]
+
+
+@patch("gcpath.core.resourcemanager_v3")
+def test_folder_scope_fallback_not_triggered_without_folder(mock_rm):
+    """Fallback should NOT trigger when scope_resource is not a folder."""
+    org_client = mock_rm.OrganizationsClient.return_value
+    org_client.search_organizations.return_value = []
+
+    project_client = mock_rm.ProjectsClient.return_value
+    project_client.search_projects.return_value = []
+
+    # No scope_resource => no fallback, just empty hierarchy
+    h = Hierarchy.load(via_resource_manager=True)
+    assert len(h.organizations) == 0
+
+    # Organization scope => no fallback
+    h = Hierarchy.load(via_resource_manager=True, scope_resource="organizations/123")
+    assert len(h.organizations) == 0

@@ -548,3 +548,128 @@ def test_diagram_yes_flag_skips_prompt(mock_load, mock_hierarchy):
     mock_load.return_value = mock_hierarchy
     result = runner.invoke(app, ["diagram", "-y"])
     assert result.exit_code == 0
+
+
+# --- Config subcommand tests ---
+
+
+@patch("gcpath.cli.set_entrypoint")
+def test_config_set_entrypoint(mock_set):
+    """Test config set-entrypoint command."""
+    result = runner.invoke(app, ["config", "set-entrypoint", "folders/123"])
+    assert result.exit_code == 0
+    mock_set.assert_called_once_with("folders/123")
+    assert "Entrypoint set" in result.stdout
+
+
+@patch("gcpath.cli.set_entrypoint", side_effect=ValueError("must start with"))
+def test_config_set_entrypoint_invalid(mock_set):
+    """Test config set-entrypoint rejects invalid resource."""
+    result = runner.invoke(app, ["config", "set-entrypoint", "projects/bad"])
+    assert result.exit_code == 1
+
+
+@patch("gcpath.cli.read_config", return_value={"entrypoint": "folders/123"})
+def test_config_show(mock_read):
+    """Test config show command."""
+    result = runner.invoke(app, ["config", "show"])
+    assert result.exit_code == 0
+    assert "folders/123" in result.stdout
+
+
+@patch("gcpath.cli.read_config", return_value={})
+def test_config_show_empty(mock_read):
+    """Test config show when no config set."""
+    result = runner.invoke(app, ["config", "show"])
+    assert result.exit_code == 0
+    assert "No configuration" in result.stdout
+
+
+@patch("gcpath.cli.clear_entrypoint")
+def test_config_clear_entrypoint(mock_clear):
+    """Test config clear-entrypoint command."""
+    result = runner.invoke(app, ["config", "clear-entrypoint"])
+    assert result.exit_code == 0
+    assert "cleared" in result.stdout
+    mock_clear.assert_called_once()
+
+
+# --- Entrypoint behavior tests ---
+
+
+@patch("gcpath.cli.get_entrypoint", return_value="folders/100")
+@patch("gcpath.core.Hierarchy.load")
+@patch("gcpath.cli.Hierarchy.resolve_ancestry")
+def test_ls_with_entrypoint(mock_resolve, mock_load, mock_get_ep, mock_hierarchy):
+    """ls with no resource arg uses entrypoint as scope."""
+    mock_load.return_value = mock_hierarchy
+    mock_resolve.return_value = "//example.com/f1"
+
+    result = runner.invoke(app, ["ls"])
+    assert result.exit_code == 0
+    # Hierarchy.load should have been called with scope_resource="folders/100"
+    mock_load.assert_called_once()
+    call_kwargs = mock_load.call_args
+    assert call_kwargs[1]["scope_resource"] == "folders/100"
+
+
+@patch("gcpath.cli.get_entrypoint", return_value="folders/100")
+@patch("gcpath.core.Hierarchy.load")
+@patch("gcpath.cli.Hierarchy.resolve_ancestry")
+def test_ls_explicit_resource_overrides_entrypoint(
+    mock_resolve, mock_load, mock_get_ep, mock_hierarchy
+):
+    """Explicit resource arg overrides entrypoint."""
+    mock_load.return_value = mock_hierarchy
+    mock_resolve.return_value = "//example.com/f1"
+
+    result = runner.invoke(app, ["ls", "folders/1"])
+    assert result.exit_code == 0
+    mock_load.assert_called_once()
+    call_kwargs = mock_load.call_args
+    # Should use folders/1, not folders/100
+    assert call_kwargs[1]["scope_resource"] == "folders/1"
+
+
+@patch("gcpath.cli.get_entrypoint", return_value="folders/100")
+@patch("gcpath.core.Hierarchy.load")
+@patch("gcpath.cli.Hierarchy.resolve_ancestry")
+def test_entrypoint_flag_overrides_config(
+    mock_resolve, mock_load, mock_get_ep, mock_hierarchy
+):
+    """--entrypoint flag overrides config file entrypoint."""
+    mock_load.return_value = mock_hierarchy
+    mock_resolve.return_value = "//example.com/f1"
+
+    result = runner.invoke(app, ["--entrypoint", "folders/200", "ls"])
+    assert result.exit_code == 0
+    mock_load.assert_called_once()
+    call_kwargs = mock_load.call_args
+    assert call_kwargs[1]["scope_resource"] == "folders/200"
+
+
+@patch("gcpath.cli.get_entrypoint", return_value="folders/100")
+@patch("gcpath.core.Hierarchy.load")
+@patch("gcpath.cli.Hierarchy.resolve_ancestry")
+def test_tree_with_entrypoint(mock_resolve, mock_load, mock_get_ep, mock_hierarchy):
+    """tree with no resource arg uses entrypoint."""
+    mock_load.return_value = mock_hierarchy
+    mock_resolve.return_value = "//example.com/f1"
+
+    result = runner.invoke(app, ["tree"])
+    assert result.exit_code == 0
+    mock_load.assert_called_once()
+    call_kwargs = mock_load.call_args
+    assert call_kwargs[1]["scope_resource"] == "folders/100"
+
+
+@patch("gcpath.cli.get_entrypoint", return_value="folders/100")
+@patch("gcpath.core.Hierarchy.load")
+def test_name_with_entrypoint(mock_load, mock_get_ep, mock_hierarchy):
+    """name command uses entrypoint as scope_resource for loading."""
+    mock_load.return_value = mock_hierarchy
+    result = runner.invoke(app, ["name", "//example.com/f1"])
+    assert result.exit_code == 0
+    mock_load.assert_called_once()
+    call_kwargs = mock_load.call_args
+    assert call_kwargs[1]["scope_resource"] == "folders/100"

@@ -18,6 +18,8 @@ from gcpath.loaders import (
 # Configuration should happen at the application entry point.
 logger = logging.getLogger(__name__)
 
+SYNTHETIC_ORG_NAME = "organizations/_folder_root"
+
 
 class GCPathError(Exception):
     """Base exception for gcpath."""
@@ -183,6 +185,19 @@ class Hierarchy:
             org_client, display_names, via_resource_manager, scope_resource, recursive
         )
 
+        # Fallback: if no orgs found and scope is a folder, try folder-scoped loading
+        if (
+            not org_nodes
+            and scope_resource
+            and scope_resource.startswith("folders/")
+        ):
+            logger.debug(
+                f"No organizations found, falling back to folder-scoped loading for {scope_resource}"
+            )
+            return cls._load_from_folder_scope(
+                scope_resource, via_resource_manager, recursive
+            )
+
         # Load Projects
         all_projects = cls._load_all_projects(
             project_client, org_nodes, via_resource_manager, scope_resource, recursive
@@ -240,16 +255,117 @@ class Hierarchy:
         return org_nodes
 
     @classmethod
+    def _load_from_folder_scope(
+        cls,
+        scope_resource: str,
+        via_resource_manager: bool,
+        recursive: bool,
+    ) -> "Hierarchy":
+        """Load hierarchy rooted at a folder when org access is unavailable.
+
+        Creates a synthetic OrganizationNode and loads descendants of the folder.
+        """
+        folders_client = resourcemanager_v3.FoldersClient()
+        org_client = resourcemanager_v3.OrganizationsClient()
+
+        # Get the entrypoint folder info
+        try:
+            folder_proto = folders_client.get_folder(name=scope_resource)
+        except Exception as e:
+            logger.error(f"Could not access folder {scope_resource}: {e}")
+            raise
+
+        # Try to resolve the real org by traversing parents upward
+        org_name = None
+        org_display_name = None
+        current = folder_proto.parent
+        while current:
+            if current.startswith("organizations/"):
+                try:
+                    org_proto = org_client.get_organization(name=current)
+                    org_name = org_proto.name
+                    org_display_name = org_proto.display_name
+                except exceptions.PermissionDenied:
+                    logger.debug(f"Permission denied accessing org {current}")
+                break
+            elif current.startswith("folders/"):
+                try:
+                    parent_proto = folders_client.get_folder(name=current)
+                    current = parent_proto.parent
+                except exceptions.PermissionDenied:
+                    logger.debug(f"Permission denied traversing to {current}")
+                    break
+                except Exception:
+                    break
+            else:
+                break
+
+        # Build synthetic OrganizationNode
+        if org_name and org_display_name:
+            synth_org = resourcemanager_v3.Organization(
+                name=org_name, display_name=org_display_name
+            )
+        else:
+            synth_org = resourcemanager_v3.Organization(
+                name=SYNTHETIC_ORG_NAME,
+                display_name=folder_proto.display_name,
+            )
+
+        node = OrganizationNode(organization=synth_org)
+
+        # Add entrypoint folder with ancestors=[itself] (no org at end)
+        entrypoint_folder = Folder(
+            name=folder_proto.name,
+            display_name=folder_proto.display_name,
+            ancestors=[scope_resource],
+            organization=node,
+            parent=folder_proto.parent,
+        )
+        node.folders[scope_resource] = entrypoint_folder
+
+        # Load child folders and projects
+        if via_resource_manager:
+            load_folders_rm(node, scope_resource)
+        else:
+            cls._load_folders_for_org(
+                node,
+                via_resource_manager=False,
+                scope_resource=scope_resource,
+                recursive=recursive,
+                query_parent=scope_resource,
+                root_ancestor=scope_resource,
+            )
+
+        # Load projects
+        all_projects: List[Project] = []
+        if via_resource_manager:
+            # RM path: search_projects returns all accessible, filter by parent
+            project_client = resourcemanager_v3.ProjectsClient()
+            all_projects = cls._load_projects_rm(project_client, [node])
+        else:
+            all_projects = cls._load_projects_asset_all_orgs(
+                [node],
+                scope_resource=scope_resource,
+                recursive=recursive,
+                query_parent=scope_resource,
+            )
+
+        return cls(organizations=[node], projects=all_projects)
+
+    @classmethod
     def _load_folders_for_org(
         cls,
         node: OrganizationNode,
         via_resource_manager: bool,
         scope_resource: Optional[str],
         recursive: bool,
+        query_parent: Optional[str] = None,
+        root_ancestor: Optional[str] = None,
     ):
         """Load folders for a single organization."""
         if via_resource_manager:
-            load_folders_rm(node, node.organization.name)
+            root_parent = query_parent or node.organization.name
+            load_folders_rm(node, root_parent)
         else:
             # Determine filters for Asset API based on scope_resource and recursive
             folder_parent_filter = None
@@ -267,11 +383,13 @@ class Hierarchy:
                 node,
                 parent_filter=folder_parent_filter,
                 ancestors_filter=folder_ancestors_filter,
+                query_parent=query_parent,
+                root_ancestor=root_ancestor,
             )
 
             # Load scope folder separately if needed (for recursive scoped loads)
             if scope_resource and scope_resource.startswith("folders/") and recursive:
-                load_scope_folder(node, scope_resource)
+                load_scope_folder(node, scope_resource, root_ancestor=root_ancestor)
 
     @classmethod
     def _load_all_projects(
@@ -352,6 +470,7 @@ class Hierarchy:
         org_nodes: List[OrganizationNode],
         scope_resource: Optional[str],
         recursive: bool,
+        query_parent: Optional[str] = None,
     ) -> List[Project]:
         """Load projects for all organizations using Asset API."""
         all_projects = []
@@ -373,6 +492,7 @@ class Hierarchy:
                 org_node,
                 parent_filter=project_parent_filter,
                 ancestors_filter=project_ancestors_filter,
+                query_parent=query_parent,
             )
             all_projects.extend(org_projects)
 

@@ -32,6 +32,13 @@ from gcpath.cache import (
     get_cache_info,
     CACHE_FILE,
 )
+from gcpath.config import (
+    get_entrypoint,
+    set_entrypoint,
+    clear_entrypoint,
+    read_config,
+    CONFIG_FILE,
+)
 from rich.table import Table
 
 logger = logging.getLogger(__name__)
@@ -43,6 +50,8 @@ app = typer.Typer(
 )
 cache_app = typer.Typer(help="Manage the local resource cache.")
 app.add_typer(cache_app, name="cache")
+config_app = typer.Typer(help="Manage gcpath configuration.")
+app.add_typer(config_app, name="config")
 console = Console()
 error_console = Console(stderr=True)
 
@@ -87,12 +96,19 @@ def main(
         help="Use Cloud Asset API to load folders (faster) or Resource Manager (slower)",
     ),
     debug: bool = typer.Option(False, "--debug", help="Enable debug logging"),
+    entrypoint: Optional[str] = typer.Option(
+        None,
+        "--entrypoint",
+        "-e",
+        help="Default resource to scope commands to (e.g., folders/123). Overrides config.",
+    ),
 ) -> None:
     """
     gcpath - Google Cloud Platform resource hierarchy utility
     """
     ctx.ensure_object(dict)
     ctx.obj["use_asset_api"] = use_asset_api
+    ctx.obj["entrypoint"] = entrypoint or get_entrypoint()
 
     if debug:
         logging.basicConfig(level=logging.DEBUG)
@@ -149,6 +165,71 @@ def cache_status() -> None:
     table.add_row("Location", str(CACHE_FILE))
 
     console.print(table)
+
+
+@config_app.command("set-entrypoint")
+def config_set_entrypoint(
+    resource: Annotated[
+        str,
+        typer.Argument(
+            help="Resource name to use as default entrypoint (e.g., folders/123)."
+        ),
+    ],
+) -> None:
+    """Set the default entrypoint resource."""
+    try:
+        set_entrypoint(resource)
+        rprint(f"[green]Entrypoint set to {resource}[/green]")
+    except ValueError as e:
+        rprint(f"[red]Error:[/red] {e}")
+        raise typer.Exit(code=1)
+
+
+@config_app.command("show")
+def config_show() -> None:
+    """Show current configuration."""
+    config = read_config()
+    if not config:
+        rprint("[yellow]No configuration set.[/yellow]")
+        rprint(f"[dim]Config file: {CONFIG_FILE}[/dim]")
+        return
+
+    table = Table(show_header=False, box=None, padding=(0, 1))
+    table.add_column("Key", style="bold")
+    table.add_column("Value")
+
+    for key, value in config.items():
+        table.add_row(key, str(value))
+
+    table.add_row("location", str(CONFIG_FILE))
+    console.print(table)
+
+
+@config_app.command("clear-entrypoint")
+def config_clear_entrypoint() -> None:
+    """Remove the default entrypoint."""
+    clear_entrypoint()
+    rprint("[green]Entrypoint cleared.[/green]")
+
+
+def _clean_resolve_path(path: str) -> str:
+    """Clean up a resolved path that may contain _unknown_org_ segments."""
+    if "_unknown_org_" in path:
+        # Strip //_unknown_org_(organizations/ID) prefix, keep rest
+        # e.g., "//_unknown_org_(organizations/123)/Folder/Sub" -> "//Folder/Sub"
+        parts = path.split("/")
+        # Find the _unknown_org_ segment and skip it
+        cleaned = []
+        for part in parts:
+            if "_unknown_org_" in part:
+                continue
+            cleaned.append(part)
+        # Rebuild: starts with // so cleaned[0] and [1] are empty strings
+        result = "/".join(cleaned)
+        if not result.startswith("//"):
+            result = "//" + result.lstrip("/")
+        return result
+    return path
 
 
 def _load_hierarchy(
@@ -223,8 +304,12 @@ def _prepare_hierarchy_command(
     Returns None if the user declines the confirmation prompt.
     Raises typer.Exit(code=1) for invalid or not-found resources.
     """
-    # Prompt user for potentially long loads
-    if not yes and resource is None:
+    # Inject entrypoint when no explicit resource is given
+    ep = ctx.obj.get("entrypoint")
+    effective_resource = resource or ep
+
+    # Prompt user for potentially long loads (only when truly unscoped)
+    if not yes and effective_resource is None:
         cache_info = get_cache_info()
         if not cache_info.fresh and (level is None or level >= 4):
             confirm = typer.confirm(
@@ -239,9 +324,9 @@ def _prepare_hierarchy_command(
     target_resource_name = None
     target_path = None
 
-    if resource:
-        logger.debug(f"{command_name} command: processing resource argument {resource}")
-        if resource.startswith("projects/"):
+    if effective_resource:
+        logger.debug(f"{command_name} command: processing resource argument {effective_resource}")
+        if effective_resource.startswith("projects/"):
             rprint(
                 f"[red]Error:[/red] '{command_name}' command does not support starting "
                 "from a project (projects are leaf nodes)."
@@ -249,24 +334,29 @@ def _prepare_hierarchy_command(
             raise typer.Exit(code=1)
 
         try:
-            target_path = Hierarchy.resolve_ancestry(resource)
+            target_path = _clean_resolve_path(
+                Hierarchy.resolve_ancestry(effective_resource)
+            )
             if target_path.startswith("//"):
                 path_parts = target_path[2:].split("/")
                 if path_parts:
                     target_org_name = unquote(path_parts[0])
 
-            if resource.startswith("folders/") or resource.startswith(
+            if effective_resource.startswith("folders/") or effective_resource.startswith(
                 "organizations/"
             ):
-                target_resource_name = resource
+                target_resource_name = effective_resource
         except Exception:
-            if resource.startswith("//"):
-                target_path = resource
+            if effective_resource.startswith("//"):
+                target_path = effective_resource
             else:
                 raise
 
-    # Load hierarchy
-    filter_orgs = [target_org_name] if target_org_name else None
+    # Skip org filtering when using entrypoint without explicit resource
+    if not resource and ep and target_org_name:
+        filter_orgs = None
+    else:
+        filter_orgs = [target_org_name] if target_org_name else None
     logger.debug(
         f"{command_name}: loading hierarchy for resource='{resource}', filter_orgs={filter_orgs}"
     )
@@ -392,15 +482,19 @@ def ls(
         target_org_name = None
         target_resource_name = None
 
-        if resource:
+        # Inject entrypoint when no explicit resource is given
+        ep = ctx.obj.get("entrypoint")
+        effective_resource = resource or ep
+
+        if effective_resource:
             # Check if it's already a GCP resource name
             if any(
-                resource.startswith(p)
+                effective_resource.startswith(p)
                 for p in ["organizations/", "folders/", "projects/"]
             ):
-                target_resource_name = resource
+                target_resource_name = effective_resource
                 try:
-                    target_path = Hierarchy.resolve_ancestry(resource)
+                    target_path = Hierarchy.resolve_ancestry(effective_resource)
                     if target_path.startswith("//"):
                         path_parts = target_path[2:].split("/")
                         if path_parts:
@@ -409,11 +503,16 @@ def ls(
                     pass
             # If it's a path, we'd need to resolve it back to resource name
             # For simplicity, we mostly support resource names or defaults to org load
-            elif resource.startswith("//"):
+            elif effective_resource.startswith("//"):
                 # Handle path to name resolution if needed, but SPEC emphasizes resource name args
                 pass
 
-        filter_orgs = [target_org_name] if target_org_name else None
+        # Skip org filtering when using entrypoint without explicit resource
+        # (org may be inaccessible for folder admins)
+        if not resource and ep and target_org_name:
+            filter_orgs = None
+        else:
+            filter_orgs = [target_org_name] if target_org_name else None
         logger.debug(
             f"ls: loading hierarchy for resource='{resource}', filter_orgs={filter_orgs}, recursive={recursive}"
         )
@@ -470,7 +569,9 @@ def ls(
 
             # Get the full path for the target resource to use as prefix
             try:
-                target_path_prefix = Hierarchy.resolve_ancestry(target_resource_name)
+                target_path_prefix = _clean_resolve_path(
+                    Hierarchy.resolve_ancestry(target_resource_name)
+                )
                 logger.debug(f"ls: target path prefix: {target_path_prefix}")
             except Exception as e:
                 logger.warning(f"Could not resolve target path: {e}")
@@ -715,10 +816,12 @@ def get_resource_name(
     Get Google Cloud Platform resource name by path.
     """
     try:
-        logger.debug(f"name: resolving paths={paths}")
+        ep = ctx.obj.get("entrypoint")
+        scope = ep if ep else None
+        logger.debug(f"name: resolving paths={paths}, scope={scope}")
         hierarchy = _load_hierarchy(
             ctx,
-            scope_resource=None,
+            scope_resource=scope,
             recursive=True,
             force_refresh=force_refresh,
         )

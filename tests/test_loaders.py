@@ -436,6 +436,93 @@ def test_load_projects_asset_ancestors_filter(mock_asset_client_cls, mock_org_no
     assert "resource.data.parent.id" not in statement
 
 
+# Test query_parent parameter
+@patch("google.cloud.asset_v1.AssetServiceClient")
+def test_load_folders_asset_query_parent(mock_asset_client_cls, mock_org_node):
+    """Test that query_parent overrides the QueryAssetsRequest.parent."""
+    mock_client = mock_asset_client_cls.return_value
+
+    mock_query_result = MagicMock()
+    mock_query_result.rows = []
+    mock_response = MagicMock()
+    mock_response.query_result = mock_query_result
+    mock_client.query_assets.return_value = mock_response
+
+    load_folders_asset(mock_org_node, query_parent="folders/999")
+
+    call_args = mock_client.query_assets.call_args
+    request = call_args[1]["request"] if call_args[1] else call_args[0][0]
+    assert request.parent == "folders/999"
+
+
+@patch("google.cloud.asset_v1.AssetServiceClient")
+def test_load_folders_asset_root_ancestor(mock_asset_client_cls, mock_org_node):
+    """Test that root_ancestor is used in ancestor chain building."""
+    mock_client = mock_asset_client_cls.return_value
+
+    def create_row(name, display_name, parent, ancestors):
+        anc_vals = [{"v": anc} for anc in ancestors]
+        return {
+            "f": [
+                {"v": name},
+                {"v": display_name},
+                {"v": parent},
+                {"v": anc_vals},
+            ]
+        }
+
+    mock_query_result = MagicMock()
+    mock_query_result.rows = [
+        create_row(
+            "//cloudresourcemanager.googleapis.com/folders/child",
+            "child",
+            "folders/999",
+            [],
+        )
+    ]
+    mock_response = MagicMock()
+    mock_response.query_result = mock_query_result
+    mock_client.query_assets.return_value = mock_response
+
+    # Pre-populate the root folder
+    mock_org_node.folders["folders/999"] = Folder(
+        name="folders/999",
+        display_name="root",
+        ancestors=["folders/999"],
+        organization=mock_org_node,
+        parent="organizations/123",
+    )
+
+    load_folders_asset(
+        mock_org_node,
+        query_parent="folders/999",
+        root_ancestor="folders/999",
+    )
+
+    assert "folders/child" in mock_org_node.folders
+    child = mock_org_node.folders["folders/child"]
+    # Ancestor chain should end with root_ancestor, not org
+    assert child.ancestors[-1] == "folders/999"
+
+
+@patch("google.cloud.asset_v1.AssetServiceClient")
+def test_load_projects_asset_query_parent(mock_asset_client_cls, mock_org_node):
+    """Test that query_parent overrides the QueryAssetsRequest.parent for projects."""
+    mock_client = mock_asset_client_cls.return_value
+
+    mock_query_result = MagicMock()
+    mock_query_result.rows = []
+    mock_response = MagicMock()
+    mock_response.query_result = mock_query_result
+    mock_client.query_assets.return_value = mock_response
+
+    load_projects_asset(mock_org_node, query_parent="folders/999")
+
+    call_args = mock_client.query_assets.call_args
+    request = call_args[1]["request"] if call_args[1] else call_args[0][0]
+    assert request.parent == "folders/999"
+
+
 # Test load_organizationless_projects
 @patch("google.cloud.resourcemanager_v3.ProjectsClient")
 def test_load_organizationless_projects(mock_proj_cls):

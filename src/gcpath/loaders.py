@@ -87,12 +87,13 @@ def build_project_sql_query(
         return base_query
 
 
-def load_folders_rm(node, org_name: str):
+def load_folders_rm(node, root_parent: str):
     """Load folders using Resource Manager API (recursive calls).
 
     Args:
         node: OrganizationNode to load folders into
-        org_name: Organization resource name for ancestry
+        root_parent: Root resource name to start recursion from
+                     (e.g., 'organizations/123' or 'folders/456')
 
     Note: This function uses recursive API calls and is slower than Asset API.
           Prefer load_folders_asset() for better performance.
@@ -124,20 +125,22 @@ def load_folders_rm(node, org_name: str):
         except exceptions.PermissionDenied:
             logger.warning(f"Permission denied listing folders for {parent_name}")
 
-    # Start recursion with Org
-    # ancestors initially just the Org
-    recurse(org_name, [org_name])
+    # Start recursion from root_parent
+    recurse(root_parent, [root_parent])
 
 
-def fix_folder_ancestors(node):
+def fix_folder_ancestors(node, root_ancestor: Optional[str] = None):
     """Fix folder ancestors by traversing parent chain.
 
     Args:
         node: OrganizationNode containing folders to fix
+        root_ancestor: Override for the root ancestor appended to chains.
+                       Defaults to node.organization.name.
 
     Note: This is needed because Asset API returns empty ancestors for full
           recursive loads. We build the full chain by traversing parents.
     """
+    root = root_ancestor or node.organization.name
     for folder in list(node.folders.values()):
         # Only fix if this folder has a folder parent and ancestors seem incomplete
         if not folder.parent.startswith("folders/"):
@@ -163,9 +166,9 @@ def fix_folder_ancestors(node):
                 # Parent not in folders, stop here
                 break
 
-        # Add org at the end
-        if not ancestors[-1].startswith("organizations/"):
-            ancestors.append(node.organization.name)
+        # Add root at the end
+        if not ancestors[-1].startswith("organizations/") and ancestors[-1] != root:
+            ancestors.append(root)
 
         # Update if the ancestors changed
         if ancestors != folder.ancestors:
@@ -175,12 +178,14 @@ def fix_folder_ancestors(node):
             )
 
 
-def load_scope_folder(node, scope_resource: str):
+def load_scope_folder(node, scope_resource: str, root_ancestor: Optional[str] = None):
     """Load a specific scope folder separately (for recursive scoped loads).
 
     Args:
         node: OrganizationNode to add folder to
         scope_resource: Folder resource name to load
+        root_ancestor: Override for the root ancestor appended to ancestor chains.
+                       Defaults to node.organization.name.
 
     Note: When doing recursive scoped load, the scope folder itself is excluded
           from results. We need to load it separately so projects can find their
@@ -189,6 +194,8 @@ def load_scope_folder(node, scope_resource: str):
     if scope_resource in node.folders:
         # Already loaded
         return
+
+    root = root_ancestor or node.organization.name
 
     logger.debug(
         f"Recursive scoped load: loading scope folder {scope_resource} separately"
@@ -228,9 +235,9 @@ def load_scope_folder(node, scope_resource: str):
                 except Exception:
                     break
 
-        # Add organization at the end
-        if not ancestors_chain or ancestors_chain[-1] != node.organization.name:
-            ancestors_chain.append(node.organization.name)
+        # Add root at the end
+        if not ancestors_chain or ancestors_chain[-1] != root:
+            ancestors_chain.append(root)
 
         folder_obj = Folder(
             name=folder_proto.name,
@@ -248,7 +255,11 @@ def load_scope_folder(node, scope_resource: str):
 
 
 def load_folders_asset(
-    node, parent_filter: Optional[str] = None, ancestors_filter: Optional[str] = None
+    node,
+    parent_filter: Optional[str] = None,
+    ancestors_filter: Optional[str] = None,
+    query_parent: Optional[str] = None,
+    root_ancestor: Optional[str] = None,
 ):
     """Load folders from Asset API.
 
@@ -256,25 +267,29 @@ def load_folders_asset(
         node: OrganizationNode to load folders into
         parent_filter: Only load folders directly under this parent
         ancestors_filter: Only load folders with this resource in their ancestors
+        query_parent: Override for QueryAssetsRequest.parent (e.g., a folder).
+                      Defaults to node.organization.name.
+        root_ancestor: Override for the root ancestor in ancestor chains.
+                       Defaults to node.organization.name.
 
     Note: parent_filter and ancestors_filter are mutually exclusive.
           If neither is provided, loads ALL folders under the org.
     """
     asset_client = asset_v1.AssetServiceClient()
+    api_parent = query_parent or node.organization.name
+    root = root_ancestor or node.organization.name
 
     # Build SQL query
     statement = build_folder_sql_query(parent_filter, ancestors_filter)
 
     logger.debug(f"Folders query: {statement}")
     query_request = asset_v1.QueryAssetsRequest(
-        parent=node.organization.name,
+        parent=api_parent,
         statement=statement,
     )
 
     response = asset_client.query_assets(request=query_request)
-    logger.debug(
-        f"GCP API: query_assets(folders) returned for {node.organization.name}"
-    )
+    logger.debug(f"GCP API: query_assets(folders) returned for {api_parent}")
 
     # Iterate directly over the response (pagination is handled automatically)
     if not response.query_result or not response.query_result.rows:
@@ -293,7 +308,7 @@ def load_folders_asset(
             folder_parent = (
                 folder_data["parent"]
                 if folder_data["parent"]
-                else (parent_filter if parent_filter else node.organization.name)
+                else (parent_filter if parent_filter else root)
             )
 
             # Build complete ancestor chain
@@ -302,7 +317,7 @@ def load_folders_asset(
                 folder_data["ancestors"],
                 folder_parent,
                 node.folders,
-                node.organization.name,
+                root,
             )
 
             f = Folder(
@@ -319,11 +334,14 @@ def load_folders_asset(
             continue
 
     # Second pass: fix up ancestors for all folders by traversing parent chain
-    fix_folder_ancestors(node)
+    fix_folder_ancestors(node, root_ancestor=root)
 
 
 def load_projects_asset(
-    node, parent_filter: Optional[str] = None, ancestors_filter: Optional[str] = None
+    node,
+    parent_filter: Optional[str] = None,
+    ancestors_filter: Optional[str] = None,
+    query_parent: Optional[str] = None,
 ):
     """Load projects from Asset API.
 
@@ -331,6 +349,8 @@ def load_projects_asset(
         node: OrganizationNode to associate projects with
         parent_filter: Only load projects directly under this parent
         ancestors_filter: Only load projects with this resource in their ancestors
+        query_parent: Override for QueryAssetsRequest.parent (e.g., a folder).
+                      Defaults to node.organization.name.
 
     Returns:
         List of Project objects
@@ -341,6 +361,7 @@ def load_projects_asset(
     from gcpath.core import Project
 
     asset_client = asset_v1.AssetServiceClient()
+    api_parent = query_parent or node.organization.name
     projects: List[Project] = []
 
     # Build SQL query
@@ -348,14 +369,14 @@ def load_projects_asset(
 
     logger.debug(f"Projects query: {statement}")
     query_request = asset_v1.QueryAssetsRequest(
-        parent=node.organization.name,
+        parent=api_parent,
         statement=statement,
     )
 
     try:
         response = asset_client.query_assets(request=query_request)
         logger.debug(
-            f"GCP API: query_assets(projects) returned for {node.organization.name}"
+            f"GCP API: query_assets(projects) returned for {api_parent}"
         )
 
         # Iterate directly over the response
