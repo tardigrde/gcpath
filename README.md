@@ -24,7 +24,7 @@ It helps you translate between GCP resource names (e.g., `folders/12345`) and hu
 
 - ~~caching, for lightning fast lookups~~
 - ~~diagram generation~~
-- entrypoint configuration (organization or folder)
+- ~~entrypoint configuration (organization or folder)~~
 - IAM policies
 - other resources
 
@@ -226,6 +226,43 @@ gcpath ls -U  # short form
 
 - **For most users:** Use the default (Cloud Asset API) for best performance
 - **If you get permission/API errors:** Use `-U` flag for Resource Manager API
+
+## Entrypoint Configuration
+
+If you're a folder admin without organization-level access, or simply want to focus on a specific part of the hierarchy, you can configure an **entrypoint**. This scopes all commands to a subtree, improving performance and relevance.
+
+### Setting an Entrypoint
+
+```bash
+# Set a default entrypoint (persisted in ~/.gcpath/config.json)
+gcpath config set-entrypoint folders/123456789
+
+# Show current configuration
+gcpath config show
+
+# Remove the entrypoint
+gcpath config clear-entrypoint
+```
+
+### One-off Override
+
+Use the `--entrypoint` / `-e` flag to override the configured entrypoint for a single command:
+
+```bash
+gcpath -e folders/987654321 ls
+gcpath -e folders/987654321 tree
+```
+
+### Behavior
+
+- When an entrypoint is set, commands like `ls`, `tree`, `diagram`, and `name` automatically scope to that resource.
+- Passing an explicit resource argument overrides the entrypoint:
+
+  ```bash
+  gcpath ls folders/555  # uses folders/555, not the configured entrypoint
+  ```
+
+- The cache is **scope-aware**: cached data stores which entrypoint it was built for. Changing the entrypoint automatically invalidates the cache and triggers a fresh load.
 
 ## Acknowledgments
 

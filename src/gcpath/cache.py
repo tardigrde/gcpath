@@ -35,9 +35,10 @@ class CacheInfo:
     org_count: int
     folder_count: int
     project_count: int
+    scope: Optional[str] = None
 
 
-def _hierarchy_to_dict(hierarchy: Hierarchy) -> Dict[str, Any]:
+def _hierarchy_to_dict(hierarchy: Hierarchy, scope: Optional[str] = None) -> Dict[str, Any]:
     """Serializes the Hierarchy object to a dictionary."""
     organizations_data = []
 
@@ -90,6 +91,7 @@ def _hierarchy_to_dict(hierarchy: Hierarchy) -> Dict[str, Any]:
     return {
         "version": CACHE_VERSION,
         "timestamp": datetime.now(timezone.utc).isoformat(),
+        "scope": scope,
         "organizations": organizations_data,
         "organizationless_projects": orgless_projects_data,
     }
@@ -196,14 +198,22 @@ def is_cache_fresh(
         return False
 
 
-def read_cache(ttl_hours: float = DEFAULT_CACHE_TTL_HOURS) -> Optional[Hierarchy]:
-    """Reads the hierarchy from the cache file. Returns None if stale or missing."""
+def read_cache(
+    ttl_hours: float = DEFAULT_CACHE_TTL_HOURS, scope: Optional[str] = None
+) -> Optional[Hierarchy]:
+    """Reads the hierarchy from the cache file. Returns None if stale, missing, or scope mismatch."""
     data = read_cache_raw()
     if data is None:
         return None
 
     if not is_cache_fresh(data, ttl_hours):
         logger.debug("Cache is stale, ignoring.")
+        return None
+
+    if data.get("scope") != scope:
+        logger.debug(
+            f"Cache scope mismatch (cached={data.get('scope')}, requested={scope}). Ignoring cache."
+        )
         return None
 
     return _dict_to_hierarchy(data)
@@ -270,6 +280,7 @@ def get_cache_info(
             org_count=org_count,
             folder_count=folder_count,
             project_count=project_count,
+            scope=data.get("scope"),
         )
     except Exception:
         return CacheInfo(
@@ -284,11 +295,11 @@ def get_cache_info(
         )
 
 
-def write_cache(hierarchy: Hierarchy) -> None:
+def write_cache(hierarchy: Hierarchy, scope: Optional[str] = None) -> None:
     """Writes the hierarchy to the cache file."""
     try:
         CACHE_DIR.mkdir(parents=True, exist_ok=True)
-        data = _hierarchy_to_dict(hierarchy)
+        data = _hierarchy_to_dict(hierarchy, scope=scope)
         with open(CACHE_FILE, "w") as f:
             json.dump(data, f, indent=2)
         logger.debug(f"Successfully wrote hierarchy to cache file: {CACHE_FILE}")
