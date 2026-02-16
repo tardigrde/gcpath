@@ -57,7 +57,7 @@ upload_to_release = true
 build_command = "uv build"
 commit_message = "chore(release): {version}"
 
-[tool.semantic_release.changelog.default_templates]
+[tool.semantic_release.changelog]
 changelog_file = "CHANGELOG.md"
 
 [tool.semantic_release.branches.main]

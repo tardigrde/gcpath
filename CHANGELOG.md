@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.4.0] - 2026-02-16
+
+### Features
+
+- **diagram command**: Generate Mermaid or D2 diagrams of the GCP resource hierarchy ([`c2d6c70`](https://github.com/tardigrde/gcpath/commit/c2d6c70))
+  - Supports `--format mermaid` (default) and `--format d2` output formats
+  - Scoped diagram generation via resource argument (e.g. `gcpath diagram folders/123`)
+  - `--output` flag to write diagram to a file
+  - `--level` depth limiting, `--ids` to show resource names in labels
+
+### Refactoring
+
+- Deduplicated `tree` and `diagram` CLI setup into shared `_prepare_hierarchy_command()` helper ([`387ecbc`](https://github.com/tardigrde/gcpath/commit/387ecbc))
+- Replaced `hasattr`-based ternaries with explicit `isinstance` checks in formatters
+- Added `Hierarchy` type annotations to all formatter functions (replacing `Any`)
+
+---
+
+**Detailed Changes**: [v0.3.0...v0.4.0](https://github.com/tardigrde/gcpath/compare/v0.3.0...v0.4.0)
+
 ## [v0.3.0] - 2026-02-08
 
 ### Bug Fixes

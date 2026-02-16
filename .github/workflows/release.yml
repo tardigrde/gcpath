@@ -38,8 +38,8 @@ jobs:
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
-        uv run --with python-semantic-release semantic-release version
-        uv run --with python-semantic-release semantic-release publish
+        uv run --with 'python-semantic-release>=9,<10' semantic-release version
+        uv run --with 'python-semantic-release>=9,<10' semantic-release publish
     
     - name: Build package
       run: uv build
