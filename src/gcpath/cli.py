@@ -159,6 +159,9 @@ def cache_status() -> None:
     if info.version is not None:
         table.add_row("Version", str(info.version))
 
+    if info.scope is not None:
+        table.add_row("Scope", info.scope)
+
     table.add_row("Organizations", str(info.org_count))
     table.add_row("Folders", str(info.folder_count))
     table.add_row("Projects", str(info.project_count))
@@ -241,13 +244,20 @@ def _load_hierarchy(
 ) -> Hierarchy:
     """Helper to load hierarchy with cache orchestration.
 
-    Cache is only used for unscoped loads. On cache hit, the age is displayed
-    and filter_orgs is applied post-load. On cache miss, the hierarchy is
-    loaded from GCP APIs and written to cache.
+    Cache is used for unscoped loads and entrypoint-scoped loads.
+    One-off queries (scope_resource set but != entrypoint) are not cached.
+    Cacheable loads always use recursive=True so the cache contains complete data.
     """
-    # Try cache for unscoped loads
-    if not force_refresh and not scope_resource:
-        cached_hierarchy = read_cache()
+    entrypoint = ctx.obj.get("entrypoint")
+
+    # Cacheable: unscoped OR scope matches entrypoint
+    is_cacheable = (scope_resource is None) or (
+        entrypoint is not None and scope_resource == entrypoint
+    )
+    cache_scope = scope_resource if is_cacheable and scope_resource else None
+
+    if is_cacheable and not force_refresh:
+        cached_hierarchy = read_cache(scope=cache_scope)
         if cached_hierarchy is not None:
             info = get_cache_info()
             age_str = _format_age(info.age_seconds) if info.age_seconds else "unknown"
@@ -262,16 +272,18 @@ def _load_hierarchy(
                 ]
             return cached_hierarchy
 
+    # Always recursive for cacheable loads (complete data for all commands)
+    effective_recursive = True if is_cacheable else recursive
+
     hierarchy = Hierarchy.load(
         display_names=filter_orgs,
         via_resource_manager=not ctx.obj["use_asset_api"],
         scope_resource=scope_resource,
-        recursive=recursive,
+        recursive=effective_recursive,
     )
 
-    # Write cache for unscoped loads
-    if not scope_resource:
-        write_cache(hierarchy)
+    if is_cacheable:
+        write_cache(hierarchy, scope=cache_scope)
 
     return hierarchy
 

@@ -330,3 +330,124 @@ def test_get_cache_info_stale(mock_cache_file):
     assert info.fresh is False
     assert info.age_seconds is not None
     assert info.size_bytes == 512
+
+
+# --- Scope-related tests ---
+
+
+def test_hierarchy_to_dict_with_scope(mock_hierarchy):
+    """Scope field is serialized in the dict."""
+    result = _hierarchy_to_dict(mock_hierarchy, scope="folders/100")
+    assert result["scope"] == "folders/100"
+
+
+def test_hierarchy_to_dict_without_scope(mock_hierarchy):
+    """Scope defaults to None when not provided."""
+    result = _hierarchy_to_dict(mock_hierarchy)
+    assert result["scope"] is None
+
+
+@patch("gcpath.cache.CACHE_FILE")
+@patch("builtins.open")
+@patch("json.load")
+def test_read_cache_scope_match(mock_json_load, mock_open, mock_cache_file):
+    """Returns hierarchy when scope matches."""
+    mock_cache_file.exists.return_value = True
+    mock_json_load.return_value = {
+        "version": CACHE_VERSION,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "scope": "folders/100",
+        "organizations": [],
+        "organizationless_projects": [],
+    }
+
+    hierarchy = read_cache(scope="folders/100")
+    assert isinstance(hierarchy, Hierarchy)
+
+
+@patch("gcpath.cache.CACHE_FILE")
+@patch("builtins.open")
+@patch("json.load")
+def test_read_cache_scope_mismatch(mock_json_load, mock_open, mock_cache_file):
+    """Returns None when scope differs."""
+    mock_cache_file.exists.return_value = True
+    mock_json_load.return_value = {
+        "version": CACHE_VERSION,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "scope": "folders/100",
+        "organizations": [],
+        "organizationless_projects": [],
+    }
+
+    hierarchy = read_cache(scope="folders/200")
+    assert hierarchy is None
+
+
+@patch("gcpath.cache.CACHE_FILE")
+@patch("builtins.open")
+@patch("json.load")
+def test_read_cache_old_cache_no_scope_field(mock_json_load, mock_open, mock_cache_file):
+    """Old cache without scope field works for unscoped loads (scope=None)."""
+    mock_cache_file.exists.return_value = True
+    mock_json_load.return_value = {
+        "version": CACHE_VERSION,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "organizations": [],
+        "organizationless_projects": [],
+    }
+
+    # scope=None matches data.get("scope") -> None
+    hierarchy = read_cache(scope=None)
+    assert isinstance(hierarchy, Hierarchy)
+
+
+@patch("gcpath.cache.CACHE_FILE")
+@patch("builtins.open")
+@patch("json.load")
+def test_read_cache_old_cache_rejected_for_scoped(mock_json_load, mock_open, mock_cache_file):
+    """Old cache without scope field is rejected for scoped loads."""
+    mock_cache_file.exists.return_value = True
+    mock_json_load.return_value = {
+        "version": CACHE_VERSION,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "organizations": [],
+        "organizationless_projects": [],
+    }
+
+    hierarchy = read_cache(scope="folders/100")
+    assert hierarchy is None
+
+
+@patch("gcpath.cache.CACHE_DIR")
+@patch("gcpath.cache.CACHE_FILE")
+@patch("builtins.open")
+@patch("json.dump")
+def test_write_cache_with_scope(
+    mock_json_dump, mock_open, mock_cache_file, mock_cache_dir, mock_hierarchy
+):
+    """Scope is passed through to serialization."""
+    write_cache(mock_hierarchy, scope="folders/100")
+    mock_json_dump.assert_called_once()
+    args, _ = mock_json_dump.call_args
+    data = args[0]
+    assert data["scope"] == "folders/100"
+
+
+@patch("gcpath.cache.CACHE_FILE")
+def test_get_cache_info_with_scope(mock_cache_file):
+    """CacheInfo includes scope from cache data."""
+    mock_cache_file.exists.return_value = True
+    mock_cache_file.stat.return_value.st_size = 1024
+
+    test_data = {
+        "version": CACHE_VERSION,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "scope": "folders/100",
+        "organizations": [],
+        "organizationless_projects": [],
+    }
+
+    with patch("gcpath.cache.read_cache_raw", return_value=test_data):
+        info = get_cache_info()
+
+    assert info.scope == "folders/100"

@@ -12,8 +12,8 @@ runner = CliRunner()
 @pytest.fixture(autouse=True)
 def mock_read_cache():
     """Prevent tests from hitting the real cache file."""
-    with patch("gcpath.cli.read_cache", return_value=None):
-        yield
+    with patch("gcpath.cli.read_cache", return_value=None) as m:
+        yield m
 
 
 @pytest.fixture
@@ -673,3 +673,98 @@ def test_name_with_entrypoint(mock_load, mock_get_ep, mock_hierarchy):
     mock_load.assert_called_once()
     call_kwargs = mock_load.call_args
     assert call_kwargs[1]["scope_resource"] == "folders/100"
+
+
+# --- Entrypoint + cache interaction tests ---
+
+
+@patch("gcpath.cli.get_entrypoint", return_value="folders/100")
+@patch("gcpath.cli.write_cache")
+@patch("gcpath.core.Hierarchy.load")
+@patch("gcpath.cli.Hierarchy.resolve_ancestry")
+def test_ls_entrypoint_uses_cache(
+    mock_resolve, mock_load, mock_write, mock_get_ep, mock_hierarchy, mock_read_cache
+):
+    """Cache hit path: read_cache(scope='folders/100') returns data, Hierarchy.load not called."""
+    mock_read_cache.return_value = mock_hierarchy
+    mock_resolve.return_value = "//example.com/f1"
+
+    result = runner.invoke(app, ["ls"])
+    assert result.exit_code == 0
+    # read_cache should have been called with scope
+    mock_read_cache.assert_called_with(scope="folders/100")
+    # Hierarchy.load should NOT be called (cache hit)
+    mock_load.assert_not_called()
+
+
+@patch("gcpath.cli.get_entrypoint", return_value="folders/100")
+@patch("gcpath.cli.write_cache")
+@patch("gcpath.core.Hierarchy.load")
+@patch("gcpath.cli.Hierarchy.resolve_ancestry")
+def test_ls_entrypoint_writes_cache(
+    mock_resolve, mock_load, mock_write, mock_get_ep, mock_hierarchy, mock_read_cache
+):
+    """Cache miss path: write_cache(hierarchy, scope='folders/100') called."""
+    mock_read_cache.return_value = None
+    mock_load.return_value = mock_hierarchy
+    mock_resolve.return_value = "//example.com/f1"
+
+    result = runner.invoke(app, ["ls"])
+    assert result.exit_code == 0
+    mock_write.assert_called_once_with(mock_hierarchy, scope="folders/100")
+
+
+@patch("gcpath.cli.get_entrypoint", return_value="folders/100")
+@patch("gcpath.cli.write_cache")
+@patch("gcpath.core.Hierarchy.load")
+@patch("gcpath.cli.Hierarchy.resolve_ancestry")
+def test_ls_entrypoint_loads_recursively(
+    mock_resolve, mock_load, mock_write, mock_get_ep, mock_hierarchy, mock_read_cache
+):
+    """Hierarchy.load called with recursive=True even for non-recursive ls."""
+    mock_read_cache.return_value = None
+    mock_load.return_value = mock_hierarchy
+    mock_resolve.return_value = "//example.com/f1"
+
+    result = runner.invoke(app, ["ls"])  # default recursive=False
+    assert result.exit_code == 0
+    mock_load.assert_called_once()
+    call_kwargs = mock_load.call_args[1]
+    assert call_kwargs["recursive"] is True
+
+
+@patch("gcpath.cli.get_entrypoint", return_value="folders/100")
+@patch("gcpath.cli.write_cache")
+@patch("gcpath.core.Hierarchy.load")
+@patch("gcpath.cli.Hierarchy.resolve_ancestry")
+def test_ls_explicit_resource_not_cached(
+    mock_resolve, mock_load, mock_write, mock_get_ep, mock_hierarchy, mock_read_cache
+):
+    """Explicit resource != entrypoint: write_cache NOT called."""
+    mock_read_cache.return_value = None
+    mock_load.return_value = mock_hierarchy
+    mock_resolve.return_value = "//example.com/f1"
+
+    result = runner.invoke(app, ["ls", "folders/999"])
+    assert result.exit_code == 0
+    mock_write.assert_not_called()
+
+
+@patch("gcpath.cli.get_cache_info")
+def test_cache_status_shows_scope(mock_get_cache_info):
+    """Scope is displayed in cache status output."""
+    mock_get_cache_info.return_value = CacheInfo(
+        exists=True,
+        fresh=True,
+        age_seconds=300.0,
+        size_bytes=2048,
+        version=1,
+        org_count=1,
+        folder_count=5,
+        project_count=10,
+        scope="folders/100",
+    )
+    result = runner.invoke(app, ["cache", "status"])
+    assert result.exit_code == 0
+    assert "Scope" in result.stdout
+    assert "folders/100" in result.stdout
