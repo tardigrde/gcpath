@@ -1,6 +1,21 @@
 # CHANGELOG
 
 
+## v0.5.1 (2026-02-17)
+
+### Bug Fixes
+
+- Make cache scope-aware so entrypoint loads are cached
+  ([`c288a51`](https://github.com/tardigrde/gcpath/commit/c288a511e6157be7c70fc5b57d717454f5e87a5c))
+
+The cache was completely bypassed when an entrypoint was configured because _load_hierarchy() only
+  read/wrote cache when scope_resource was None. Now the cache stores which scope it was built for
+  and only serves hits when the scope matches, enabling instant subsequent commands with
+  entrypoints.
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+
+
 ## v0.5.0 (2026-02-16)
 
 ### Features
