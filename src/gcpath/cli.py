@@ -808,6 +808,70 @@ def diagram(
         handle_error(e)
 
 
+@app.command()
+def stats(
+    ctx: typer.Context,
+    resource: Annotated[
+        Optional[str],
+        typer.Argument(
+            help="Resource name (e.g. folders/123 or organizations/456) to scope statistics to."
+        ),
+    ] = None,
+    force_refresh: bool = typer.Option(
+        False,
+        "--force-refresh",
+        "-F",
+        help="Force a refresh of the cache from the GCP API",
+    ),
+) -> None:
+    """
+    Show statistics about folders and projects in a scope.
+    """
+    try:
+        ep = ctx.obj.get("entrypoint")
+        effective_resource = resource or ep
+
+        target_resource_name = None
+        if effective_resource:
+            if effective_resource.startswith("projects/"):
+                rprint(
+                    "[red]Error:[/red] 'stats' command does not support starting from a project."
+                )
+                raise typer.Exit(code=1)
+            if any(
+                effective_resource.startswith(p)
+                for p in ["organizations/", "folders/"]
+            ):
+                target_resource_name = effective_resource
+
+        hierarchy = _load_hierarchy(
+            ctx,
+            scope_resource=target_resource_name,
+            recursive=True,
+            force_refresh=force_refresh,
+        )
+
+        folder_count = len(hierarchy.folders)
+        project_count = len(hierarchy.projects)
+
+        scope_label = target_resource_name or "all organizations"
+        rprint(f"[bold]Scope:[/bold] {scope_label}")
+
+        table = Table(show_header=False, box=None, padding=(0, 1))
+        table.add_column("Resource", style="bold")
+        table.add_column("Count", justify="right")
+
+        if not target_resource_name or target_resource_name.startswith("organizations/"):
+            table.add_row("Organizations", str(len(hierarchy.organizations)))
+        table.add_row("Folders", str(folder_count))
+        table.add_row("Projects", str(project_count))
+
+        console.print(table)
+
+    except Exception as e:
+        handle_error(e)
+
+
 @app.command(name="name")
 def get_resource_name(
     ctx: typer.Context,

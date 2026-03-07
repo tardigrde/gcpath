@@ -289,6 +289,50 @@ def test_ls_no_resources_message(mock_load):
     pass
 
 
+# --- Stats command tests ---
+
+
+@patch("gcpath.core.Hierarchy.load")
+def test_stats_command(mock_load, mock_hierarchy):
+    """Test stats command shows folder and project counts."""
+    mock_load.return_value = mock_hierarchy
+    result = runner.invoke(app, ["stats"])
+    assert result.exit_code == 0
+    assert "Folders" in result.stdout
+    assert "Projects" in result.stdout
+    assert "Organizations" in result.stdout
+
+
+@patch("gcpath.core.Hierarchy.load")
+def test_stats_command_scoped_org(mock_load, mock_hierarchy):
+    """Test stats command scoped to an organization."""
+    mock_load.return_value = mock_hierarchy
+    result = runner.invoke(app, ["stats", "organizations/123"])
+    assert result.exit_code == 0
+    assert "organizations/123" in result.stdout
+    assert "Folders" in result.stdout
+    assert "Projects" in result.stdout
+    assert "Organizations" in result.stdout
+
+
+@patch("gcpath.core.Hierarchy.load")
+def test_stats_command_scoped_folder(mock_load, mock_hierarchy):
+    """Test stats command scoped to a folder omits organization row."""
+    mock_load.return_value = mock_hierarchy
+    result = runner.invoke(app, ["stats", "folders/1"])
+    assert result.exit_code == 0
+    assert "folders/1" in result.stdout
+    assert "Folders" in result.stdout
+    assert "Projects" in result.stdout
+    assert "Organizations" not in result.stdout
+
+
+def test_stats_project_scope_error():
+    """Test stats command rejects project scope."""
+    result = runner.invoke(app, ["stats", "projects/123"])
+    assert result.exit_code == 1
+
+
 def test_handle_error_gcpath_error():
     from gcpath.cli import handle_error
     import typer
