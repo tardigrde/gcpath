@@ -73,6 +73,125 @@ gcpath diagram
 gcpath diagram folders/123456789 --format d2
 ```
 
+## Python API
+
+In addition to the CLI, `gcpath` can be used as a Python library. All core classes and functions are importable directly from the `gcpath` package.
+
+### Installation
+
+```bash
+pip install gcpath
+# or
+uv add gcpath
+```
+
+### Basic Usage
+
+```python
+from gcpath import Hierarchy
+
+# Load the full GCP resource hierarchy
+# The faster Cloud Asset API is recommended (requires `cloudasset.googleapis.com` enabled).
+hierarchy = Hierarchy.load(via_resource_manager=False)
+
+# Alternatively, use the default Resource Manager API. It's slower but has simpler permissions.
+# hierarchy = Hierarchy.load()
+
+# Iterate over organizations, folders, and projects
+for org_node in hierarchy.organizations:
+    print(org_node.organization.display_name)  # e.g. "example.com"
+
+for folder in hierarchy.folders:
+    print(folder.path)  # e.g. "//example.com/engineering/backend"
+
+for project in hierarchy.projects:
+    print(project.path, project.project_id)  # e.g. "//example.com/my-project", "my-project"
+```
+
+### Path ↔ Resource Name Conversion
+
+```python
+from gcpath import Hierarchy
+
+hierarchy = Hierarchy.load(via_resource_manager=False)
+
+# Path → resource name
+resource_name = hierarchy.get_resource_name("//example.com/engineering/backend")
+print(resource_name)  # e.g. "folders/123456789"
+
+# Resource name → path
+path = hierarchy.get_path_by_resource_name("folders/123456789")
+print(path)  # e.g. "//example.com/engineering/backend"
+
+# Works for organizations and projects too
+org_path = hierarchy.get_path_by_resource_name("organizations/111111111")
+project_path = hierarchy.get_path_by_resource_name("projects/my-project-id")
+```
+
+### Lightweight Single-Resource Lookup
+
+When you only need the path for one resource, `resolve_ancestry()` traverses up the hierarchy via individual API calls — no full hierarchy load required:
+
+```python
+from gcpath import Hierarchy
+
+path = Hierarchy.resolve_ancestry("folders/123456789")
+print(path)  # e.g. "//example.com/engineering/backend"
+```
+
+### Scoped Loading
+
+For large hierarchies or restricted access, scope the load to a specific folder or organization:
+
+```python
+from gcpath import Hierarchy
+
+# Load only the subtree under a specific folder (recursive)
+hierarchy = Hierarchy.load(
+    via_resource_manager=False,
+    scope_resource="folders/123456789",
+    recursive=True,
+)
+
+# Load only direct children of a folder
+hierarchy = Hierarchy.load(
+    via_resource_manager=False,
+    scope_resource="folders/123456789",
+    recursive=False,
+)
+```
+
+### Error Handling
+
+```python
+from gcpath import Hierarchy, GCPathError, ResourceNotFoundError, PathParsingError
+
+try:
+    hierarchy = Hierarchy.load(via_resource_manager=False)
+    name = hierarchy.get_resource_name("//example.com/nonexistent/path")
+except ResourceNotFoundError as e:
+    print(f"Resource not found: {e}")
+except PathParsingError as e:
+    print(f"Invalid path format: {e}")
+except GCPathError as e:
+    print(f"gcpath error: {e}")
+```
+
+### API Reference
+
+| Symbol | Description |
+|---|---|
+| `Hierarchy` | Main class. Load with `Hierarchy.load()`, then query with `get_resource_name()`, `get_path_by_resource_name()`. |
+| `Hierarchy.load()` | Load the full hierarchy from GCP. Key params: `via_resource_manager`, `scope_resource`, `recursive`. |
+| `Hierarchy.resolve_ancestry()` | Lightweight static method to resolve a single resource name to path. |
+| `OrganizationNode` | Represents a GCP organization with its folders. |
+| `Folder` | Represents a GCP folder. Has `.path`, `.name`, and `.display_name` attributes. |
+| `Project` | Represents a GCP project. Has `.path`, `.project_id`, `.name`, and `.display_name` attributes. |
+| `GCPathError` | Base exception class for all gcpath errors. |
+| `ResourceNotFoundError` | Raised when a resource cannot be found in the hierarchy. |
+| `PathParsingError` | Raised when a path string cannot be parsed. |
+| `path_escape()` | URL-encodes a display name for safe use in paths. |
+
 ## Usage
 
 ### List Resources (`ls`)
