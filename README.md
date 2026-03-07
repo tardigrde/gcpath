@@ -268,7 +268,7 @@ gcpath -e folders/987654321 tree
 
 ## Python API
 
-In addition to the CLI, `gcpath` can be used as a Python library. Install with `pip install gcpath` or `uv add gcpath`.
+In addition to the CLI, `gcpath` can be used as a Python library. See the [Installation](#installation) section; for `uv` projects, you may prefer `uv add gcpath`.
 
 ### Basic Usage
 
