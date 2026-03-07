@@ -91,11 +91,11 @@ uv add gcpath
 from gcpath import Hierarchy
 
 # Load the full GCP resource hierarchy
-# Default: Resource Manager API (simpler permissions, no extra API to enable)
-hierarchy = Hierarchy.load()
-
-# Or use the faster Cloud Asset API (requires cloudasset.googleapis.com enabled)
+# The faster Cloud Asset API is recommended (requires `cloudasset.googleapis.com` enabled).
 hierarchy = Hierarchy.load(via_resource_manager=False)
+
+# Alternatively, use the default Resource Manager API. It's slower but has simpler permissions.
+# hierarchy = Hierarchy.load()
 
 # Iterate over organizations, folders, and projects
 for org_node in hierarchy.organizations:
@@ -185,8 +185,8 @@ except GCPathError as e:
 | `Hierarchy.load()` | Load the full hierarchy from GCP. Key params: `via_resource_manager`, `scope_resource`, `recursive`. |
 | `Hierarchy.resolve_ancestry()` | Lightweight static method to resolve a single resource name to path. |
 | `OrganizationNode` | Represents a GCP organization with its folders. |
-| `Folder` | Represents a GCP folder. Has `.path` and `.name` attributes. |
-| `Project` | Represents a GCP project. Has `.path`, `.project_id`, and `.name` attributes. |
+| `Folder` | Represents a GCP folder. Has `.path`, `.name`, and `.display_name` attributes. |
+| `Project` | Represents a GCP project. Has `.path`, `.project_id`, `.name`, and `.display_name` attributes. |
 | `GCPathError` | Base exception class for all gcpath errors. |
 | `ResourceNotFoundError` | Raised when a resource cannot be found in the hierarchy. |
 | `PathParsingError` | Raised when a path string cannot be parsed. |
