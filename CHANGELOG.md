@@ -1,6 +1,46 @@
 # CHANGELOG
 
 
+## v0.6.0 (2026-03-07)
+
+### Chores
+
+- **deps**: Bump protobuf in the uv group across 1 directory
+  ([`a21b624`](https://github.com/tardigrde/gcpath/commit/a21b6246e8f4253ad8693e1afaa21dd5d19b8a05))
+
+Bumps the uv group with 1 update in the / directory:
+  [protobuf](https://github.com/protocolbuffers/protobuf).
+
+Updates `protobuf` from 6.33.2 to 6.33.5 - [Release
+  notes](https://github.com/protocolbuffers/protobuf/releases) -
+  [Commits](https://github.com/protocolbuffers/protobuf/commits)
+
+--- updated-dependencies: - dependency-name: protobuf dependency-version: 6.33.5
+
+dependency-type: indirect
+
+dependency-group: uv ...
+
+Signed-off-by: dependabot[bot] <support@github.com>
+
+- **deps**: Configure Dependabot to use pip for updates
+  ([`322a771`](https://github.com/tardigrde/gcpath/commit/322a771d26a43f031e86de2afe6ae51a667f935f))
+
+### Features
+
+- Add Python API documentation and library usage examples
+  ([`aa65f59`](https://github.com/tardigrde/gcpath/commit/aa65f59ed96ad13bd5f8a6475d5651adac3c260e))
+
+- Add comprehensive "Python API" section to README.md covering: - Basic usage with Hierarchy.load()
+  (both RM and Asset API modes) - Path ↔ resource name conversion methods - Lightweight
+  single-resource lookup via Hierarchy.resolve_ancestry() - Scoped loading for large or restricted
+  hierarchies - Error handling with GCPathError, ResourceNotFoundError, PathParsingError - API
+  reference table for all public symbols - Update pyproject.toml description to reflect library
+  capability - Add "Topic :: Software Development :: Libraries :: Python Modules" classifier
+
+https://claude.ai/code/session_01M3eDcpXVjivW3zbCXnvbmx
+
+
 ## v0.5.1 (2026-02-17)
 
 ### Bug Fixes
