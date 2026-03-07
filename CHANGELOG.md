@@ -1,6 +1,29 @@
 # CHANGELOG
 
 
+## v0.6.1 (2026-03-07)
+
+### Bug Fixes
+
+- **deps**: Bump pyasn1 to 0.6.2 and urllib3 to 2.6.3
+  ([`bd4c47c`](https://github.com/tardigrde/gcpath/commit/bd4c47c9a44fc4cc9e35b1d3ed4f613f1b9244fb))
+
+Fixes CVE-2026-23490 (pyasn1 OID decoder issue) and CVE-2026-21441 (urllib3 decompression-bomb
+  bypass, High severity).
+
+Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+
+### Documentation
+
+- Refocus README on CLI usage, add pipx install, remove roadmap
+  ([`cb03af6`](https://github.com/tardigrde/gcpath/commit/cb03af699a6a9daf4ba7533b0f6b2bc5a47367e6))
+
+Move Python API section to the end as a secondary use case. Add pipx as a recommended installation
+  option alongside pip and uv. Remove the roadmap section.
+
+https://claude.ai/code/session_01E5TmezTsqmhrkBS6HdVSL9
+
+
 ## v0.6.0 (2026-03-07)
 
 ### Chores
