@@ -1,6 +1,53 @@
 # CHANGELOG
 
 
+## v0.7.0 (2026-03-09)
+
+### Bug Fixes
+
+- Validate resource format and escape rich markup in stats command
+  ([`7728b16`](https://github.com/tardigrde/gcpath/commit/7728b162ecb5bc4b5f2c088afd7373b6ba866efb))
+
+- Add explicit else branch for invalid resource formats (not organizations/ or folders/) with a
+  clear "Invalid resource format" error message instead of silently loading the full hierarchy -
+  Escape user-supplied scope label with rich.markup.escape to prevent markup injection via crafted
+  resource name arguments - Add test_stats_invalid_scope_error test case
+
+https://claude.ai/code/session_01JxDqkYXvoag1R6LWBV8Mtq
+
+### Chores
+
+- **deps**: Bump protobuf in the uv group across 1 directory
+  ([`176815d`](https://github.com/tardigrde/gcpath/commit/176815d8f01d376bd61587091610efedf5f87148))
+
+Bumps the uv group with 1 update in the / directory:
+  [protobuf](https://github.com/protocolbuffers/protobuf).
+
+Updates `protobuf` from 6.33.2 to 6.33.5 - [Release
+  notes](https://github.com/protocolbuffers/protobuf/releases) -
+  [Commits](https://github.com/protocolbuffers/protobuf/commits)
+
+--- updated-dependencies: - dependency-name: protobuf dependency-version: 6.33.5
+
+dependency-type: indirect
+
+dependency-group: uv ...
+
+Signed-off-by: dependabot[bot] <support@github.com>
+
+### Features
+
+- Add stats subcommand for folder/project counts in a scope
+  ([`9a28f93`](https://github.com/tardigrde/gcpath/commit/9a28f93d21df458237e1c51f9b1bc101b8bf05a4))
+
+Adds a new `stats` CLI subcommand that reports the number of organizations, folders, and projects
+  within a given scope (organization or folder). When no scope is provided, it reports totals across
+  all accessible organizations. Projects are rejected as the starting scope since they are leaf
+  nodes.
+
+https://claude.ai/code/session_01JxDqkYXvoag1R6LWBV8Mtq
+
+
 ## v0.6.1 (2026-03-07)
 
 ### Bug Fixes
