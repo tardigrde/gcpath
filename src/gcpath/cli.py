@@ -6,6 +6,7 @@ from urllib.parse import unquote
 from typing_extensions import Annotated
 from rich.console import Console
 from rich import print as rprint
+from rich.markup import escape
 from google.api_core import exceptions as gcp_exceptions
 
 
@@ -838,11 +839,17 @@ def stats(
                     "[red]Error:[/red] 'stats' command does not support starting from a project."
                 )
                 raise typer.Exit(code=1)
-            if any(
+            elif any(
                 effective_resource.startswith(p)
                 for p in ["organizations/", "folders/"]
             ):
                 target_resource_name = effective_resource
+            else:
+                rprint(
+                    f"[red]Error:[/red] Invalid resource format '{escape(effective_resource)}'. "
+                    f"Expected 'organizations/...' or 'folders/...'."
+                )
+                raise typer.Exit(code=1)
 
         hierarchy = _load_hierarchy(
             ctx,
@@ -855,7 +862,7 @@ def stats(
         project_count = len(hierarchy.projects)
 
         scope_label = target_resource_name or "all organizations"
-        rprint(f"[bold]Scope:[/bold] {scope_label}")
+        rprint(f"[bold]Scope:[/bold] {escape(scope_label)}")
 
         table = Table(show_header=False, box=None, padding=(0, 1))
         table.add_column("Resource", style="bold")

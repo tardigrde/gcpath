@@ -333,6 +333,13 @@ def test_stats_project_scope_error():
     assert result.exit_code == 1
 
 
+def test_stats_invalid_scope_error():
+    """Test stats command rejects invalid scope."""
+    result = runner.invoke(app, ["stats", "invalid/scope"])
+    assert result.exit_code == 1
+    assert "Invalid resource format" in result.output
+
+
 def test_handle_error_gcpath_error():
     from gcpath.cli import handle_error
     import typer
