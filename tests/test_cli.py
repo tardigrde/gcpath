@@ -286,7 +286,7 @@ def test_ls_no_resources_message(mock_load):
     # Depending on implementation it might print something or just empty list now with organizations/projects structure
     # My current implementation of ls doesn't have the specific "No resources found" msg anymore, it just prints what it finds.
     # But let's verify it doesn't crash.
-    pass
+    assert result.exception is None
 
 
 def test_handle_error_gcpath_error():

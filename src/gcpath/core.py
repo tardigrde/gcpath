@@ -515,18 +515,21 @@ class Hierarchy:
         resource_path = "/" + parts[1] if len(parts) > 1 else "/"
         return org_name, resource_path
 
+    def _find_orgless_project(self, path: str) -> str:
+        """Find and return the resource name for an organizationless project."""
+        for proj in self.projects:
+            if not proj.organization and proj.path == path:
+                return proj.name
+        raise ResourceNotFoundError(
+            f"Project path '{path}' not found in organizationless scope"
+        )
+
     def get_resource_name(self, path: str) -> str:
         org_name, resource_path = self._parse_path(path)
 
         # Reserved for organizationless scope
         if org_name == "_":
-            # Search in organizationless projects
-            for proj in self.projects:
-                if not proj.organization and proj.path == path:
-                    return proj.name
-            raise ResourceNotFoundError(
-                f"Project path '{path}' not found in organizationless scope"
-            )
+            return self._find_orgless_project(path)
 
         org_node = next(
             (o for o in self.organizations if o.organization.display_name == org_name),
@@ -673,7 +676,5 @@ class Hierarchy:
                 raise ResourceNotFoundError(
                     f"Resource not found: {current_resource_name}"
                 )
-            except Exception:
-                raise
 
         return "//?/" + "/".join(segments)  # Should not be reached ideally
