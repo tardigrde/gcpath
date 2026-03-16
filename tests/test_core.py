@@ -504,3 +504,49 @@ def test_folder_scope_fallback_not_triggered_without_folder(mock_rm):
     # Organization scope => no fallback
     h = Hierarchy.load(via_resource_manager=True, scope_resource="organizations/123")
     assert len(h.organizations) == 0
+
+
+def test_find_orgless_project_found():
+    """Test _find_orgless_project helper finds organizationless projects."""
+    orgless_project = Project(
+        name="projects/orgless",
+        project_id="orgless",
+        display_name="Orgless",
+        parent="external/0",
+        organization=None,
+        folder=None,
+    )
+    h = Hierarchy([], [orgless_project])
+
+    result = h._find_orgless_project("//_/Orgless")
+    assert result == "projects/orgless"
+
+
+def test_find_orgless_project_not_found():
+    """Test _find_orgless_project helper raises error when not found."""
+    h = Hierarchy([], [])
+
+    with pytest.raises(ResourceNotFoundError, match="not found in organizationless scope"):
+        h._find_orgless_project("//_/NonExistent")
+
+
+def test_find_orgless_project_skips_org_projects():
+    """Test _find_orgless_project helper ignores projects with an organization."""
+    org_proto = resourcemanager_v3.Organization(
+        name="organizations/123", display_name="example.com"
+    )
+    org_node = OrganizationNode(organization=org_proto)
+
+    org_project = Project(
+        name="projects/org-project",
+        project_id="org-project",
+        display_name="OrgProject",
+        parent="organizations/123",
+        organization=org_node,
+        folder=None,
+    )
+    h = Hierarchy([org_node], [org_project])
+
+    # Should not find org project via _find_orgless_project
+    with pytest.raises(ResourceNotFoundError):
+        h._find_orgless_project("//example.com/OrgProject")

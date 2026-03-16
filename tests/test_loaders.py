@@ -9,6 +9,7 @@ from gcpath.loaders import (
     load_folders_asset,
     load_projects_asset,
     load_organizationless_projects,
+    _build_single_ancestor_chain,
 )
 from google.cloud import resourcemanager_v3
 
@@ -553,3 +554,71 @@ def test_load_organizationless_projects(mock_proj_cls):
     assert projects[0].display_name == "P Orgless"
     assert projects[0].organization is None
     assert projects[0].folder is None
+
+
+# Test _build_single_ancestor_chain helper
+def test_build_single_ancestor_chain_simple(mock_org_node):
+    """Test building ancestor chain for a folder with folder parent."""
+    folder = Folder(
+        name="folders/child",
+        display_name="child",
+        ancestors=["folders/child"],
+        organization=mock_org_node,
+        parent="folders/parent",
+    )
+    parent_folder = Folder(
+        name="folders/parent",
+        display_name="parent",
+        ancestors=["folders/parent", "organizations/123"],
+        organization=mock_org_node,
+        parent="organizations/123",
+    )
+    folders = {"folders/child": folder, "folders/parent": parent_folder}
+
+    ancestors = _build_single_ancestor_chain(folder, folders, "organizations/123")
+
+    assert ancestors == ["folders/child", "folders/parent", "organizations/123"]
+
+
+def test_build_single_ancestor_chain_circular(mock_org_node):
+    """Test that circular references are detected and handled."""
+    folder = Folder(
+        name="folders/a",
+        display_name="a",
+        ancestors=["folders/a"],
+        organization=mock_org_node,
+        parent="folders/b",
+    )
+    # Create circular reference: b's parent is a
+    folder_b = Folder(
+        name="folders/b",
+        display_name="b",
+        ancestors=["folders/b"],
+        organization=mock_org_node,
+        parent="folders/a",
+    )
+    folders = {"folders/a": folder, "folders/b": folder_b}
+
+    ancestors = _build_single_ancestor_chain(folder, folders, "organizations/123")
+
+    # Should stop when circular reference detected
+    assert "folders/a" in ancestors
+    assert "folders/b" in ancestors
+    assert ancestors[-1] == "organizations/123"
+
+
+def test_build_single_ancestor_chain_missing_parent(mock_org_node):
+    """Test ancestor chain when parent folder is not in the folders dict."""
+    folder = Folder(
+        name="folders/child",
+        display_name="child",
+        ancestors=["folders/child"],
+        organization=mock_org_node,
+        parent="folders/missing",
+    )
+    folders = {"folders/child": folder}
+
+    ancestors = _build_single_ancestor_chain(folder, folders, "organizations/123")
+
+    # Missing parent is added, then root is appended
+    assert ancestors == ["folders/child", "folders/missing", "organizations/123"]
