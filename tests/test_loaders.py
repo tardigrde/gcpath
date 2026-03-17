@@ -9,6 +9,7 @@ from gcpath.loaders import (
     load_folders_asset,
     load_projects_asset,
     load_organizationless_projects,
+    _build_single_ancestor_chain,
 )
 from google.cloud import resourcemanager_v3
 
@@ -553,3 +554,374 @@ def test_load_organizationless_projects(mock_proj_cls):
     assert projects[0].display_name == "P Orgless"
     assert projects[0].organization is None
     assert projects[0].folder is None
+
+
+# Test _build_single_ancestor_chain helper
+def test_build_single_ancestor_chain_simple(mock_org_node):
+    """Test building ancestor chain for a folder with folder parent."""
+    folder = Folder(
+        name="folders/child",
+        display_name="child",
+        ancestors=["folders/child"],
+        organization=mock_org_node,
+        parent="folders/parent",
+    )
+    parent_folder = Folder(
+        name="folders/parent",
+        display_name="parent",
+        ancestors=["folders/parent", "organizations/123"],
+        organization=mock_org_node,
+        parent="organizations/123",
+    )
+    folders = {"folders/child": folder, "folders/parent": parent_folder}
+
+    ancestors = _build_single_ancestor_chain(folder, folders, "organizations/123")
+
+    assert ancestors == ["folders/child", "folders/parent", "organizations/123"]
+
+
+def test_build_single_ancestor_chain_circular(mock_org_node):
+    """Test that circular references are detected and handled."""
+    folder = Folder(
+        name="folders/a",
+        display_name="a",
+        ancestors=["folders/a"],
+        organization=mock_org_node,
+        parent="folders/b",
+    )
+    # Create circular reference: b's parent is a
+    folder_b = Folder(
+        name="folders/b",
+        display_name="b",
+        ancestors=["folders/b"],
+        organization=mock_org_node,
+        parent="folders/a",
+    )
+    folders = {"folders/a": folder, "folders/b": folder_b}
+
+    ancestors = _build_single_ancestor_chain(folder, folders, "organizations/123")
+
+    # Should stop when circular reference detected
+    assert "folders/a" in ancestors
+    assert "folders/b" in ancestors
+    assert ancestors[-1] == "organizations/123"
+
+
+def test_build_single_ancestor_chain_missing_parent(mock_org_node):
+    """Test ancestor chain when parent folder is not in the folders dict."""
+    folder = Folder(
+        name="folders/child",
+        display_name="child",
+        ancestors=["folders/child"],
+        organization=mock_org_node,
+        parent="folders/missing",
+    )
+    folders = {"folders/child": folder}
+
+    ancestors = _build_single_ancestor_chain(folder, folders, "organizations/123")
+
+    # Missing parent is added, then root is appended
+    assert ancestors == ["folders/child", "folders/missing", "organizations/123"]
+
+
+@patch("google.cloud.asset_v1.AssetServiceClient")
+def test_load_folders_asset_no_parent_uses_parent_filter(mock_asset_client_cls, mock_org_node):
+    """Test that folders with no parent from API fall back to parent_filter."""
+    mock_client = mock_asset_client_cls.return_value
+
+    # Row with empty parent (None after parsing)
+    row = {
+        "f": [
+            {"v": "//cloudresourcemanager.googleapis.com/folders/10"},
+            {"v": "NoParentFolder"},
+            {"v": None},  # No parent from API
+            {"v": []},  # No ancestors
+        ]
+    }
+
+    mock_query_result = MagicMock()
+    mock_query_result.rows = [row]
+    mock_response = MagicMock()
+    mock_response.query_result = mock_query_result
+    mock_client.query_assets.return_value = mock_response
+
+    load_folders_asset(mock_org_node, parent_filter="folders/999")
+
+    assert "folders/10" in mock_org_node.folders
+    folder = mock_org_node.folders["folders/10"]
+    assert folder.parent == "folders/999"
+
+
+@patch("google.cloud.asset_v1.AssetServiceClient")
+def test_load_folders_asset_no_parent_no_filter_uses_root(mock_asset_client_cls, mock_org_node):
+    """Test that folders with no parent and no parent_filter fall back to root (org name)."""
+    mock_client = mock_asset_client_cls.return_value
+
+    row = {
+        "f": [
+            {"v": "//cloudresourcemanager.googleapis.com/folders/11"},
+            {"v": "RootFolder"},
+            {"v": None},  # No parent from API
+            {"v": []},  # No ancestors
+        ]
+    }
+
+    mock_query_result = MagicMock()
+    mock_query_result.rows = [row]
+    mock_response = MagicMock()
+    mock_response.query_result = mock_query_result
+    mock_client.query_assets.return_value = mock_response
+
+    load_folders_asset(mock_org_node)  # No parent_filter
+
+    assert "folders/11" in mock_org_node.folders
+    folder = mock_org_node.folders["folders/11"]
+    assert folder.parent == "organizations/123"
+
+
+@patch("google.cloud.asset_v1.AssetServiceClient")
+def test_load_projects_asset_no_parent_no_ancestors_with_filter(mock_asset_client_cls, mock_org_node):
+    """Test project with no parent and no ancestors falls back to parent_filter."""
+    mock_client = mock_asset_client_cls.return_value
+
+    row = {
+        "f": [
+            {"v": "//cloudresourcemanager.googleapis.com/projects/p-noanc"},
+            {"v": "100"},
+            {"v": "p-noanc"},
+            {"v": None},  # No parent struct
+            {"v": []},  # No ancestors
+        ]
+    }
+
+    mock_query_result = MagicMock()
+    mock_query_result.rows = [row]
+    mock_response = MagicMock()
+    mock_response.query_result = mock_query_result
+    mock_client.query_assets.return_value = mock_response
+
+    projects = load_projects_asset(mock_org_node, parent_filter="folders/500")
+
+    assert len(projects) == 1
+    assert projects[0].parent == "folders/500"
+
+
+@patch("google.cloud.asset_v1.AssetServiceClient")
+def test_load_projects_asset_no_parent_no_ancestors_no_filter(mock_asset_client_cls, mock_org_node):
+    """Test project with no parent and no ancestors falls back to org name."""
+    mock_client = mock_asset_client_cls.return_value
+
+    row = {
+        "f": [
+            {"v": "//cloudresourcemanager.googleapis.com/projects/p-bare"},
+            {"v": "101"},
+            {"v": "p-bare"},
+            {"v": None},  # No parent struct
+            {"v": []},  # No ancestors
+        ]
+    }
+
+    mock_query_result = MagicMock()
+    mock_query_result.rows = [row]
+    mock_response = MagicMock()
+    mock_response.query_result = mock_query_result
+    mock_client.query_assets.return_value = mock_response
+
+    projects = load_projects_asset(mock_org_node)  # No parent_filter
+
+    assert len(projects) == 1
+    assert projects[0].parent == "organizations/123"
+
+
+@patch("google.cloud.asset_v1.AssetServiceClient")
+def test_load_projects_asset_self_in_ancestors_with_more(mock_asset_client_cls, mock_org_node):
+    """Test project where ancestors[0] == name and len > 1 uses ancestors[1]."""
+    mock_client = mock_asset_client_cls.return_value
+
+    row = {
+        "f": [
+            {"v": "//cloudresourcemanager.googleapis.com/projects/p-self"},
+            {"v": "102"},
+            {"v": "p-self"},
+            {"v": None},  # No parent struct
+            {
+                "v": [
+                    {"v": "//cloudresourcemanager.googleapis.com/projects/p-self"},
+                    {"v": "//cloudresourcemanager.googleapis.com/folders/f2"},
+                    {"v": "//cloudresourcemanager.googleapis.com/organizations/123"},
+                ]
+            },
+        ]
+    }
+
+    mock_query_result = MagicMock()
+    mock_query_result.rows = [row]
+    mock_response = MagicMock()
+    mock_response.query_result = mock_query_result
+    mock_client.query_assets.return_value = mock_response
+
+    # Pre-populate a folder
+    mock_org_node.folders["folders/f2"] = Folder(
+        name="folders/f2",
+        display_name="f2",
+        ancestors=["folders/f2", "organizations/123"],
+        organization=mock_org_node,
+        parent="organizations/123",
+    )
+
+    projects = load_projects_asset(mock_org_node)
+
+    assert len(projects) == 1
+    assert projects[0].parent == "folders/f2"
+    assert projects[0].folder is not None
+
+
+@patch("google.cloud.asset_v1.AssetServiceClient")
+def test_load_projects_asset_self_in_ancestors_only_with_filter(mock_asset_client_cls, mock_org_node):
+    """Test project where ancestors has only self, falls back to parent_filter."""
+    mock_client = mock_asset_client_cls.return_value
+
+    row = {
+        "f": [
+            {"v": "//cloudresourcemanager.googleapis.com/projects/p-only"},
+            {"v": "103"},
+            {"v": "p-only"},
+            {"v": None},
+            {
+                "v": [
+                    {"v": "//cloudresourcemanager.googleapis.com/projects/p-only"},
+                ]
+            },
+        ]
+    }
+
+    mock_query_result = MagicMock()
+    mock_query_result.rows = [row]
+    mock_response = MagicMock()
+    mock_response.query_result = mock_query_result
+    mock_client.query_assets.return_value = mock_response
+
+    projects = load_projects_asset(mock_org_node, parent_filter="folders/600")
+
+    assert len(projects) == 1
+    assert projects[0].parent == "folders/600"
+
+
+@patch("google.cloud.asset_v1.AssetServiceClient")
+def test_load_projects_asset_self_in_ancestors_only_no_filter(mock_asset_client_cls, mock_org_node):
+    """Test project where ancestors has only self and no filter, falls back to org."""
+    mock_client = mock_asset_client_cls.return_value
+
+    row = {
+        "f": [
+            {"v": "//cloudresourcemanager.googleapis.com/projects/p-only2"},
+            {"v": "104"},
+            {"v": "p-only2"},
+            {"v": None},
+            {
+                "v": [
+                    {"v": "//cloudresourcemanager.googleapis.com/projects/p-only2"},
+                ]
+            },
+        ]
+    }
+
+    mock_query_result = MagicMock()
+    mock_query_result.rows = [row]
+    mock_response = MagicMock()
+    mock_response.query_result = mock_query_result
+    mock_client.query_assets.return_value = mock_response
+
+    projects = load_projects_asset(mock_org_node)  # No parent_filter
+
+    assert len(projects) == 1
+    assert projects[0].parent == "organizations/123"
+
+
+@patch("google.cloud.asset_v1.AssetServiceClient")
+def test_load_projects_asset_ancestors_first_not_self(mock_asset_client_cls, mock_org_node):
+    """Test project where ancestors[0] != name uses ancestors[0] as parent."""
+    mock_client = mock_asset_client_cls.return_value
+
+    row = {
+        "f": [
+            {"v": "//cloudresourcemanager.googleapis.com/projects/p-diff"},
+            {"v": "105"},
+            {"v": "p-diff"},
+            {"v": None},  # No parent struct
+            {
+                "v": [
+                    {"v": "//cloudresourcemanager.googleapis.com/folders/f3"},
+                    {"v": "//cloudresourcemanager.googleapis.com/organizations/123"},
+                ]
+            },
+        ]
+    }
+
+    mock_query_result = MagicMock()
+    mock_query_result.rows = [row]
+    mock_response = MagicMock()
+    mock_response.query_result = mock_query_result
+    mock_client.query_assets.return_value = mock_response
+
+    mock_org_node.folders["folders/f3"] = Folder(
+        name="folders/f3",
+        display_name="f3",
+        ancestors=["folders/f3", "organizations/123"],
+        organization=mock_org_node,
+        parent="organizations/123",
+    )
+
+    projects = load_projects_asset(mock_org_node)
+
+    assert len(projects) == 1
+    assert projects[0].parent == "folders/f3"
+    assert projects[0].folder is not None
+
+
+@patch("google.cloud.asset_v1.AssetServiceClient")
+def test_load_projects_asset_ancestors_first_not_self_with_filter(mock_asset_client_cls, mock_org_node):
+    """Test else branch with empty ancestors falls back to parent_filter."""
+    mock_client = mock_asset_client_cls.return_value
+
+    row = {
+        "f": [
+            {"v": "//cloudresourcemanager.googleapis.com/projects/p-else"},
+            {"v": "106"},
+            {"v": "p-else"},
+            {"v": None},
+            # Non-empty ancestors where first != name but we want to test elif parent_filter
+            # Actually, this branch has `if project_data["ancestors"]` which is True,
+            # so it takes ancestors[0]. To test the elif, need empty ancestors in the else branch.
+            # The else branch is entered when ancestors is non-empty AND ancestors[0] != name
+            # AND the previous elif condition (ancestors[0] == name) is False.
+            # So ancestors[0] will be used. To test elif/else in this branch,
+            # we need ancestors to be empty here... but that's the second branch (line 415).
+            # Let's just verify the else->if branch works.
+            {
+                "v": [
+                    {"v": "//cloudresourcemanager.googleapis.com/folders/f4"},
+                ]
+            },
+        ]
+    }
+
+    mock_query_result = MagicMock()
+    mock_query_result.rows = [row]
+    mock_response = MagicMock()
+    mock_response.query_result = mock_query_result
+    mock_client.query_assets.return_value = mock_response
+
+    mock_org_node.folders["folders/f4"] = Folder(
+        name="folders/f4",
+        display_name="f4",
+        ancestors=["folders/f4", "organizations/123"],
+        organization=mock_org_node,
+        parent="organizations/123",
+    )
+
+    projects = load_projects_asset(mock_org_node, parent_filter="folders/700")
+
+    assert len(projects) == 1
+    # ancestors[0] is folders/f4, so that wins over parent_filter
+    assert projects[0].parent == "folders/f4"

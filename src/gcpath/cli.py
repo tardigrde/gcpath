@@ -42,6 +42,13 @@ from gcpath.config import (
 )
 from rich.table import Table
 
+# Resource name prefixes
+_RESOURCE_PREFIX_PROJECTS = "projects/"
+_RESOURCE_PREFIX_FOLDERS = "folders/"
+_RESOURCE_PREFIX_ORGS = "organizations/"
+_RESOURCE_PREFIXES = (_RESOURCE_PREFIX_ORGS, _RESOURCE_PREFIX_FOLDERS, _RESOURCE_PREFIX_PROJECTS)
+_REFRESH_HELP = "Force a refresh of the cache from the GCP API"
+
 logger = logging.getLogger(__name__)
 
 app = typer.Typer(
@@ -236,6 +243,32 @@ def _clean_resolve_path(path: str) -> str:
     return path
 
 
+def _try_read_cache(
+    cache_scope: Optional[str],
+    filter_orgs: Optional[List[str]],
+) -> Optional[Hierarchy]:
+    """Try to read hierarchy from cache, applying org filter if needed.
+
+    Returns None if cache is not available.
+    """
+    cached_hierarchy = read_cache(scope=cache_scope)
+    if cached_hierarchy is None:
+        return None
+
+    info = get_cache_info()
+    age_str = _format_age(info.age_seconds) if info.age_seconds else "unknown"
+    rprint(f"[dim]Using cached data ({age_str} ago). Use -F to refresh.[/dim]")
+
+    # Apply org filter to cached data
+    if filter_orgs:
+        cached_hierarchy.organizations = [
+            o
+            for o in cached_hierarchy.organizations
+            if o.organization.display_name in filter_orgs
+        ]
+    return cached_hierarchy
+
+
 def _load_hierarchy(
     ctx: typer.Context,
     scope_resource: Optional[str],
@@ -258,20 +291,9 @@ def _load_hierarchy(
     cache_scope = scope_resource if is_cacheable and scope_resource else None
 
     if is_cacheable and not force_refresh:
-        cached_hierarchy = read_cache(scope=cache_scope)
-        if cached_hierarchy is not None:
-            info = get_cache_info()
-            age_str = _format_age(info.age_seconds) if info.age_seconds else "unknown"
-            rprint(f"[dim]Using cached data ({age_str} ago). Use -F to refresh.[/dim]")
-
-            # Apply org filter to cached data
-            if filter_orgs:
-                cached_hierarchy.organizations = [
-                    o
-                    for o in cached_hierarchy.organizations
-                    if o.organization.display_name in filter_orgs
-                ]
-            return cached_hierarchy
+        cached = _try_read_cache(cache_scope, filter_orgs)
+        if cached is not None:
+            return cached
 
     # Always recursive for cacheable loads (complete data for all commands)
     effective_recursive = True if is_cacheable else recursive
@@ -339,7 +361,7 @@ def _prepare_hierarchy_command(
 
     if effective_resource:
         logger.debug(f"{command_name} command: processing resource argument {effective_resource}")
-        if effective_resource.startswith("projects/"):
+        if effective_resource.startswith(_RESOURCE_PREFIX_PROJECTS):
             rprint(
                 f"[red]Error:[/red] '{command_name}' command does not support starting "
                 "from a project (projects are leaf nodes)."
@@ -355,8 +377,8 @@ def _prepare_hierarchy_command(
                 if path_parts:
                     target_org_name = unquote(path_parts[0])
 
-            if effective_resource.startswith("folders/") or effective_resource.startswith(
-                "organizations/"
+            if effective_resource.startswith(_RESOURCE_PREFIX_FOLDERS) or effective_resource.startswith(
+                _RESOURCE_PREFIX_ORGS
             ):
                 target_resource_name = effective_resource
         except Exception:
@@ -393,13 +415,13 @@ def _prepare_hierarchy_command(
         logger.debug(
             f"{command_name} command: looking for target resource {target_resource_name}"
         )
-        if target_resource_name.startswith("organizations/"):
+        if target_resource_name.startswith(_RESOURCE_PREFIX_ORGS):
             for o in hierarchy.organizations:
                 if o.organization.name == target_resource_name:
                     logger.debug(f"{command_name} command: found target organization")
                     nodes_to_process = [o]
                     break
-        elif target_resource_name.startswith("folders/"):
+        elif target_resource_name.startswith(_RESOURCE_PREFIX_FOLDERS):
             for o in hierarchy.organizations:
                 if target_resource_name in o.folders:
                     logger.debug(
@@ -485,7 +507,7 @@ def ls(
         False,
         "--force-refresh",
         "-F",
-        help="Force a refresh of the cache from the GCP API",
+        help=_REFRESH_HELP,
     ),
 ) -> None:
     """
@@ -503,7 +525,7 @@ def ls(
             # Check if it's already a GCP resource name
             if any(
                 effective_resource.startswith(p)
-                for p in ["organizations/", "folders/", "projects/"]
+                for p in _RESOURCE_PREFIXES
             ):
                 target_resource_name = effective_resource
                 try:
@@ -576,7 +598,7 @@ def ls(
             logger.debug(
                 f"ls command: targeting specific resource {target_resource_name}"
             )
-            if target_resource_name.startswith("projects/"):
+            if target_resource_name.startswith(_RESOURCE_PREFIX_PROJECTS):
                 # projects don't have children in this context
                 return
 
@@ -660,7 +682,7 @@ def tree(
         False,
         "--force-refresh",
         "-F",
-        help="Force a refresh of the cache from the GCP API",
+        help=_REFRESH_HELP,
     ),
 ) -> None:
     """
@@ -762,7 +784,7 @@ def diagram(
         False,
         "--force-refresh",
         "-F",
-        help="Force a refresh of the cache from the GCP API",
+        help=_REFRESH_HELP,
     ),
 ) -> None:
     """
@@ -892,7 +914,7 @@ def get_resource_name(
         False,
         "--force-refresh",
         "-F",
-        help="Force a refresh of the cache from the GCP API",
+        help=_REFRESH_HELP,
     ),
 ) -> None:
     """

@@ -286,7 +286,7 @@ def test_ls_no_resources_message(mock_load):
     # Depending on implementation it might print something or just empty list now with organizations/projects structure
     # My current implementation of ls doesn't have the specific "No resources found" msg anymore, it just prints what it finds.
     # But let's verify it doesn't crash.
-    pass
+    assert result.exception is None
 
 
 # --- Stats command tests ---
@@ -819,3 +819,49 @@ def test_cache_status_shows_scope(mock_get_cache_info):
     assert result.exit_code == 0
     assert "Scope" in result.stdout
     assert "folders/100" in result.stdout
+
+
+# --- _try_read_cache helper tests ---
+
+
+@patch("gcpath.cli.read_cache")
+@patch("gcpath.cli.get_cache_info")
+def test_try_read_cache_returns_none_on_miss(mock_get_info, mock_read_cache):
+    """Test _try_read_cache returns None when cache miss."""
+    from gcpath.cli import _try_read_cache
+
+    mock_read_cache.return_value = None
+
+    result = _try_read_cache(None, None)
+    assert result is None
+
+
+@patch("gcpath.cli.read_cache")
+@patch("gcpath.cli.get_cache_info")
+@patch("gcpath.cli.rprint")
+def test_try_read_cache_applies_org_filter(mock_rprint, mock_get_info, mock_read_cache):
+    """Test _try_read_cache applies org filter to cached data."""
+    from gcpath.cli import _try_read_cache
+
+    # Create mock hierarchy with two orgs
+    org1 = resourcemanager_v3.Organization(
+        name="organizations/1", display_name="org1.com"
+    )
+    org2 = resourcemanager_v3.Organization(
+        name="organizations/2", display_name="org2.com"
+    )
+    node1 = OrganizationNode(organization=org1)
+    node2 = OrganizationNode(organization=org2)
+    mock_hierarchy = Hierarchy([node1, node2], [])
+
+    mock_read_cache.return_value = mock_hierarchy
+    mock_get_info.return_value = CacheInfo(
+        exists=True, fresh=True, age_seconds=60.0,
+        size_bytes=100, version=1, org_count=2, folder_count=0, project_count=0
+    )
+
+    # Filter to only org1
+    result = _try_read_cache(None, ["org1.com"])
+
+    assert len(result.organizations) == 1
+    assert result.organizations[0].organization.display_name == "org1.com"

@@ -5,7 +5,7 @@ This module handles loading resources from GCP via Resource Manager and Asset AP
 """
 
 import logging
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from google.cloud import resourcemanager_v3, asset_v1  # type: ignore
 from google.api_core import exceptions
@@ -17,6 +17,8 @@ from gcpath.parsers import (
 )
 
 logger = logging.getLogger(__name__)
+
+_FOLDER_PREFIX = "folders/"
 
 
 def build_folder_sql_query(
@@ -129,6 +131,43 @@ def load_folders_rm(node, root_parent: str):
     recurse(root_parent, [root_parent])
 
 
+def _build_single_ancestor_chain(folder, folders: Dict, root: str) -> List[str]:
+    """Build the complete ancestor chain for a single folder.
+
+    Args:
+        folder: The folder to build ancestors for
+        folders: Dict of all folders by name
+        root: Root ancestor to append at the end
+
+    Returns:
+        List of ancestor resource names from folder to root
+    """
+    ancestors = [folder.name]
+    current_parent = folder.parent
+    visited = {folder.name}  # Prevent infinite loops
+
+    while current_parent and current_parent.startswith(_FOLDER_PREFIX):
+        if current_parent in visited:
+            logger.warning(f"Circular parent reference detected for {folder.name}")
+            break
+        visited.add(current_parent)
+        ancestors.append(current_parent)
+
+        # Look up the parent to continue the chain
+        if current_parent in folders:
+            parent_folder = folders[current_parent]
+            current_parent = parent_folder.parent
+        else:
+            # Parent not in folders, stop here
+            break
+
+    # Add root at the end
+    if not ancestors[-1].startswith("organizations/") and ancestors[-1] != root:
+        ancestors.append(root)
+
+    return ancestors
+
+
 def fix_folder_ancestors(node, root_ancestor: Optional[str] = None):
     """Fix folder ancestors by traversing parent chain.
 
@@ -141,34 +180,12 @@ def fix_folder_ancestors(node, root_ancestor: Optional[str] = None):
           recursive loads. We build the full chain by traversing parents.
     """
     root = root_ancestor or node.organization.name
-    for folder in list(node.folders.values()):
+    for folder in node.folders.values():
         # Only fix if this folder has a folder parent and ancestors seem incomplete
-        if not folder.parent.startswith("folders/"):
+        if not folder.parent.startswith(_FOLDER_PREFIX):
             continue
 
-        # Build full ancestor chain by traversing parents
-        ancestors = [folder.name]
-        current_parent = folder.parent
-        visited = {folder.name}  # Prevent infinite loops
-
-        while current_parent and current_parent.startswith("folders/"):
-            if current_parent in visited:
-                logger.warning(f"Circular parent reference detected for {folder.name}")
-                break
-            visited.add(current_parent)
-            ancestors.append(current_parent)
-
-            # Look up the parent to continue the chain
-            if current_parent in node.folders:
-                parent_folder = node.folders[current_parent]
-                current_parent = parent_folder.parent
-            else:
-                # Parent not in folders, stop here
-                break
-
-        # Add root at the end
-        if not ancestors[-1].startswith("organizations/") and ancestors[-1] != root:
-            ancestors.append(root)
+        ancestors = _build_single_ancestor_chain(folder, node.folders, root)
 
         # Update if the ancestors changed
         if ancestors != folder.ancestors:
@@ -212,7 +229,7 @@ def load_scope_folder(node, scope_resource: str, root_ancestor: Optional[str] = 
         ancestors_chain = [folder_proto.name]
         current_parent = folder_proto.parent
 
-        while current_parent and current_parent.startswith("folders/"):
+        while current_parent and current_parent.startswith(_FOLDER_PREFIX):
             ancestors_chain.append(current_parent)
             # Check if parent is already loaded
             if current_parent in node.folders:
@@ -305,11 +322,12 @@ def load_folders_asset(
             folder_data = parse_folder_row(row)
 
             # Get the parent - either from the API response or from parent_filter
-            folder_parent = (
-                folder_data["parent"]
-                if folder_data["parent"]
-                else (parent_filter if parent_filter else root)
-            )
+            if folder_data["parent"]:
+                folder_parent = folder_data["parent"]
+            elif parent_filter:
+                folder_parent = parent_filter
+            else:
+                folder_parent = root
 
             # Build complete ancestor chain
             ancestors = build_folder_ancestors(
@@ -398,31 +416,26 @@ def load_projects_asset(
                     parent_res = project_data["parent"]
                 elif not project_data["ancestors"]:
                     # No ancestors and no parent from API - use parent_filter if set, otherwise org
-                    parent_res = (
-                        parent_filter if parent_filter else node.organization.name
-                    )
+                    if parent_filter:
+                        parent_res = parent_filter
+                    else:
+                        parent_res = node.organization.name
                 elif (
                     project_data["ancestors"]
                     and project_data["ancestors"][0] == project_data["name"]
                 ):
-                    parent_res = (
-                        project_data["ancestors"][1]
-                        if len(project_data["ancestors"]) > 1
-                        else (
-                            parent_filter if parent_filter else node.organization.name
-                        )
-                    )
+                    if len(project_data["ancestors"]) > 1:
+                        parent_res = project_data["ancestors"][1]
+                    elif parent_filter:
+                        parent_res = parent_filter
+                    else:
+                        parent_res = node.organization.name
                 else:
-                    parent_res = (
-                        project_data["ancestors"][0]
-                        if project_data["ancestors"]
-                        else (
-                            parent_filter if parent_filter else node.organization.name
-                        )
-                    )
+                    # ancestors is guaranteed non-empty here (checked in elif above)
+                    parent_res = project_data["ancestors"][0]
 
                 parent_folder = None
-                if parent_res.startswith("folders/"):
+                if parent_res.startswith(_FOLDER_PREFIX):
                     parent_folder = node.folders.get(parent_res)
 
                 proj = Project(
@@ -487,7 +500,7 @@ def load_organizationless_projects(existing_project_names: set):
             # A project is organizationless if it's not under an organization or folder
             is_orgless = not p_proto.parent.startswith(
                 "organizations/"
-            ) and not p_proto.parent.startswith("folders/")
+            ) and not p_proto.parent.startswith(_FOLDER_PREFIX)
 
             if is_orgless:
                 logger.debug(f"Found organizationless project: {p_proto.project_id}")

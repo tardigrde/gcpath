@@ -68,18 +68,7 @@ def get_display_path(
     """
     if isinstance(item, OrganizationNode):
         return f"//{path_escape(item.organization.display_name)}"
-    elif isinstance(item, Folder):
-        # For non-recursive mode with direct children, use target prefix
-        # For recursive mode, always use the computed path from hierarchy
-        if (
-            target_path_prefix
-            and target_resource_name
-            and is_direct_child
-            and not recursive
-        ):
-            return f"{target_path_prefix}/{path_escape(item.display_name)}"
-        return item.path
-    elif isinstance(item, Project):
+    elif isinstance(item, (Folder, Project)):
         # For non-recursive mode with direct children, use target prefix
         # For recursive mode, always use the computed path from hierarchy
         if (
@@ -354,11 +343,7 @@ def _get_node_label(
         label = f"//{path_escape(item.organization.display_name)}"
         if show_ids:
             label += f" ({item.organization.name})"
-    elif isinstance(item, Folder):
-        label = item.display_name
-        if show_ids:
-            label += f" ({item.name})"
-    elif isinstance(item, Project):
+    elif isinstance(item, (Folder, Project)):
         label = item.display_name
         if show_ids:
             label += f" ({item.name})"

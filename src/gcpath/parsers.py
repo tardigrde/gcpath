@@ -38,9 +38,7 @@ def extract_value(obj: Any) -> Any:
     Returns:
         Extracted value from 'v' field, or the object itself
     """
-    if hasattr(obj, "get"):
-        return obj.get("v")
-    elif isinstance(obj, dict):
+    if hasattr(obj, "get") or isinstance(obj, dict):
         return obj.get("v")
     return obj
 

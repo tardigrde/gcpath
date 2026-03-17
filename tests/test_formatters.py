@@ -111,7 +111,7 @@ def test_filter_direct_children_organizationless(mock_org_node):
     )
     hierarchy.projects = [orgless_project]
 
-    folders, projects = filter_direct_children(hierarchy, None)
+    _, projects = filter_direct_children(hierarchy, None)
 
     assert len(projects) == 1
     assert projects[0].name == "projects/orgless"
