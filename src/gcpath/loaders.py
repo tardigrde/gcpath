@@ -429,12 +429,8 @@ def load_projects_asset(
                     else:
                         parent_res = node.organization.name
                 else:
-                    if project_data["ancestors"]:
-                        parent_res = project_data["ancestors"][0]
-                    elif parent_filter:
-                        parent_res = parent_filter
-                    else:
-                        parent_res = node.organization.name
+                    # ancestors is guaranteed non-empty here (checked in elif above)
+                    parent_res = project_data["ancestors"][0]
 
                 parent_folder = None
                 if parent_res.startswith("folders/"):
