@@ -1,6 +1,73 @@
 # CHANGELOG
 
 
+## v0.7.1 (2026-03-17)
+
+### Bug Fixes
+
+- Extract duplicated "folders/" literal to constant in loaders
+  ([`b292a3e`](https://github.com/tardigrde/gcpath/commit/b292a3e62ba694a612386fe1d53bd64150e93ad1))
+
+SonarCloud S1192: the string "folders/" was duplicated 5 times. Extract to module-level
+  _FOLDER_PREFIX constant.
+
+Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+- Resolve SonarCloud code quality issues
+  ([`054bdbe`](https://github.com/tardigrde/gcpath/commit/054bdbe30fff9cad0b9179ac16add54bb353d4f9))
+
+Addresses 19 of 31 SonarCloud findings:
+
+S1192 (CRITICAL): Extract duplicated string literals into module-level constants - Added
+  _RESOURCE_PREFIX_PROJECTS, _RESOURCE_PREFIX_FOLDERS, _RESOURCE_PREFIX_ORGS - Added
+  _RESOURCE_PREFIXES tuple and _REFRESH_HELP constant - Replaced all occurrences in cli.py
+
+S1871 (MAJOR): Merge duplicate branches - formatters.py: Merged Folder/Project branches in
+  get_display_path and _get_node_label - parsers.py: Merged hasattr/get and isinstance/dict checks
+  in extract_value
+
+S3358 (MAJOR): Extract nested ternaries into if/else blocks - loaders.py: Refactored folder_parent
+  and project parent_res determination logic
+
+S3776 (CRITICAL): Reduce cognitive complexity with helper extraction - cli.py: Extracted
+  _try_read_cache() from _load_hierarchy() - core.py: Extracted _find_orgless_project() from
+  get_resource_name() - loaders.py: Extracted _build_single_ancestor_chain() from
+  fix_folder_ancestors()
+
+S7504 (MINOR): Remove unnecessary list() call - loaders.py: Changed list(node.folders.values()) to
+  node.folders.values()
+
+S2737 (MINOR): Remove bare except clause - core.py: Removed no-op try/except that just re-raised
+
+S2772 (MINOR): Remove unneeded pass - tests/test_cli.py: Replaced pass with meaningful assertion
+
+S1481 (MINOR): Fix unused variable - tests/test_formatters.py: Changed folders to _ for unused
+  variable
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+
+### Testing
+
+- Add coverage for extracted helper functions
+  ([`ab315ee`](https://github.com/tardigrde/gcpath/commit/ab315ee00fce36b4917f05ad8450f850d3dde59f))
+
+Add direct tests for: - _build_single_ancestor_chain (loaders.py) - _find_orgless_project (core.py)
+  - _try_read_cache (cli.py)
+
+Coverage improved from 87% to 88%
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+
+- Add coverage for loader conditional branches and remove dead code
+  ([`37b7f01`](https://github.com/tardigrde/gcpath/commit/37b7f0144fff1e11fdda25100d559bf2a522a42a))
+
+Cover the refactored if/elif/else branches in load_folders_asset and load_projects_asset that handle
+  fallback parent resolution. Remove unreachable elif/else in the last else-branch where ancestors
+  is guaranteed non-empty.
+
+Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.7.0 (2026-03-09)
 
 ### Bug Fixes
