@@ -21,6 +21,7 @@ requires-python = ">=3.12"
 dependencies = [
     "google-cloud-asset>=4.1.0",
     "google-cloud-resource-manager>=1.15.0",
+    "pyyaml>=6.0",
     "rich>=14.2.0",
     "typer>=0.20.1",
 ]
@@ -39,6 +40,7 @@ dev = [
     "pytest>=9.0.2",
     "pytest-cov>=7.0.0",
     "ruff>=0.14.10",
+    "types-pyyaml>=6.0",
 ]
 
 [build-system]

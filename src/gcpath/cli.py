@@ -26,6 +26,14 @@ from gcpath.formatters import (
     build_tree_view,
     build_diagram,
 )
+from gcpath.serializers import (
+    serialize_ls,
+    serialize_tree,
+    serialize_name_results,
+    serialize_path_results,
+    dump_json,
+    dump_yaml,
+)
 from gcpath.cache import (
     read_cache,
     write_cache,
@@ -110,13 +118,34 @@ def main(
         "-e",
         help="Default resource to scope commands to (e.g., folders/123). Overrides config.",
     ),
+    json_output: bool = typer.Option(
+        False,
+        "--json",
+        help="Output in JSON format",
+    ),
+    yaml_output: bool = typer.Option(
+        False,
+        "--yaml",
+        help="Output in YAML format",
+    ),
 ) -> None:
     """
     gcpath - Google Cloud Platform resource hierarchy utility
     """
+    if json_output and yaml_output:
+        error_console.print("[red]Error:[/red] --json and --yaml are mutually exclusive.")
+        raise typer.Exit(code=1)
+
     ctx.ensure_object(dict)
     ctx.obj["use_asset_api"] = use_asset_api
     ctx.obj["entrypoint"] = entrypoint or get_entrypoint()
+
+    if json_output:
+        ctx.obj["output_format"] = "json"
+    elif yaml_output:
+        ctx.obj["output_format"] = "yaml"
+    else:
+        ctx.obj["output_format"] = "text"
 
     if debug:
         logging.basicConfig(level=logging.DEBUG)
@@ -257,7 +286,7 @@ def _try_read_cache(
 
     info = get_cache_info()
     age_str = _format_age(info.age_seconds) if info.age_seconds else "unknown"
-    rprint(f"[dim]Using cached data ({age_str} ago). Use -F to refresh.[/dim]")
+    error_console.print(f"[dim]Using cached data ({age_str} ago). Use -F to refresh.[/dim]")
 
     # Apply org filter to cached data
     if filter_orgs:
@@ -569,7 +598,14 @@ def ls(
             f"ls: hierarchy loaded with {len(hierarchy.organizations)} orgs, {len(hierarchy.projects)} projects, {len(hierarchy.folders)} folders"
         )
 
+        output_format = ctx.obj.get("output_format", "text")
+
         if not hierarchy.organizations and not hierarchy.projects:
+            if output_format != "text":
+                dumper = dump_json if output_format == "json" else dump_yaml
+                print(dumper([]))
+                return
+
             # Check if it looks like a personal account
             import google.auth
 
@@ -630,6 +666,12 @@ def ls(
         items = sort_resources(items)
 
         logger.debug(f"ls: found {len(items)} items to display")
+
+        if output_format != "text":
+            data = serialize_ls(items)
+            dumper = dump_json if output_format == "json" else dump_yaml
+            print(dumper(data))
+            return
 
         if long:
             table = Table(
@@ -695,6 +737,25 @@ def tree(
             ctx, "tree", resource, level, yes, force_refresh
         )
         if hctx is None:
+            return
+
+        output_format = ctx.obj.get("output_format", "text")
+        if output_format != "text":
+            orgless_projects = None
+            if not hctx.target_resource_name:
+                orgless = [p for p in hctx.hierarchy.projects if not p.organization]
+                if orgless:
+                    orgless_projects = orgless
+
+            data = serialize_tree(
+                hctx.nodes_to_process,
+                hctx.hierarchy,
+                hctx.projects_by_parent,
+                level,
+                orgless_projects,
+            )
+            dumper = dump_json if output_format == "json" else dump_yaml
+            print(dumper(data))
             return
 
         root_tree = Tree(
@@ -933,14 +994,23 @@ def get_resource_name(
 
         logger.debug("name: hierarchy loaded successfully")
 
+        output_format = ctx.obj.get("output_format", "text")
+        results: List[tuple[str, str]] = []
         for path in paths:
             logger.debug(f"name command: resolving path {path}")
             res_name = hierarchy.get_resource_name(path)
             logger.debug(f"name command: resolved {path} to {res_name}")
-            if id_only:
-                parts = res_name.split("/")
-                res_name = parts[-1]
-            print(res_name)
+            results.append((path, res_name))
+
+        if output_format != "text":
+            data = serialize_name_results(results, id_only)
+            dumper = dump_json if output_format == "json" else dump_yaml
+            print(dumper(data))
+        else:
+            for _path, res_name in results:
+                if id_only:
+                    res_name = res_name.split("/")[-1]
+                print(res_name)
 
     except Exception as e:
         handle_error(e)
@@ -958,20 +1028,28 @@ def get_path_command(
     """
     try:
         logger.debug(f"path: resolving resource_names={resource_names}")
+        output_format = ctx.obj.get("output_format", "text")
+        results: List[tuple[str, str]] = []
+
         for name in resource_names:
             try:
                 # Use optimized recursive lookup instead of full hierarchy load
                 p = Hierarchy.resolve_ancestry(name)
                 logger.debug(f"path: resolved {name} to {p}")
-                print(p)
+                results.append((name, p))
             except Exception as e:
-                # If one fails, log it but continue processing others?
-                # Or just print error. CLI usually expects one output per line.
-                # Let's print error to stderr and continue if multiple requested
                 if len(resource_names) > 1:
                     error_console.print(f"[red]Error resolving {name}: {e}[/red]")
                 else:
                     raise e
+
+        if output_format != "text":
+            data = serialize_path_results(results)
+            dumper = dump_json if output_format == "json" else dump_yaml
+            print(dumper(data))
+        else:
+            for _name, resolved_path in results:
+                print(resolved_path)
 
     except Exception as e:
         handle_error(e)
