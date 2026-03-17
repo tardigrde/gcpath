@@ -1,9 +1,8 @@
 import json
 
 import yaml
-from google.cloud import resourcemanager_v3
 
-from gcpath.core import Folder, Hierarchy, OrganizationNode, Project
+from conftest import make_test_hierarchy
 from gcpath.serializers import (
     dump_json,
     dump_yaml,
@@ -17,68 +16,33 @@ from gcpath.serializers import (
 )
 
 
-def _make_hierarchy():
-    """Build a small test hierarchy."""
-    org_proto = resourcemanager_v3.Organization(
-        name="organizations/123", display_name="example.com"
-    )
-    org_node = OrganizationNode(organization=org_proto)
-
-    f1 = Folder(
-        name="folders/1",
-        display_name="f1",
-        ancestors=["folders/1", "organizations/123"],
-        organization=org_node,
-        parent="organizations/123",
-    )
-    f11 = Folder(
-        name="folders/11",
-        display_name="f11",
-        ancestors=["folders/11", "folders/1", "organizations/123"],
-        organization=org_node,
-        parent="folders/1",
-    )
-    org_node.folders["folders/1"] = f1
-    org_node.folders["folders/11"] = f11
-
-    p1 = Project(
-        name="projects/p1",
-        project_id="p1",
-        display_name="Project 1",
-        parent="folders/1",
-        organization=org_node,
-        folder=f1,
-    )
-    orgless_p = Project(
-        name="projects/standalone",
-        project_id="standalone",
-        display_name="Standalone",
-        parent="organizations/0",
-        organization=None,
-        folder=None,
-    )
-
-    hierarchy = Hierarchy([org_node], [p1, orgless_p])
-    return org_node, f1, f11, p1, orgless_p, hierarchy
+def _h():
+    """Return hierarchy and extract commonly-used objects."""
+    hierarchy = make_test_hierarchy()
+    org_node = hierarchy.organizations[0]
+    f1 = org_node.folders["folders/1"]
+    p1 = next(p for p in hierarchy.projects if p.name == "projects/p1")
+    orgless_p = next(p for p in hierarchy.projects if p.name == "projects/standalone")
+    return hierarchy, org_node, f1, p1, orgless_p
 
 
 class TestResourceType:
     def test_organization(self):
-        org_node, *_ = _make_hierarchy()
+        _, org_node, *_ = _h()
         assert resource_type(org_node) == "organization"
 
     def test_folder(self):
-        _, f1, *_ = _make_hierarchy()
+        _, _, f1, *_ = _h()
         assert resource_type(f1) == "folder"
 
     def test_project(self):
-        _, _, _, p1, *_ = _make_hierarchy()
+        _, _, _, p1, _ = _h()
         assert resource_type(p1) == "project"
 
 
 class TestSerializeResource:
     def test_organization(self):
-        org_node, *_ = _make_hierarchy()
+        _, org_node, *_ = _h()
         d = serialize_resource("//example.com", org_node)
         assert d["path"] == "//example.com"
         assert d["type"] == "organization"
@@ -86,14 +50,14 @@ class TestSerializeResource:
         assert d["display_name"] == "example.com"
 
     def test_folder(self):
-        _, f1, *_ = _make_hierarchy()
+        _, _, f1, *_ = _h()
         d = serialize_resource("//example.com/f1", f1)
         assert d["type"] == "folder"
         assert d["resource_name"] == "folders/1"
         assert d["display_name"] == "f1"
 
     def test_project(self):
-        _, _, _, p1, *_ = _make_hierarchy()
+        _, _, _, p1, _ = _h()
         d = serialize_resource("//example.com/f1/Project 1", p1)
         assert d["type"] == "project"
         assert d["resource_name"] == "projects/p1"
@@ -102,7 +66,7 @@ class TestSerializeResource:
 
 class TestSerializeLs:
     def test_basic(self):
-        _, f1, _, p1, *_ = _make_hierarchy()
+        _, _, f1, p1, _ = _h()
         items = [("//example.com/f1", f1), ("//example.com/f1/Project 1", p1)]
         result = serialize_ls(items)
         assert len(result) == 2
@@ -115,7 +79,7 @@ class TestSerializeLs:
 
 class TestSerializeTreeNode:
     def test_basic_tree(self):
-        org_node, f1, f11, p1, _, hierarchy = _make_hierarchy()
+        _, org_node, _, p1, _ = _h()
         projects_by_parent = {"folders/1": [p1]}
         d = serialize_tree_node(org_node, projects_by_parent)
         assert d["type"] == "organization"
@@ -128,7 +92,7 @@ class TestSerializeTreeNode:
         assert len(f1_node["children"]) == 2
 
     def test_depth_limit(self):
-        org_node, _, _, p1, _, hierarchy = _make_hierarchy()
+        _, org_node, _, p1, _ = _h()
         projects_by_parent = {"folders/1": [p1]}
         d = serialize_tree_node(org_node, projects_by_parent, level=1)
         assert d["type"] == "organization"
@@ -139,7 +103,7 @@ class TestSerializeTreeNode:
 
 class TestSerializeTree:
     def test_with_orgless(self):
-        org_node, _, _, p1, orgless_p, hierarchy = _make_hierarchy()
+        _, org_node, _, p1, orgless_p = _h()
         projects_by_parent = {"folders/1": [p1]}
         result = serialize_tree(
             [org_node], projects_by_parent,
@@ -152,7 +116,7 @@ class TestSerializeTree:
         assert result[1]["children"][0]["display_name"] == "Standalone"
 
     def test_without_orgless(self):
-        org_node, _, _, p1, _, hierarchy = _make_hierarchy()
+        _, org_node, _, p1, _ = _h()
         projects_by_parent = {"folders/1": [p1]}
         result = serialize_tree([org_node], projects_by_parent)
         assert len(result) == 1

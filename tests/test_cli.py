@@ -5,7 +5,7 @@ import yaml
 from typer.testing import CliRunner
 from unittest.mock import patch, MagicMock
 from gcpath.cli import app
-from gcpath.core import Folder, OrganizationNode, Hierarchy, Project, GCPathError
+from gcpath.core import OrganizationNode, Hierarchy, Project, GCPathError
 from gcpath.cache import CacheInfo
 from google.cloud import resourcemanager_v3
 
@@ -17,56 +17,6 @@ def mock_read_cache():
     """Prevent tests from hitting the real cache file."""
     with patch("gcpath.cli.read_cache", return_value=None) as m:
         yield m
-
-
-@pytest.fixture
-def mock_hierarchy():
-    org_proto = resourcemanager_v3.Organization(
-        name="organizations/123", display_name="example.com"
-    )
-    org_node = OrganizationNode(organization=org_proto)
-
-    # F1 (depth 1)
-    f1 = Folder(
-        name="folders/1",
-        display_name="f1",
-        ancestors=["folders/1", "organizations/123"],
-        organization=org_node,
-        parent="organizations/123",
-    )
-    # F11 (depth 2)
-    f11 = Folder(
-        name="folders/11",
-        display_name="f11",
-        ancestors=["folders/11", "folders/1", "organizations/123"],
-        organization=org_node,
-        parent="folders/1",
-    )
-
-    org_node.folders["folders/1"] = f1
-    org_node.folders["folders/11"] = f11
-
-    # Projects
-    p1 = Project(
-        name="projects/p1",
-        project_id="p1",
-        display_name="Project 1",
-        parent="folders/1",
-        organization=org_node,
-        folder=f1,
-    )
-
-    # Orgless Project
-    orgless_p = Project(
-        name="projects/standalone",
-        project_id="standalone",
-        display_name="Standalone",
-        parent="organizations/0",
-        organization=None,
-        folder=None,
-    )
-
-    return Hierarchy([org_node], [p1, orgless_p])
 
 
 @patch("gcpath.core.Hierarchy.load")
