@@ -1,8 +1,11 @@
+import json
+
 import pytest
+import yaml
 from typer.testing import CliRunner
 from unittest.mock import patch, MagicMock
 from gcpath.cli import app
-from gcpath.core import Folder, OrganizationNode, Hierarchy, Project, GCPathError
+from gcpath.core import OrganizationNode, Hierarchy, Project, GCPathError
 from gcpath.cache import CacheInfo
 from google.cloud import resourcemanager_v3
 
@@ -14,56 +17,6 @@ def mock_read_cache():
     """Prevent tests from hitting the real cache file."""
     with patch("gcpath.cli.read_cache", return_value=None) as m:
         yield m
-
-
-@pytest.fixture
-def mock_hierarchy():
-    org_proto = resourcemanager_v3.Organization(
-        name="organizations/123", display_name="example.com"
-    )
-    org_node = OrganizationNode(organization=org_proto)
-
-    # F1 (depth 1)
-    f1 = Folder(
-        name="folders/1",
-        display_name="f1",
-        ancestors=["folders/1", "organizations/123"],
-        organization=org_node,
-        parent="organizations/123",
-    )
-    # F11 (depth 2)
-    f11 = Folder(
-        name="folders/11",
-        display_name="f11",
-        ancestors=["folders/11", "folders/1", "organizations/123"],
-        organization=org_node,
-        parent="folders/1",
-    )
-
-    org_node.folders["folders/1"] = f1
-    org_node.folders["folders/11"] = f11
-
-    # Projects
-    p1 = Project(
-        name="projects/p1",
-        project_id="p1",
-        display_name="Project 1",
-        parent="folders/1",
-        organization=org_node,
-        folder=f1,
-    )
-
-    # Orgless Project
-    orgless_p = Project(
-        name="projects/standalone",
-        project_id="standalone",
-        display_name="Standalone",
-        parent="organizations/0",
-        organization=None,
-        folder=None,
-    )
-
-    return Hierarchy([org_node], [p1, orgless_p])
 
 
 @patch("gcpath.core.Hierarchy.load")
@@ -865,3 +818,142 @@ def test_try_read_cache_applies_org_filter(mock_rprint, mock_get_info, mock_read
 
     assert len(result.organizations) == 1
     assert result.organizations[0].organization.display_name == "org1.com"
+
+
+# --- Structured output (--json / --yaml) tests ---
+
+
+def test_json_yaml_mutually_exclusive():
+    """--json and --yaml together should fail."""
+    result = runner.invoke(app, ["--json", "--yaml", "ls"])
+    assert result.exit_code == 1
+
+
+@patch("gcpath.core.Hierarchy.load")
+def test_ls_json_output(mock_load, mock_hierarchy):
+    mock_load.return_value = mock_hierarchy
+    result = runner.invoke(app, ["--json", "ls"])
+    assert result.exit_code == 0
+    data = json.loads(result.stdout)
+    assert isinstance(data, list)
+    assert len(data) > 0
+    assert all("path" in item for item in data)
+    assert all("type" in item for item in data)
+    types = {item["type"] for item in data}
+    assert "organization" in types
+
+
+@patch("gcpath.core.Hierarchy.load")
+def test_ls_yaml_output(mock_load, mock_hierarchy):
+    mock_load.return_value = mock_hierarchy
+    result = runner.invoke(app, ["--yaml", "ls"])
+    assert result.exit_code == 0
+    data = yaml.safe_load(result.stdout)
+    assert isinstance(data, list)
+    assert len(data) > 0
+    assert all("path" in item for item in data)
+
+
+@patch("gcpath.core.Hierarchy.load")
+def test_ls_json_no_data(mock_load):
+    """Empty hierarchy produces empty JSON array."""
+    mock_load.return_value = Hierarchy([], [])
+    result = runner.invoke(app, ["--json", "ls"])
+    assert result.exit_code == 0
+    data = json.loads(result.stdout)
+    assert data == []
+
+
+@patch("gcpath.core.Hierarchy.load")
+@patch("typer.confirm")
+def test_tree_json_output(mock_confirm, mock_load, mock_hierarchy):
+    mock_confirm.return_value = True
+    mock_load.return_value = mock_hierarchy
+    result = runner.invoke(app, ["--json", "tree"])
+    assert result.exit_code == 0
+    data = json.loads(result.stdout)
+    assert isinstance(data, list)
+    assert len(data) >= 1
+    # First node should be the organization
+    org_node = data[0]
+    assert org_node["type"] == "organization"
+    assert "children" in org_node
+
+
+@patch("gcpath.core.Hierarchy.load")
+@patch("typer.confirm")
+def test_tree_yaml_output(mock_confirm, mock_load, mock_hierarchy):
+    mock_confirm.return_value = True
+    mock_load.return_value = mock_hierarchy
+    result = runner.invoke(app, ["--yaml", "tree"])
+    assert result.exit_code == 0
+    data = yaml.safe_load(result.stdout)
+    assert isinstance(data, list)
+    assert data[0]["type"] == "organization"
+    assert "children" in data[0]
+
+
+@patch("gcpath.core.Hierarchy.load")
+@patch("typer.confirm")
+def test_tree_json_includes_orgless(mock_confirm, mock_load, mock_hierarchy):
+    mock_confirm.return_value = True
+    mock_load.return_value = mock_hierarchy
+    result = runner.invoke(app, ["--json", "tree"])
+    assert result.exit_code == 0
+    data = json.loads(result.stdout)
+    orgless_nodes = [n for n in data if n.get("type") == "organizationless"]
+    assert len(orgless_nodes) == 1
+    assert len(orgless_nodes[0]["children"]) == 1
+
+
+@patch("gcpath.core.Hierarchy.load")
+def test_name_json_output(mock_load, mock_hierarchy):
+    mock_load.return_value = mock_hierarchy
+    result = runner.invoke(app, ["--json", "name", "//example.com/f1"])
+    assert result.exit_code == 0
+    data = json.loads(result.stdout)
+    assert isinstance(data, list)
+    assert data[0]["path"] == "//example.com/f1"
+    assert data[0]["resource_name"] == "folders/1"
+
+
+@patch("gcpath.core.Hierarchy.load")
+def test_name_json_id_only(mock_load, mock_hierarchy):
+    mock_load.return_value = mock_hierarchy
+    result = runner.invoke(app, ["--json", "name", "--id", "//example.com/f1"])
+    assert result.exit_code == 0
+    data = json.loads(result.stdout)
+    assert "resource_id" in data[0]
+    assert data[0]["resource_id"] == "1"
+
+
+@patch("gcpath.cli.Hierarchy.resolve_ancestry")
+def test_path_json_output(mock_resolve):
+    mock_resolve.return_value = "//example.com/f1"
+    result = runner.invoke(app, ["--json", "path", "folders/1"])
+    assert result.exit_code == 0
+    data = json.loads(result.stdout)
+    assert isinstance(data, list)
+    assert data[0]["resource_name"] == "folders/1"
+    assert data[0]["path"] == "//example.com/f1"
+
+
+@patch("gcpath.cli.Hierarchy.resolve_ancestry")
+def test_path_yaml_output(mock_resolve):
+    mock_resolve.return_value = "//example.com/f1"
+    result = runner.invoke(app, ["--yaml", "path", "folders/1"])
+    assert result.exit_code == 0
+    data = yaml.safe_load(result.stdout)
+    assert data[0]["resource_name"] == "folders/1"
+    assert data[0]["path"] == "//example.com/f1"
+
+
+@patch("gcpath.core.Hierarchy.load")
+def test_json_output_no_rich_markup(mock_load, mock_hierarchy):
+    """Structured output must not contain Rich markup."""
+    mock_load.return_value = mock_hierarchy
+    result = runner.invoke(app, ["--json", "ls"])
+    assert result.exit_code == 0
+    assert "[dim]" not in result.stdout
+    assert "[bold" not in result.stdout
+    assert "[green]" not in result.stdout
