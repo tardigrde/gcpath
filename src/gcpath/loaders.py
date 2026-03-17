@@ -18,6 +18,8 @@ from gcpath.parsers import (
 
 logger = logging.getLogger(__name__)
 
+_FOLDER_PREFIX = "folders/"
+
 
 def build_folder_sql_query(
     parent_filter: Optional[str] = None, ancestors_filter: Optional[str] = None
@@ -144,7 +146,7 @@ def _build_single_ancestor_chain(folder, folders: Dict, root: str) -> List[str]:
     current_parent = folder.parent
     visited = {folder.name}  # Prevent infinite loops
 
-    while current_parent and current_parent.startswith("folders/"):
+    while current_parent and current_parent.startswith(_FOLDER_PREFIX):
         if current_parent in visited:
             logger.warning(f"Circular parent reference detected for {folder.name}")
             break
@@ -180,7 +182,7 @@ def fix_folder_ancestors(node, root_ancestor: Optional[str] = None):
     root = root_ancestor or node.organization.name
     for folder in node.folders.values():
         # Only fix if this folder has a folder parent and ancestors seem incomplete
-        if not folder.parent.startswith("folders/"):
+        if not folder.parent.startswith(_FOLDER_PREFIX):
             continue
 
         ancestors = _build_single_ancestor_chain(folder, node.folders, root)
@@ -227,7 +229,7 @@ def load_scope_folder(node, scope_resource: str, root_ancestor: Optional[str] = 
         ancestors_chain = [folder_proto.name]
         current_parent = folder_proto.parent
 
-        while current_parent and current_parent.startswith("folders/"):
+        while current_parent and current_parent.startswith(_FOLDER_PREFIX):
             ancestors_chain.append(current_parent)
             # Check if parent is already loaded
             if current_parent in node.folders:
@@ -433,7 +435,7 @@ def load_projects_asset(
                     parent_res = project_data["ancestors"][0]
 
                 parent_folder = None
-                if parent_res.startswith("folders/"):
+                if parent_res.startswith(_FOLDER_PREFIX):
                     parent_folder = node.folders.get(parent_res)
 
                 proj = Project(
@@ -498,7 +500,7 @@ def load_organizationless_projects(existing_project_names: set):
             # A project is organizationless if it's not under an organization or folder
             is_orgless = not p_proto.parent.startswith(
                 "organizations/"
-            ) and not p_proto.parent.startswith("folders/")
+            ) and not p_proto.parent.startswith(_FOLDER_PREFIX)
 
             if is_orgless:
                 logger.debug(f"Found organizationless project: {p_proto.project_id}")
