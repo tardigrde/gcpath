@@ -1,6 +1,50 @@
 # CHANGELOG
 
 
+## v0.8.0 (2026-03-17)
+
+### Bug Fixes
+
+- Address PR review feedback — reduce duplication in serializers and CLI
+  ([`40ae2c6`](https://github.com/tardigrde/gcpath/commit/40ae2c65fc63d58b0189783956baf8a39490f1f6))
+
+- Extract _get_dumper() helper to eliminate repeated dumper selection logic - Remove unused
+  hierarchy and show_ids params from serialize_tree_node - Reuse serialize_resource() for project
+  dicts instead of duplicating
+
+Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+- Extract duplicated string literals to constants in conftest.py
+  ([`ed34bc6`](https://github.com/tardigrde/gcpath/commit/ed34bc6b96f256b7f6111438e1aa197402d5d78d))
+
+Resolves SonarCloud S1192 issues for "organizations/123", "folders/1", and "folders/11" repeated in
+  test hierarchy builder.
+
+Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+- Resolve SonarCloud duplication and unused variable issues
+  ([`aa47ef5`](https://github.com/tardigrde/gcpath/commit/aa47ef5bdc946abc3a2abb0886512d451c6c8e18))
+
+- Extract shared test hierarchy builder to conftest.py (eliminates ~40-line duplication between
+  test_cli.py and test_serializers.py) - Fix all 6 unused variable warnings in test_serializers.py
+
+Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+### Features
+
+- Add --json and --yaml structured output flags
+  ([`949d8e3`](https://github.com/tardigrde/gcpath/commit/949d8e31a6115496a1ee580bfc69375db01ed2fe))
+
+Add global --json and --yaml flags for machine-readable output across all commands (ls, tree, name,
+  path). This makes gcpath composable with jq, yq, shell scripts, and CI pipelines.
+
+- New serializers.py module for dict-building and JSON/YAML dumping - Mutually exclusive flags with
+  clear error message - Cache status message moved to stderr to avoid polluting structured output -
+  pyyaml>=6.0 added as dependency
+
+Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.7.1 (2026-03-17)
 
 ### Bug Fixes
