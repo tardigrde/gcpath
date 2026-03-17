@@ -117,7 +117,7 @@ class TestSerializeTreeNode:
     def test_basic_tree(self):
         org_node, f1, f11, p1, _, hierarchy = _make_hierarchy()
         projects_by_parent = {"folders/1": [p1]}
-        d = serialize_tree_node(org_node, hierarchy, projects_by_parent)
+        d = serialize_tree_node(org_node, projects_by_parent)
         assert d["type"] == "organization"
         assert d["display_name"] == "example.com"
         assert len(d["children"]) == 1  # f1
@@ -130,7 +130,7 @@ class TestSerializeTreeNode:
     def test_depth_limit(self):
         org_node, _, _, p1, _, hierarchy = _make_hierarchy()
         projects_by_parent = {"folders/1": [p1]}
-        d = serialize_tree_node(org_node, hierarchy, projects_by_parent, level=1)
+        d = serialize_tree_node(org_node, projects_by_parent, level=1)
         assert d["type"] == "organization"
         # level=1 means we include org's direct children but not deeper
         f1_node = d["children"][0]
@@ -142,7 +142,7 @@ class TestSerializeTree:
         org_node, _, _, p1, orgless_p, hierarchy = _make_hierarchy()
         projects_by_parent = {"folders/1": [p1]}
         result = serialize_tree(
-            [org_node], hierarchy, projects_by_parent,
+            [org_node], projects_by_parent,
             orgless_projects=[orgless_p],
         )
         assert len(result) == 2
@@ -154,7 +154,7 @@ class TestSerializeTree:
     def test_without_orgless(self):
         org_node, _, _, p1, _, hierarchy = _make_hierarchy()
         projects_by_parent = {"folders/1": [p1]}
-        result = serialize_tree([org_node], hierarchy, projects_by_parent)
+        result = serialize_tree([org_node], projects_by_parent)
         assert len(result) == 1
 
 

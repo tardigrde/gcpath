@@ -34,6 +34,7 @@ from gcpath.serializers import (
     dump_json,
     dump_yaml,
 )
+from typing import Any, Callable
 from gcpath.cache import (
     read_cache,
     write_cache,
@@ -70,6 +71,15 @@ config_app = typer.Typer(help="Manage gcpath configuration.")
 app.add_typer(config_app, name="config")
 console = Console()
 error_console = Console(stderr=True)
+
+
+def _get_dumper(output_format: str) -> Optional[Callable[[Any], str]]:
+    """Return the appropriate dumper for the given output format, or None for text."""
+    if output_format == "json":
+        return dump_json
+    if output_format == "yaml":
+        return dump_yaml
+    return None
 
 
 def handle_error(e: Exception) -> None:
@@ -598,11 +608,10 @@ def ls(
             f"ls: hierarchy loaded with {len(hierarchy.organizations)} orgs, {len(hierarchy.projects)} projects, {len(hierarchy.folders)} folders"
         )
 
-        output_format = ctx.obj.get("output_format", "text")
+        dumper = _get_dumper(ctx.obj.get("output_format", "text"))
 
         if not hierarchy.organizations and not hierarchy.projects:
-            if output_format != "text":
-                dumper = dump_json if output_format == "json" else dump_yaml
+            if dumper:
                 print(dumper([]))
                 return
 
@@ -667,10 +676,8 @@ def ls(
 
         logger.debug(f"ls: found {len(items)} items to display")
 
-        if output_format != "text":
-            data = serialize_ls(items)
-            dumper = dump_json if output_format == "json" else dump_yaml
-            print(dumper(data))
+        if dumper:
+            print(dumper(serialize_ls(items)))
             return
 
         if long:
@@ -739,8 +746,8 @@ def tree(
         if hctx is None:
             return
 
-        output_format = ctx.obj.get("output_format", "text")
-        if output_format != "text":
+        dumper = _get_dumper(ctx.obj.get("output_format", "text"))
+        if dumper:
             orgless_projects = None
             if not hctx.target_resource_name:
                 orgless = [p for p in hctx.hierarchy.projects if not p.organization]
@@ -749,12 +756,10 @@ def tree(
 
             data = serialize_tree(
                 hctx.nodes_to_process,
-                hctx.hierarchy,
                 hctx.projects_by_parent,
                 level,
                 orgless_projects,
             )
-            dumper = dump_json if output_format == "json" else dump_yaml
             print(dumper(data))
             return
 
@@ -994,7 +999,7 @@ def get_resource_name(
 
         logger.debug("name: hierarchy loaded successfully")
 
-        output_format = ctx.obj.get("output_format", "text")
+        dumper = _get_dumper(ctx.obj.get("output_format", "text"))
         results: List[tuple[str, str]] = []
         for path in paths:
             logger.debug(f"name command: resolving path {path}")
@@ -1002,10 +1007,8 @@ def get_resource_name(
             logger.debug(f"name command: resolved {path} to {res_name}")
             results.append((path, res_name))
 
-        if output_format != "text":
-            data = serialize_name_results(results, id_only)
-            dumper = dump_json if output_format == "json" else dump_yaml
-            print(dumper(data))
+        if dumper:
+            print(dumper(serialize_name_results(results, id_only)))
         else:
             for _path, res_name in results:
                 if id_only:
@@ -1028,7 +1031,7 @@ def get_path_command(
     """
     try:
         logger.debug(f"path: resolving resource_names={resource_names}")
-        output_format = ctx.obj.get("output_format", "text")
+        dumper = _get_dumper(ctx.obj.get("output_format", "text"))
         results: List[tuple[str, str]] = []
 
         for name in resource_names:
@@ -1043,10 +1046,8 @@ def get_path_command(
                 else:
                     raise e
 
-        if output_format != "text":
-            data = serialize_path_results(results)
-            dumper = dump_json if output_format == "json" else dump_yaml
-            print(dumper(data))
+        if dumper:
+            print(dumper(serialize_path_results(results)))
         else:
             for _name, resolved_path in results:
                 print(resolved_path)

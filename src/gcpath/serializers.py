@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 import yaml
 
-from gcpath.core import Folder, Hierarchy, OrganizationNode, Project, path_escape
+from gcpath.core import Folder, OrganizationNode, Project, path_escape
 
 
 def resource_type(item: Union[OrganizationNode, Folder, Project]) -> str:
@@ -54,11 +54,9 @@ def serialize_ls(
 
 def serialize_tree_node(
     node: Union[OrganizationNode, Folder],
-    hierarchy: Hierarchy,
     projects_by_parent: Dict[str, List[Project]],
     level: Optional[int] = None,
     current_depth: int = 0,
-    show_ids: bool = False,
 ) -> Dict[str, Any]:
     """Recursively serialize a tree node to a dict with children."""
     if isinstance(node, OrganizationNode):
@@ -98,7 +96,7 @@ def serialize_tree_node(
     for f in children_folders:
         children.append(
             serialize_tree_node(
-                f, hierarchy, projects_by_parent, level, current_depth + 1, show_ids
+                f, projects_by_parent, level, current_depth + 1
             )
         )
 
@@ -107,14 +105,7 @@ def serialize_tree_node(
         projects_by_parent.get(parent_name, []), key=lambda x: x.display_name
     )
     for p in children_projects:
-        child: Dict[str, Any] = {
-            "path": p.path,
-            "resource_name": p.name,
-            "display_name": p.display_name,
-            "type": "project",
-            "project_id": p.project_id,
-        }
-        children.append(child)
+        children.append(serialize_resource(p.path, p))
 
     d["children"] = children
     return d
@@ -122,7 +113,6 @@ def serialize_tree_node(
 
 def serialize_tree(
     nodes_to_process: List[Union[OrganizationNode, Folder]],
-    hierarchy: Hierarchy,
     projects_by_parent: Dict[str, List[Project]],
     level: Optional[int] = None,
     orgless_projects: Optional[List[Project]] = None,
@@ -131,21 +121,13 @@ def serialize_tree(
     result = []
     for node in nodes_to_process:
         result.append(
-            serialize_tree_node(node, hierarchy, projects_by_parent, level)
+            serialize_tree_node(node, projects_by_parent, level)
         )
 
     if orgless_projects:
         orgless_children = []
         for p in sorted(orgless_projects, key=lambda x: x.display_name):
-            orgless_children.append(
-                {
-                    "path": p.path,
-                    "resource_name": p.name,
-                    "display_name": p.display_name,
-                    "type": "project",
-                    "project_id": p.project_id,
-                }
-            )
+            orgless_children.append(serialize_resource(p.path, p))
         result.append(
             {
                 "display_name": "(organizationless)",
