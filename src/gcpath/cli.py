@@ -1119,6 +1119,35 @@ def get_path_command(
         handle_error(e)
 
 
+def _search_hierarchy(
+    hierarchy: Hierarchy,
+    pattern: str,
+    type_filter: Optional[str],
+) -> List[tuple[str, Union[OrganizationNode, Folder, Project]]]:
+    """Search hierarchy resources by display name pattern and optional type filter."""
+    import fnmatch
+
+    lower_pattern = pattern.lower()
+    items: List[tuple[str, Union[OrganizationNode, Folder, Project]]] = []
+
+    if not type_filter or type_filter == "organization":
+        for org in hierarchy.organizations:
+            if fnmatch.fnmatch(org.organization.display_name.lower(), lower_pattern):
+                items.append((f"//{path_escape(org.organization.display_name)}", org))
+
+    if not type_filter or type_filter == "folder":
+        for f in hierarchy.folders:
+            if fnmatch.fnmatch(f.display_name.lower(), lower_pattern):
+                items.append((f.path, f))
+
+    if not type_filter or type_filter == "project":
+        for p in hierarchy.projects:
+            if fnmatch.fnmatch(p.display_name.lower(), lower_pattern):
+                items.append((p.path, p))
+
+    return items
+
+
 @app.command()
 def find(
     ctx: typer.Context,
@@ -1137,8 +1166,6 @@ def find(
     """
     Search for resources by display name pattern (glob syntax).
     """
-    import fnmatch
-
     try:
         _validate_type_filter(resource_type)
 
@@ -1153,26 +1180,7 @@ def find(
             filter_orgs=scope.filter_orgs,
         )
 
-        # Collect all resources
-        items: List[tuple[str, Union[OrganizationNode, Folder, Project]]] = []
-
-        for org in hierarchy.organizations:
-            if fnmatch.fnmatch(org.organization.display_name.lower(), pattern.lower()):
-                if not resource_type or resource_type == "organization":
-                    path = f"//{path_escape(org.organization.display_name)}"
-                    items.append((path, org))
-
-        for f in hierarchy.folders:
-            if fnmatch.fnmatch(f.display_name.lower(), pattern.lower()):
-                if not resource_type or resource_type == "folder":
-                    items.append((f.path, f))
-
-        for p in hierarchy.projects:
-            if fnmatch.fnmatch(p.display_name.lower(), pattern.lower()):
-                if not resource_type or resource_type == "project":
-                    items.append((p.path, p))
-
-        items = sort_resources(items)
+        items = sort_resources(_search_hierarchy(hierarchy, pattern, resource_type))
 
         dumper = _get_dumper(ctx.obj.get("output_format", "text"))
         if dumper:

@@ -258,6 +258,25 @@ def format_tree_label(item: Union[Folder, Project], show_ids: bool = False) -> s
     return ""
 
 
+def _get_node_parent_name(node: Union[OrganizationNode, Folder]) -> str:
+    """Get the resource name used as parent key for a node."""
+    if isinstance(node, OrganizationNode):
+        return node.organization.name
+    return node.name
+
+
+def _get_child_folders(
+    node: Union[OrganizationNode, Folder], parent_name: str
+) -> List[Folder]:
+    """Get sorted direct child folders of a node."""
+    org_node_ref = node if isinstance(node, OrganizationNode) else node.organization
+    if not org_node_ref:
+        return []
+    children = [f for f in org_node_ref.folders.values() if f.parent == parent_name]
+    children.sort(key=lambda x: x.display_name)
+    return children
+
+
 def build_tree_view(
     tree_node,
     current_node: Union[OrganizationNode, Folder],
@@ -284,62 +303,22 @@ def build_tree_view(
     if level is not None and current_depth >= level:
         return
 
-    if isinstance(current_node, OrganizationNode):
-        parent_name = current_node.organization.name
-    else:
-        parent_name = current_node.name
+    parent_name = _get_node_parent_name(current_node)
+    recurse_args = (hierarchy, projects_by_parent, level, current_depth + 1, show_ids, type_filter)
 
-    # Projects
-    children_projects = projects_by_parent.get(parent_name, [])
-    children_projects.sort(key=lambda x: x.display_name)
-
-    # Folders - find direct children using the parent field
-    children_folders = []
-    org_node_ref = (
-        current_node
-        if isinstance(current_node, OrganizationNode)
-        else current_node.organization
-    )
-
-    if org_node_ref:
-        for f in org_node_ref.folders.values():
-            # Use the parent field to find direct children
-            if f.parent == parent_name:
-                children_folders.append(f)
-
-    children_folders.sort(key=lambda x: x.display_name)
-
-    for f in children_folders:
+    for f in _get_child_folders(current_node, parent_name):
         if type_filter == "project":
-            # Still recurse through folders but don't show them
-            build_tree_view(
-                tree_node,
-                f,
-                hierarchy,
-                projects_by_parent,
-                level,
-                current_depth + 1,
-                show_ids,
-                type_filter,
-            )
+            build_tree_view(tree_node, f, *recurse_args)
         else:
-            label = format_tree_label(f, show_ids)
-            sub_node = tree_node.add(label)
-            build_tree_view(
-                sub_node,
-                f,
-                hierarchy,
-                projects_by_parent,
-                level,
-                current_depth + 1,
-                show_ids,
-                type_filter,
-            )
+            sub_node = tree_node.add(format_tree_label(f, show_ids))
+            build_tree_view(sub_node, f, *recurse_args)
 
     if type_filter != "folder":
+        children_projects = sorted(
+            projects_by_parent.get(parent_name, []), key=lambda x: x.display_name
+        )
         for p in children_projects:
-            label = format_tree_label(p, show_ids)
-            tree_node.add(label)
+            tree_node.add(format_tree_label(p, show_ids))
 
 
 # --- Diagram generation (Mermaid / D2) ---
