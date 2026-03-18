@@ -611,9 +611,10 @@ def test_resolve_ancestry_chain_not_found(mock_rm):
 
 @patch("gcpath.core.resourcemanager_v3")
 def test_resolve_ancestry_chain_permission_denied(mock_rm):
-    """Test ancestry chain raises error for permission denied."""
+    """Test ancestry chain uses graceful fallback for permission denied."""
     p_client = mock_rm.ProjectsClient.return_value
     p_client.get_project.side_effect = exceptions.PermissionDenied("denied")
 
-    with pytest.raises(ResourceNotFoundError, match="Permission denied"):
-        Hierarchy.resolve_ancestry_chain("projects/restricted")
+    chain = Hierarchy.resolve_ancestry_chain("projects/restricted")
+    assert len(chain) == 1
+    assert chain[0] == ("projects/restricted", "projects/restricted", "project")

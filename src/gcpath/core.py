@@ -708,9 +708,8 @@ class Hierarchy:
                 f = folders_client.get_folder(name=name)
                 return (name, f.display_name, "folder", f.parent)
             except exceptions.PermissionDenied:
-                raise ResourceNotFoundError(
-                    f"Permission denied accessing folder {name}"
-                )
+                # Graceful fallback matching organization handling
+                return (name, name, "folder", None)
             except exceptions.NotFound:
                 raise ResourceNotFoundError(f"Resource not found: {name}")
 
@@ -720,9 +719,8 @@ class Hierarchy:
                 display_name = p.display_name or p.project_id
                 return (name, display_name, "project", p.parent or None)
             except exceptions.PermissionDenied:
-                raise ResourceNotFoundError(
-                    f"Permission denied accessing project {name}"
-                )
+                # Graceful fallback matching organization handling
+                return (name, name, "project", None)
             except exceptions.NotFound:
                 raise ResourceNotFoundError(f"Resource not found: {name}")
 

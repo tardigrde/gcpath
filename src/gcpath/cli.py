@@ -1,3 +1,4 @@
+import fnmatch
 import typer
 import logging
 from dataclasses import dataclass
@@ -111,7 +112,7 @@ def _resolve_scope(
                 path_parts = target_path[2:].split("/")
                 if path_parts:
                     target_org_name = unquote(path_parts[0])
-        except Exception:
+        except (gcp_exceptions.PermissionDenied, gcp_exceptions.NotFound, GCPathError):
             pass
 
     # Skip org filtering when using entrypoint without explicit resource
@@ -719,8 +720,10 @@ def ls(
 
         # Apply depth limit for recursive listing
         if level is not None and recursive:
-            # Depth is measured in path segments after the org root.
-            # //example.com = depth 0, //example.com/f1 = depth 1, etc.
+            # Paths look like "//example.com/f1/f2". Splitting on "/" gives
+            # ["", "", "example.com", "f1", "f2"], so subtract 2 for the
+            # leading empty segments and 1 for the org root to get the
+            # folder/project depth (e.g. "//o/f1" → 3 parts after split → depth 0).
             if target_path_prefix:
                 base_segments = len(target_path_prefix.split("/")) - 2 - 1
             else:
@@ -1141,8 +1144,6 @@ def _search_hierarchy(
     type_filter: Optional[str],
 ) -> List[tuple[str, Union[OrganizationNode, Folder, Project]]]:
     """Search hierarchy resources by display name pattern and optional type filter."""
-    import fnmatch
-
     lower_pattern = pattern.lower()
 
     # Build flat list of (resource, type_name) to search
