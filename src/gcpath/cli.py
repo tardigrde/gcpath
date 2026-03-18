@@ -1119,6 +1119,22 @@ def get_path_command(
         handle_error(e)
 
 
+def _get_resource_display_name(
+    item: Union[OrganizationNode, Folder, Project],
+) -> str:
+    """Get display name for any resource type."""
+    if isinstance(item, OrganizationNode):
+        return item.organization.display_name
+    return item.display_name
+
+
+def _get_resource_path(item: Union[OrganizationNode, Folder, Project]) -> str:
+    """Get display path for any resource type."""
+    if isinstance(item, OrganizationNode):
+        return f"//{path_escape(item.organization.display_name)}"
+    return item.path
+
+
 def _search_hierarchy(
     hierarchy: Hierarchy,
     pattern: str,
@@ -1128,24 +1144,21 @@ def _search_hierarchy(
     import fnmatch
 
     lower_pattern = pattern.lower()
-    items: List[tuple[str, Union[OrganizationNode, Folder, Project]]] = []
 
+    # Build flat list of (resource, type_name) to search
+    candidates: List[Union[OrganizationNode, Folder, Project]] = []
     if not type_filter or type_filter == "organization":
-        for org in hierarchy.organizations:
-            if fnmatch.fnmatch(org.organization.display_name.lower(), lower_pattern):
-                items.append((f"//{path_escape(org.organization.display_name)}", org))
-
+        candidates.extend(hierarchy.organizations)
     if not type_filter or type_filter == "folder":
-        for f in hierarchy.folders:
-            if fnmatch.fnmatch(f.display_name.lower(), lower_pattern):
-                items.append((f.path, f))
-
+        candidates.extend(hierarchy.folders)
     if not type_filter or type_filter == "project":
-        for p in hierarchy.projects:
-            if fnmatch.fnmatch(p.display_name.lower(), lower_pattern):
-                items.append((p.path, p))
+        candidates.extend(hierarchy.projects)
 
-    return items
+    return [
+        (_get_resource_path(item), item)
+        for item in candidates
+        if fnmatch.fnmatch(_get_resource_display_name(item).lower(), lower_pattern)
+    ]
 
 
 @app.command()

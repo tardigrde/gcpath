@@ -194,7 +194,7 @@ class Hierarchy:
         if (
             not org_nodes
             and scope_resource
-            and scope_resource.startswith("folders/")
+            and scope_resource.startswith(_PREFIX_FOLDERS)
         ):
             logger.debug(
                 f"No organizations found, falling back to folder-scoped loading for {scope_resource}"
@@ -285,7 +285,7 @@ class Hierarchy:
         org_display_name = None
         current = folder_proto.parent
         while current:
-            if current.startswith("organizations/"):
+            if current.startswith(_PREFIX_ORGS):
                 try:
                     org_proto = org_client.get_organization(name=current)
                     org_name = org_proto.name
@@ -293,7 +293,7 @@ class Hierarchy:
                 except exceptions.PermissionDenied:
                     logger.debug(f"Permission denied accessing org {current}")
                 break
-            elif current.startswith("folders/"):
+            elif current.startswith(_PREFIX_FOLDERS):
                 try:
                     parent_proto = folders_client.get_folder(name=current)
                     current = parent_proto.parent
@@ -440,12 +440,12 @@ class Hierarchy:
                 parent_org = None
                 parent_folder = None
 
-                if p_proto.parent.startswith("organizations/"):
+                if p_proto.parent.startswith(_PREFIX_ORGS):
                     parent_org = next(
                         (o for o in org_nodes if o.organization.name == p_proto.parent),
                         None,
                     )
-                elif p_proto.parent.startswith("folders/"):
+                elif p_proto.parent.startswith(_PREFIX_FOLDERS):
                     for o in org_nodes:
                         if p_proto.parent in o.folders:
                             parent_folder = o.folders[p_proto.parent]
@@ -590,7 +590,7 @@ class Hierarchy:
         current_resource_name = resource_name
 
         # First, allow organizations/ID directly
-        if current_resource_name.startswith("organizations/"):
+        if current_resource_name.startswith(_PREFIX_ORGS):
             try:
                 org = org_client.get_organization(name=current_resource_name)
                 logger.debug(
@@ -610,7 +610,7 @@ class Hierarchy:
 
         # Helper to fetch display name and parent
         def get_resource_info(name: str):
-            if name.startswith("projects/"):
+            if name.startswith(_PREFIX_PROJECTS):
                 try:
                     p = projects_client.get_project(name=name)
                     logger.debug(f"GCP API: get_project({name}) returned")
@@ -623,7 +623,7 @@ class Hierarchy:
                         f"Permission denied accessing project {name}"
                     )
 
-            elif name.startswith("folders/"):
+            elif name.startswith(_PREFIX_FOLDERS):
                 try:
                     f = folders_client.get_folder(name=name)
                     logger.debug(f"GCP API: get_folder({name}) returned")
@@ -633,7 +633,7 @@ class Hierarchy:
                         f"Permission denied accessing folder {name}"
                     )
 
-            elif name.startswith("organizations/"):
+            elif name.startswith(_PREFIX_ORGS):
                 try:
                     o = org_client.get_organization(name=name)
                     logger.debug(f"GCP API: get_organization({name}) returned")
@@ -651,7 +651,7 @@ class Hierarchy:
                 # We build the path relevant to the resource itself,
                 # but we need to handle the root (Org).
                 # If it's an organization, it becomes the prefix //Org
-                if current_resource_name.startswith("organizations/"):
+                if current_resource_name.startswith(_PREFIX_ORGS):
                     # We reached the top
                     path_prefix = "//" + path_escape(display_name)
                     # Prepend prefix to existing segments
