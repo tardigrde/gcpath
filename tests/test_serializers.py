@@ -7,6 +7,7 @@ from gcpath.serializers import (
     dump_json,
     dump_yaml,
     resource_type,
+    serialize_ancestors,
     serialize_ls,
     serialize_name_results,
     serialize_path_results,
@@ -166,3 +167,57 @@ class TestDumpYaml:
         output = dump_yaml(data)
         # z_key should appear before a_key (insertion order)
         assert output.index("z_key") < output.index("a_key")
+
+
+class TestSerializeTreeNodeTypeFilter:
+    def test_type_filter_folder(self):
+        _, org_node, _, p1, _ = _h()
+        projects_by_parent = {"folders/1": [p1]}
+        d = serialize_tree_node(org_node, projects_by_parent, type_filter="folder")
+        # Should have folder children but no project children
+        f1_node = d["children"][0]
+        assert f1_node["type"] == "folder"
+        # f1's children should only contain f11 (folder), not p1 (project)
+        child_types = [c["type"] for c in f1_node["children"]]
+        assert "project" not in child_types
+        assert "folder" in child_types
+
+    def test_type_filter_project(self):
+        _, org_node, _, p1, _ = _h()
+        projects_by_parent = {"folders/1": [p1]}
+        d = serialize_tree_node(org_node, projects_by_parent, type_filter="project")
+        # Folders should not appear as children, but their projects should bubble up
+        child_types = [c["type"] for c in d["children"]]
+        assert "folder" not in child_types
+        assert "project" in child_types
+
+
+class TestSerializeTreeTypeFilter:
+    def test_folder_filter_excludes_orgless(self):
+        _, org_node, _, p1, orgless_p = _h()
+        projects_by_parent = {"folders/1": [p1]}
+        result = serialize_tree(
+            [org_node], projects_by_parent,
+            orgless_projects=[orgless_p],
+            type_filter="folder",
+        )
+        # Should only have org node, no organizationless section
+        assert len(result) == 1
+        assert result[0]["type"] == "organization"
+
+
+class TestSerializeAncestors:
+    def test_basic(self):
+        chain = [
+            ("organizations/123", "example.com", "organization"),
+            ("folders/456", "engineering", "folder"),
+            ("projects/p1", "my-project", "project"),
+        ]
+        result = serialize_ancestors(chain)
+        assert len(result) == 3
+        assert result[0] == {"resource_name": "organizations/123", "display_name": "example.com", "type": "organization"}
+        assert result[1] == {"resource_name": "folders/456", "display_name": "engineering", "type": "folder"}
+        assert result[2] == {"resource_name": "projects/p1", "display_name": "my-project", "type": "project"}
+
+    def test_empty(self):
+        assert serialize_ancestors([]) == []

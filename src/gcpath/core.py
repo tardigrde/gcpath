@@ -678,3 +678,56 @@ class Hierarchy:
                 )
 
         return "//?/" + "/".join(segments)  # Should not be reached ideally
+
+    @staticmethod
+    def resolve_ancestry_chain(resource_name: str) -> List[tuple[str, str, str]]:
+        """Resolve full ancestry chain for a resource, returning structured data.
+
+        Returns list of (resource_name, display_name, type) tuples from root to leaf.
+        """
+        folders_client = resourcemanager_v3.FoldersClient()
+        projects_client = resourcemanager_v3.ProjectsClient()
+        org_client = resourcemanager_v3.OrganizationsClient()
+
+        chain: List[tuple[str, str, str]] = []
+        current = resource_name
+
+        while current:
+            if current.startswith("organizations/"):
+                try:
+                    org = org_client.get_organization(name=current)
+                    chain.append((current, org.display_name, "organization"))
+                except exceptions.PermissionDenied:
+                    chain.append((current, current, "organization"))
+                break
+            elif current.startswith("folders/"):
+                try:
+                    f = folders_client.get_folder(name=current)
+                    chain.append((current, f.display_name, "folder"))
+                    current = f.parent
+                except exceptions.PermissionDenied:
+                    raise ResourceNotFoundError(
+                        f"Permission denied accessing folder {current}"
+                    )
+                except exceptions.NotFound:
+                    raise ResourceNotFoundError(f"Resource not found: {current}")
+            elif current.startswith("projects/"):
+                try:
+                    p = projects_client.get_project(name=current)
+                    display_name = p.display_name or p.project_id
+                    chain.append((current, display_name, "project"))
+                    if not p.parent:
+                        break
+                    current = p.parent
+                except exceptions.PermissionDenied:
+                    raise ResourceNotFoundError(
+                        f"Permission denied accessing project {current}"
+                    )
+                except exceptions.NotFound:
+                    raise ResourceNotFoundError(f"Resource not found: {current}")
+            else:
+                raise ResourceNotFoundError(f"Unknown resource type: {current}")
+
+        # Reverse to get root-to-leaf order
+        chain.reverse()
+        return chain

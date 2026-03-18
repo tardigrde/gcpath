@@ -266,6 +266,7 @@ def build_tree_view(
     level: Optional[int] = None,
     current_depth: int = 0,
     show_ids: bool = False,
+    type_filter: Optional[str] = None,
 ):
     """Recursively build tree view of resources.
 
@@ -277,6 +278,8 @@ def build_tree_view(
         level: Maximum depth to display (None for unlimited)
         current_depth: Current depth in the tree
         show_ids: Whether to show resource IDs
+        type_filter: If set, only show resources of this type ("folder" or "project").
+                     Folders are always recursed into to find matching descendants.
     """
     if level is not None and current_depth >= level:
         return
@@ -307,21 +310,36 @@ def build_tree_view(
     children_folders.sort(key=lambda x: x.display_name)
 
     for f in children_folders:
-        label = format_tree_label(f, show_ids)
-        sub_node = tree_node.add(label)
-        build_tree_view(
-            sub_node,
-            f,
-            hierarchy,
-            projects_by_parent,
-            level,
-            current_depth + 1,
-            show_ids,
-        )
+        if type_filter == "project":
+            # Still recurse through folders but don't show them
+            build_tree_view(
+                tree_node,
+                f,
+                hierarchy,
+                projects_by_parent,
+                level,
+                current_depth + 1,
+                show_ids,
+                type_filter,
+            )
+        else:
+            label = format_tree_label(f, show_ids)
+            sub_node = tree_node.add(label)
+            build_tree_view(
+                sub_node,
+                f,
+                hierarchy,
+                projects_by_parent,
+                level,
+                current_depth + 1,
+                show_ids,
+                type_filter,
+            )
 
-    for p in children_projects:
-        label = format_tree_label(p, show_ids)
-        tree_node.add(label)
+    if type_filter != "folder":
+        for p in children_projects:
+            label = format_tree_label(p, show_ids)
+            tree_node.add(label)
 
 
 # --- Diagram generation (Mermaid / D2) ---

@@ -550,3 +550,70 @@ def test_find_orgless_project_skips_org_projects():
     # Should not find org project via _find_orgless_project
     with pytest.raises(ResourceNotFoundError):
         h._find_orgless_project("//example.com/OrgProject")
+
+
+# --- resolve_ancestry_chain tests ---
+
+
+@patch("gcpath.core.resourcemanager_v3")
+def test_resolve_ancestry_chain_project(mock_rm):
+    """Test ancestry chain for a project under folder under org."""
+    p_client = mock_rm.ProjectsClient.return_value
+    f_client = mock_rm.FoldersClient.return_value
+    o_client = mock_rm.OrganizationsClient.return_value
+
+    mock_proj = MagicMock()
+    mock_proj.display_name = "Project 1"
+    mock_proj.project_id = "p1"
+    mock_proj.parent = "folders/f1"
+    p_client.get_project.return_value = mock_proj
+
+    mock_folder = MagicMock()
+    mock_folder.display_name = "Folder 1"
+    mock_folder.parent = "organizations/123"
+    f_client.get_folder.return_value = mock_folder
+
+    mock_org = MagicMock()
+    mock_org.display_name = "Example Org"
+    o_client.get_organization.return_value = mock_org
+
+    chain = Hierarchy.resolve_ancestry_chain("projects/p1")
+
+    assert len(chain) == 3
+    assert chain[0] == ("organizations/123", "Example Org", "organization")
+    assert chain[1] == ("folders/f1", "Folder 1", "folder")
+    assert chain[2] == ("projects/p1", "Project 1", "project")
+
+
+@patch("gcpath.core.resourcemanager_v3")
+def test_resolve_ancestry_chain_org(mock_rm):
+    """Test ancestry chain for an organization."""
+    o_client = mock_rm.OrganizationsClient.return_value
+    mock_org = MagicMock()
+    mock_org.display_name = "Example Org"
+    o_client.get_organization.return_value = mock_org
+
+    chain = Hierarchy.resolve_ancestry_chain("organizations/123")
+
+    assert len(chain) == 1
+    assert chain[0] == ("organizations/123", "Example Org", "organization")
+
+
+@patch("gcpath.core.resourcemanager_v3")
+def test_resolve_ancestry_chain_not_found(mock_rm):
+    """Test ancestry chain raises error for not found resources."""
+    p_client = mock_rm.ProjectsClient.return_value
+    p_client.get_project.side_effect = exceptions.NotFound("not found")
+
+    with pytest.raises(ResourceNotFoundError, match="Resource not found"):
+        Hierarchy.resolve_ancestry_chain("projects/nonexistent")
+
+
+@patch("gcpath.core.resourcemanager_v3")
+def test_resolve_ancestry_chain_permission_denied(mock_rm):
+    """Test ancestry chain raises error for permission denied."""
+    p_client = mock_rm.ProjectsClient.return_value
+    p_client.get_project.side_effect = exceptions.PermissionDenied("denied")
+
+    with pytest.raises(ResourceNotFoundError, match="Permission denied"):
+        Hierarchy.resolve_ancestry_chain("projects/restricted")

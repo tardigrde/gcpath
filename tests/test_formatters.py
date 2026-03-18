@@ -488,3 +488,54 @@ def test_build_diagram_folder_root(mock_org_node, mock_folder, mock_project, moc
     assert "TestFolder" in result
     assert "projects_789" in result
     assert "TestProject" in result
+
+
+# Test build_tree_view with type_filter
+def test_build_tree_view_type_filter_folder(
+    mock_org_node, mock_folder, mock_project, mock_hierarchy
+):
+    """Test tree view with type_filter='folder' hides projects."""
+    from rich.tree import Tree
+
+    mock_org_node.folders = {"folders/456": mock_folder}
+    projects_by_parent = {"folders/456": [mock_project]}
+
+    root = Tree("Test")
+    build_tree_view(
+        root,
+        mock_org_node,
+        mock_hierarchy,
+        projects_by_parent,
+        level=None,
+        current_depth=0,
+        show_ids=False,
+        type_filter="folder",
+    )
+
+    # Should have folder child but no project children
+    assert len(root.children) == 1  # Only the folder
+
+
+def test_build_tree_view_type_filter_project(
+    mock_org_node, mock_folder, mock_project, mock_hierarchy
+):
+    """Test tree view with type_filter='project' hides folders but shows projects."""
+    from rich.tree import Tree
+
+    mock_org_node.folders = {"folders/456": mock_folder}
+    projects_by_parent = {"folders/456": [mock_project]}
+
+    root = Tree("Test")
+    build_tree_view(
+        root,
+        mock_org_node,
+        mock_hierarchy,
+        projects_by_parent,
+        level=None,
+        current_depth=0,
+        show_ids=False,
+        type_filter="project",
+    )
+
+    # Projects from inside folders should be added directly to root
+    assert len(root.children) == 1  # The project, bubbled up
