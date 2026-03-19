@@ -75,18 +75,22 @@ def test_ls_long_format_shows_org_resource_names(mock_load, mock_hierarchy):
 
 
 @patch("gcpath.core.Hierarchy.load")
-def test_ls_long_format_shows_folder_resource_names(mock_load, mock_hierarchy):
+@patch("gcpath.cli.Hierarchy.resolve_ancestry")
+def test_ls_long_format_shows_folder_resource_names(mock_resolve, mock_load, mock_hierarchy):
     """Verify folder resource names appear in long format"""
     mock_load.return_value = mock_hierarchy
+    mock_resolve.return_value = "//example.com"
     result = runner.invoke(app, ["ls", "-l", "organizations/123"])
     assert result.exit_code == 0
     assert "folders/1" in result.stdout
 
 
 @patch("gcpath.core.Hierarchy.load")
-def test_ls_long_format_shows_project_resource_names(mock_load, mock_hierarchy):
+@patch("gcpath.cli.Hierarchy.resolve_ancestry")
+def test_ls_long_format_shows_project_resource_names(mock_resolve, mock_load, mock_hierarchy):
     """Verify project resource names appear in long format"""
     mock_load.return_value = mock_hierarchy
+    mock_resolve.return_value = "//example.com/f1"
     result = runner.invoke(app, ["ls", "-l", "folders/1"])
     assert result.exit_code == 0
     assert "projects/p1" in result.stdout
@@ -995,7 +999,7 @@ def test_ls_type_organization(mock_load, mock_hierarchy):
     mock_load.return_value = mock_hierarchy
     result = runner.invoke(app, ["ls", "--type", "organization"])
     assert result.exit_code == 0
-    assert "example.com" in result.stdout
+    assert "//example.com" in result.stdout.split()
 
 
 def test_ls_type_invalid():
@@ -1072,7 +1076,7 @@ def test_ls_recursive_with_level(mock_load, mock_hierarchy):
     result = runner.invoke(app, ["ls", "-R", "-L", "1"])
     assert result.exit_code == 0
     # Org-level items (depth 0) should be present
-    assert "//example.com" in result.stdout
+    assert "//example.com" in result.stdout.split()
     # Direct children of orgs (depth 1) should be present
     assert "//example.com/f1" in result.stdout
     assert "//_/Standalone" in result.stdout
@@ -1100,7 +1104,7 @@ def test_ls_recursive_with_level_json(mock_load, mock_hierarchy):
     assert result.exit_code == 0
     data = json.loads(result.stdout)
     paths = [item["path"] for item in data]
-    assert "//example.com" in paths
+    assert any(p == "//example.com" for p in paths)
     assert "//example.com/f1" in paths
     # Deeper items should not appear
     assert "//example.com/f1/f11" not in paths
@@ -1196,7 +1200,7 @@ def test_ancestors_command(mock_chain):
     result = runner.invoke(app, ["ancestors", "projects/p1"])
     assert result.exit_code == 0
     assert "organizations/123" in result.stdout
-    assert "example.com" in result.stdout
+    assert "example.com" in result.stdout.split()
     assert "folders/456" in result.stdout
     assert "engineering" in result.stdout
     assert "projects/p1" in result.stdout

@@ -582,9 +582,29 @@ class Hierarchy:
         Resolves the path for a given resource name by traversing up the hierarchy.
         This avoids loading the entire hierarchy.
         """
-        folders_client = resourcemanager_v3.FoldersClient()
-        projects_client = resourcemanager_v3.ProjectsClient()
-        org_client = resourcemanager_v3.OrganizationsClient()
+        # Lazily initialize clients only when needed to avoid triggering
+        # credential lookup for unused client types
+        _folders_client = None
+        _projects_client = None
+        _org_client = None
+
+        def folders_client():
+            nonlocal _folders_client
+            if _folders_client is None:
+                _folders_client = resourcemanager_v3.FoldersClient()
+            return _folders_client
+
+        def projects_client():
+            nonlocal _projects_client
+            if _projects_client is None:
+                _projects_client = resourcemanager_v3.ProjectsClient()
+            return _projects_client
+
+        def org_client():
+            nonlocal _org_client
+            if _org_client is None:
+                _org_client = resourcemanager_v3.OrganizationsClient()
+            return _org_client
 
         segments: List[str] = []
         current_resource_name = resource_name
@@ -592,7 +612,7 @@ class Hierarchy:
         # First, allow organizations/ID directly
         if current_resource_name.startswith(_PREFIX_ORGS):
             try:
-                org = org_client.get_organization(name=current_resource_name)
+                org = org_client().get_organization(name=current_resource_name)
                 logger.debug(
                     f"GCP API: get_organization({current_resource_name}) returned"
                 )
@@ -612,7 +632,7 @@ class Hierarchy:
         def get_resource_info(name: str):
             if name.startswith(_PREFIX_PROJECTS):
                 try:
-                    p = projects_client.get_project(name=name)
+                    p = projects_client().get_project(name=name)
                     logger.debug(f"GCP API: get_project({name}) returned")
                     # Project display_name is optional, fallback to projectId
                     d_name = p.display_name or p.project_id
@@ -625,7 +645,7 @@ class Hierarchy:
 
             elif name.startswith(_PREFIX_FOLDERS):
                 try:
-                    f = folders_client.get_folder(name=name)
+                    f = folders_client().get_folder(name=name)
                     logger.debug(f"GCP API: get_folder({name}) returned")
                     return f.display_name, f.parent
                 except exceptions.PermissionDenied:
@@ -635,7 +655,7 @@ class Hierarchy:
 
             elif name.startswith(_PREFIX_ORGS):
                 try:
-                    o = org_client.get_organization(name=name)
+                    o = org_client().get_organization(name=name)
                     logger.debug(f"GCP API: get_organization({name}) returned")
                     return o.display_name, None
                 except exceptions.PermissionDenied:
