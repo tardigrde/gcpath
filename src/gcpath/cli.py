@@ -1,3 +1,4 @@
+import fnmatch
 import typer
 import logging
 from dataclasses import dataclass
@@ -27,10 +28,12 @@ from gcpath.formatters import (
     build_diagram,
 )
 from gcpath.serializers import (
+    resource_type as get_resource_type,
     serialize_ls,
     serialize_tree,
     serialize_name_results,
     serialize_path_results,
+    serialize_ancestors,
     dump_json,
     dump_yaml,
 )
@@ -57,8 +60,72 @@ _RESOURCE_PREFIX_FOLDERS = "folders/"
 _RESOURCE_PREFIX_ORGS = "organizations/"
 _RESOURCE_PREFIXES = (_RESOURCE_PREFIX_ORGS, _RESOURCE_PREFIX_FOLDERS, _RESOURCE_PREFIX_PROJECTS)
 _REFRESH_HELP = "Force a refresh of the cache from the GCP API"
+_VALID_TYPE_FILTERS = ("folder", "project", "organization")
 
 logger = logging.getLogger(__name__)
+
+
+def _validate_type_filter(resource_type: Optional[str]) -> None:
+    """Validate --type filter value."""
+    if resource_type is not None and resource_type not in _VALID_TYPE_FILTERS:
+        error_console.print(
+            f"[red]Error:[/red] Invalid type '{resource_type}'. "
+            f"Must be one of: {', '.join(_VALID_TYPE_FILTERS)}"
+        )
+        raise typer.Exit(code=1)
+
+
+def _matches_type(
+    obj: Union[OrganizationNode, Folder, Project], type_filter: str
+) -> bool:
+    """Check if a resource matches the given type filter."""
+    return get_resource_type(obj) == type_filter
+
+
+@dataclass
+class _ScopeResult:
+    """Result of resolving a resource scope argument."""
+    target_resource_name: Optional[str]
+    target_org_name: Optional[str]
+    filter_orgs: Optional[List[str]]
+
+
+def _resolve_scope(
+    resource: Optional[str],
+    entrypoint: Optional[str],
+) -> _ScopeResult:
+    """Resolve resource/entrypoint into scope parameters for hierarchy loading.
+
+    Returns target_resource_name, target_org_name, and filter_orgs.
+    """
+    effective_resource = resource or entrypoint
+    target_resource_name = None
+    target_org_name = None
+
+    if effective_resource and any(
+        effective_resource.startswith(p) for p in _RESOURCE_PREFIXES
+    ):
+        target_resource_name = effective_resource
+        try:
+            target_path = Hierarchy.resolve_ancestry(effective_resource)
+            if target_path.startswith("//"):
+                path_parts = target_path[2:].split("/")
+                if path_parts:
+                    target_org_name = unquote(path_parts[0])
+        except (gcp_exceptions.PermissionDenied, gcp_exceptions.NotFound, GCPathError):
+            pass
+
+    # Skip org filtering when using entrypoint without explicit resource
+    if not resource and entrypoint and target_org_name:
+        filter_orgs = None
+    else:
+        filter_orgs = [target_org_name] if target_org_name else None
+
+    return _ScopeResult(
+        target_resource_name=target_resource_name,
+        target_org_name=target_org_name,
+        filter_orgs=filter_orgs,
+    )
 
 app = typer.Typer(
     name="gcpath",
@@ -542,6 +609,12 @@ def ls(
     recursive: bool = typer.Option(
         False, "--recursive", "-R", help="List resources recursively"
     ),
+    resource_type: Optional[str] = typer.Option(
+        None, "--type", "-t", help="Filter by resource type: folder, project, organization"
+    ),
+    level: Optional[int] = typer.Option(
+        None, "--level", "-L", help="Max depth for recursive listing (requires -R)"
+    ),
     force_refresh: bool = typer.Option(
         False,
         "--force-refresh",
@@ -553,55 +626,22 @@ def ls(
     List folders and projects. Defaults to the root organization.
     """
     try:
-        target_org_name = None
-        target_resource_name = None
+        _validate_type_filter(resource_type)
 
-        # Inject entrypoint when no explicit resource is given
         ep = ctx.obj.get("entrypoint")
-        effective_resource = resource or ep
+        scope = _resolve_scope(resource, ep)
+        target_resource_name = scope.target_resource_name
 
-        if effective_resource:
-            # Check if it's already a GCP resource name
-            if any(
-                effective_resource.startswith(p)
-                for p in _RESOURCE_PREFIXES
-            ):
-                target_resource_name = effective_resource
-                try:
-                    target_path = Hierarchy.resolve_ancestry(effective_resource)
-                    if target_path.startswith("//"):
-                        path_parts = target_path[2:].split("/")
-                        if path_parts:
-                            target_org_name = unquote(path_parts[0])
-                except Exception:
-                    pass
-            # If it's a path, we'd need to resolve it back to resource name
-            # For simplicity, we mostly support resource names or defaults to org load
-            elif effective_resource.startswith("//"):
-                # Handle path to name resolution if needed, but SPEC emphasizes resource name args
-                pass
-
-        # Skip org filtering when using entrypoint without explicit resource
-        # (org may be inaccessible for folder admins)
-        if not resource and ep and target_org_name:
-            filter_orgs = None
-        else:
-            filter_orgs = [target_org_name] if target_org_name else None
         logger.debug(
-            f"ls: loading hierarchy for resource='{resource}', filter_orgs={filter_orgs}, recursive={recursive}"
+            f"ls: loading hierarchy for resource='{resource}', filter_orgs={scope.filter_orgs}, recursive={recursive}"
         )
-
-        # Determine scope_resource for API-level filtering
-        # If targeting a specific resource, pass it as scope_resource
-        # so the API only returns direct children (or all descendants if recursive)
-        scope_resource = target_resource_name if target_resource_name else None
 
         hierarchy = _load_hierarchy(
             ctx,
-            scope_resource=scope_resource,
+            scope_resource=target_resource_name,
             recursive=recursive,
             force_refresh=force_refresh,
-            filter_orgs=filter_orgs,
+            filter_orgs=scope.filter_orgs,
         )
 
         logger.debug(
@@ -674,6 +714,25 @@ def ls(
         # Sort items by path
         items = sort_resources(items)
 
+        # Apply type filter
+        if resource_type:
+            items = [(p, obj) for p, obj in items if _matches_type(obj, resource_type)]
+
+        # Apply depth limit for recursive listing
+        if level is not None and recursive:
+            # Paths look like "//example.com/f1/f2". Splitting on "/" gives
+            # ["", "", "example.com", "f1", "f2"], so subtract 2 for the
+            # leading empty segments and 1 for the org root to get the
+            # folder/project depth (e.g. "//o/f1" → 3 parts after split → depth 0).
+            if target_path_prefix:
+                base_segments = len(target_path_prefix.split("/")) - 2 - 1
+            else:
+                base_segments = 0
+            items = [
+                (p, obj) for p, obj in items
+                if len(p.split("/")) - 2 - 1 - base_segments <= level
+            ]
+
         logger.debug(f"ls: found {len(items)} items to display")
 
         if dumper:
@@ -726,6 +785,9 @@ def tree(
     show_ids: bool = typer.Option(
         False, "--ids", "-i", help="Show resource names in the tree"
     ),
+    resource_type: Optional[str] = typer.Option(
+        None, "--type", "-t", help="Filter by resource type: folder, project"
+    ),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompts"),
     force_refresh: bool = typer.Option(
         False,
@@ -740,6 +802,8 @@ def tree(
     from rich.tree import Tree
 
     try:
+        _validate_type_filter(resource_type)
+
         hctx = _prepare_hierarchy_command(
             ctx, "tree", resource, level, yes, force_refresh
         )
@@ -759,6 +823,7 @@ def tree(
                 hctx.projects_by_parent,
                 level,
                 orgless_projects,
+                type_filter=resource_type,
             )
             print(dumper(data))
             return
@@ -794,10 +859,11 @@ def tree(
                 level,
                 0,
                 show_ids,
+                type_filter=resource_type,
             )
 
         # Organizationless projects
-        if not hctx.target_resource_name and any(
+        if not hctx.target_resource_name and resource_type != "folder" and any(
             not p.organization for p in hctx.hierarchy.projects
         ):
             orgless_node = root_tree.add(
@@ -1051,6 +1117,135 @@ def get_path_command(
         else:
             for _name, resolved_path in results:
                 print(resolved_path)
+
+    except Exception as e:
+        handle_error(e)
+
+
+def _get_resource_display_name(
+    item: Union[OrganizationNode, Folder, Project],
+) -> str:
+    """Get display name for any resource type."""
+    if isinstance(item, OrganizationNode):
+        return item.organization.display_name
+    return item.display_name
+
+
+def _get_resource_path(item: Union[OrganizationNode, Folder, Project]) -> str:
+    """Get display path for any resource type."""
+    if isinstance(item, OrganizationNode):
+        return f"//{path_escape(item.organization.display_name)}"
+    return item.path
+
+
+def _search_hierarchy(
+    hierarchy: Hierarchy,
+    pattern: str,
+    type_filter: Optional[str],
+) -> List[tuple[str, Union[OrganizationNode, Folder, Project]]]:
+    """Search hierarchy resources by display name pattern and optional type filter."""
+    lower_pattern = pattern.lower()
+
+    # Build flat list of (resource, type_name) to search
+    candidates: List[Union[OrganizationNode, Folder, Project]] = []
+    if not type_filter or type_filter == "organization":
+        candidates.extend(hierarchy.organizations)
+    if not type_filter or type_filter == "folder":
+        candidates.extend(hierarchy.folders)
+    if not type_filter or type_filter == "project":
+        candidates.extend(hierarchy.projects)
+
+    return [
+        (_get_resource_path(item), item)
+        for item in candidates
+        if fnmatch.fnmatch(_get_resource_display_name(item).lower(), lower_pattern)
+    ]
+
+
+@app.command()
+def find(
+    ctx: typer.Context,
+    pattern: Annotated[str, typer.Argument(help="Name pattern to search (glob syntax: *, ?)")],
+    resource: Annotated[
+        Optional[str],
+        typer.Argument(help="Resource to scope search within (e.g. folders/123)"),
+    ] = None,
+    resource_type: Optional[str] = typer.Option(
+        None, "--type", "-t", help="Filter by resource type: folder, project, organization"
+    ),
+    force_refresh: bool = typer.Option(
+        False, "--force-refresh", "-F", help=_REFRESH_HELP
+    ),
+) -> None:
+    """
+    Search for resources by display name pattern (glob syntax).
+    """
+    try:
+        _validate_type_filter(resource_type)
+
+        ep = ctx.obj.get("entrypoint")
+        scope = _resolve_scope(resource, ep)
+
+        hierarchy = _load_hierarchy(
+            ctx,
+            scope_resource=scope.target_resource_name,
+            recursive=True,
+            force_refresh=force_refresh,
+            filter_orgs=scope.filter_orgs,
+        )
+
+        items = sort_resources(_search_hierarchy(hierarchy, pattern, resource_type))
+
+        dumper = _get_dumper(ctx.obj.get("output_format", "text"))
+        if dumper:
+            print(dumper(serialize_ls(items)))
+            return
+
+        if not items:
+            rprint(f"[yellow]No resources matching '{pattern}' found.[/yellow]")
+            return
+
+        for path, _ in items:
+            print(path)
+
+    except Exception as e:
+        handle_error(e)
+
+
+@app.command()
+def ancestors(
+    ctx: typer.Context,
+    resource_name: Annotated[
+        str, typer.Argument(help="Resource name (e.g., folders/123, projects/my-proj)")
+    ],
+) -> None:
+    """
+    Show the full ancestry chain from a resource up to the org root.
+    """
+    try:
+        if not any(resource_name.startswith(p) for p in _RESOURCE_PREFIXES):
+            error_console.print(
+                f"[red]Error:[/red] Invalid resource format '{resource_name}'. "
+                f"Expected 'organizations/...', 'folders/...', or 'projects/...'."
+            )
+            raise typer.Exit(code=1)
+
+        chain = Hierarchy.resolve_ancestry_chain(resource_name)
+
+        dumper = _get_dumper(ctx.obj.get("output_format", "text"))
+        if dumper:
+            print(dumper(serialize_ancestors(chain)))
+            return
+
+        table = Table(show_header=True, header_style="bold magenta", box=None, padding=(0, 1))
+        table.add_column("Resource Name", overflow="fold")
+        table.add_column("Display Name", overflow="fold")
+        table.add_column("Type", overflow="fold")
+
+        for name, display_name, rtype in chain:
+            table.add_row(name, display_name, rtype)
+
+        console.print(table)
 
     except Exception as e:
         handle_error(e)

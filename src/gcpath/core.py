@@ -20,6 +20,11 @@ logger = logging.getLogger(__name__)
 
 SYNTHETIC_ORG_NAME = "organizations/_folder_root"
 
+# Resource name prefixes
+_PREFIX_ORGS = "organizations/"
+_PREFIX_FOLDERS = "folders/"
+_PREFIX_PROJECTS = "projects/"
+
 
 class GCPathError(Exception):
     """Base exception for gcpath."""
@@ -189,7 +194,7 @@ class Hierarchy:
         if (
             not org_nodes
             and scope_resource
-            and scope_resource.startswith("folders/")
+            and scope_resource.startswith(_PREFIX_FOLDERS)
         ):
             logger.debug(
                 f"No organizations found, falling back to folder-scoped loading for {scope_resource}"
@@ -280,7 +285,7 @@ class Hierarchy:
         org_display_name = None
         current = folder_proto.parent
         while current:
-            if current.startswith("organizations/"):
+            if current.startswith(_PREFIX_ORGS):
                 try:
                     org_proto = org_client.get_organization(name=current)
                     org_name = org_proto.name
@@ -288,7 +293,7 @@ class Hierarchy:
                 except exceptions.PermissionDenied:
                     logger.debug(f"Permission denied accessing org {current}")
                 break
-            elif current.startswith("folders/"):
+            elif current.startswith(_PREFIX_FOLDERS):
                 try:
                     parent_proto = folders_client.get_folder(name=current)
                     current = parent_proto.parent
@@ -435,12 +440,12 @@ class Hierarchy:
                 parent_org = None
                 parent_folder = None
 
-                if p_proto.parent.startswith("organizations/"):
+                if p_proto.parent.startswith(_PREFIX_ORGS):
                     parent_org = next(
                         (o for o in org_nodes if o.organization.name == p_proto.parent),
                         None,
                     )
-                elif p_proto.parent.startswith("folders/"):
+                elif p_proto.parent.startswith(_PREFIX_FOLDERS):
                     for o in org_nodes:
                         if p_proto.parent in o.folders:
                             parent_folder = o.folders[p_proto.parent]
@@ -551,19 +556,19 @@ class Hierarchy:
             raise
 
     def get_path_by_resource_name(self, resource_name: str) -> str:
-        if resource_name.startswith("organizations/"):
+        if resource_name.startswith(_PREFIX_ORGS):
             org = self._orgs_by_name.get(resource_name)
             if org:
                 return "//" + path_escape(org.organization.display_name)
             raise ResourceNotFoundError(f"Organization '{resource_name}' not found")
 
-        if resource_name.startswith("folders/"):
+        if resource_name.startswith(_PREFIX_FOLDERS):
             folder = self._folders_by_name.get(resource_name)
             if folder:
                 return folder.path
             raise ResourceNotFoundError(f"Folder '{resource_name}' not found")
 
-        if resource_name.startswith("projects/"):
+        if resource_name.startswith(_PREFIX_PROJECTS):
             proj = self._projects_by_name.get(resource_name)
             if proj:
                 return proj.path
@@ -577,17 +582,37 @@ class Hierarchy:
         Resolves the path for a given resource name by traversing up the hierarchy.
         This avoids loading the entire hierarchy.
         """
-        folders_client = resourcemanager_v3.FoldersClient()
-        projects_client = resourcemanager_v3.ProjectsClient()
-        org_client = resourcemanager_v3.OrganizationsClient()
+        # Lazily initialize clients only when needed to avoid triggering
+        # credential lookup for unused client types
+        _folders_client = None
+        _projects_client = None
+        _org_client = None
+
+        def folders_client():
+            nonlocal _folders_client
+            if _folders_client is None:
+                _folders_client = resourcemanager_v3.FoldersClient()
+            return _folders_client
+
+        def projects_client():
+            nonlocal _projects_client
+            if _projects_client is None:
+                _projects_client = resourcemanager_v3.ProjectsClient()
+            return _projects_client
+
+        def org_client():
+            nonlocal _org_client
+            if _org_client is None:
+                _org_client = resourcemanager_v3.OrganizationsClient()
+            return _org_client
 
         segments: List[str] = []
         current_resource_name = resource_name
 
         # First, allow organizations/ID directly
-        if current_resource_name.startswith("organizations/"):
+        if current_resource_name.startswith(_PREFIX_ORGS):
             try:
-                org = org_client.get_organization(name=current_resource_name)
+                org = org_client().get_organization(name=current_resource_name)
                 logger.debug(
                     f"GCP API: get_organization({current_resource_name}) returned"
                 )
@@ -605,9 +630,9 @@ class Hierarchy:
 
         # Helper to fetch display name and parent
         def get_resource_info(name: str):
-            if name.startswith("projects/"):
+            if name.startswith(_PREFIX_PROJECTS):
                 try:
-                    p = projects_client.get_project(name=name)
+                    p = projects_client().get_project(name=name)
                     logger.debug(f"GCP API: get_project({name}) returned")
                     # Project display_name is optional, fallback to projectId
                     d_name = p.display_name or p.project_id
@@ -618,9 +643,9 @@ class Hierarchy:
                         f"Permission denied accessing project {name}"
                     )
 
-            elif name.startswith("folders/"):
+            elif name.startswith(_PREFIX_FOLDERS):
                 try:
-                    f = folders_client.get_folder(name=name)
+                    f = folders_client().get_folder(name=name)
                     logger.debug(f"GCP API: get_folder({name}) returned")
                     return f.display_name, f.parent
                 except exceptions.PermissionDenied:
@@ -628,9 +653,9 @@ class Hierarchy:
                         f"Permission denied accessing folder {name}"
                     )
 
-            elif name.startswith("organizations/"):
+            elif name.startswith(_PREFIX_ORGS):
                 try:
-                    o = org_client.get_organization(name=name)
+                    o = org_client().get_organization(name=name)
                     logger.debug(f"GCP API: get_organization({name}) returned")
                     return o.display_name, None
                 except exceptions.PermissionDenied:
@@ -646,7 +671,7 @@ class Hierarchy:
                 # We build the path relevant to the resource itself,
                 # but we need to handle the root (Org).
                 # If it's an organization, it becomes the prefix //Org
-                if current_resource_name.startswith("organizations/"):
+                if current_resource_name.startswith(_PREFIX_ORGS):
                     # We reached the top
                     path_prefix = "//" + path_escape(display_name)
                     # Prepend prefix to existing segments
@@ -678,3 +703,68 @@ class Hierarchy:
                 )
 
         return "//?/" + "/".join(segments)  # Should not be reached ideally
+
+    @staticmethod
+    def _fetch_chain_link(
+        name: str,
+        folders_client,
+        projects_client,
+        org_client,
+    ) -> tuple[str, str, str, Optional[str]]:
+        """Fetch a single link in the ancestry chain.
+
+        Returns (resource_name, display_name, type, parent_or_None).
+        parent is None when the chain should stop (org reached or no parent).
+        """
+        if name.startswith(_PREFIX_ORGS):
+            try:
+                org = org_client.get_organization(name=name)
+                return (name, org.display_name, "organization", None)
+            except exceptions.PermissionDenied:
+                return (name, name, "organization", None)
+
+        if name.startswith(_PREFIX_FOLDERS):
+            try:
+                f = folders_client.get_folder(name=name)
+                return (name, f.display_name, "folder", f.parent)
+            except exceptions.PermissionDenied:
+                # Graceful fallback matching organization handling
+                return (name, name, "folder", None)
+            except exceptions.NotFound:
+                raise ResourceNotFoundError(f"Resource not found: {name}")
+
+        if name.startswith(_PREFIX_PROJECTS):
+            try:
+                p = projects_client.get_project(name=name)
+                display_name = p.display_name or p.project_id
+                return (name, display_name, "project", p.parent or None)
+            except exceptions.PermissionDenied:
+                # Graceful fallback matching organization handling
+                return (name, name, "project", None)
+            except exceptions.NotFound:
+                raise ResourceNotFoundError(f"Resource not found: {name}")
+
+        raise ResourceNotFoundError(f"Unknown resource type: {name}")
+
+    @staticmethod
+    def resolve_ancestry_chain(resource_name: str) -> List[tuple[str, str, str]]:
+        """Resolve full ancestry chain for a resource, returning structured data.
+
+        Returns list of (resource_name, display_name, type) tuples from root to leaf.
+        """
+        folders_client = resourcemanager_v3.FoldersClient()
+        projects_client = resourcemanager_v3.ProjectsClient()
+        org_client = resourcemanager_v3.OrganizationsClient()
+
+        chain: List[tuple[str, str, str]] = []
+        current: Optional[str] = resource_name
+
+        while current:
+            name, display_name, rtype, parent = Hierarchy._fetch_chain_link(
+                current, folders_client, projects_client, org_client
+            )
+            chain.append((name, display_name, rtype))
+            current = parent
+
+        chain.reverse()
+        return chain

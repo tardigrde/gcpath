@@ -52,29 +52,47 @@ def serialize_ls(
     return [serialize_resource(path, item) for path, item in items]
 
 
-def serialize_tree_node(
-    node: Union[OrganizationNode, Folder],
-    projects_by_parent: Dict[str, List[Project]],
-    level: Optional[int] = None,
-    current_depth: int = 0,
-) -> Dict[str, Any]:
-    """Recursively serialize a tree node to a dict with children."""
+def _node_to_dict(node: Union[OrganizationNode, Folder]) -> Tuple[str, Dict[str, Any]]:
+    """Convert a node to its base dict and return (parent_name, dict)."""
     if isinstance(node, OrganizationNode):
-        parent_name = node.organization.name
-        d: Dict[str, Any] = {
+        return node.organization.name, {
             "path": f"//{path_escape(node.organization.display_name)}",
             "resource_name": node.organization.name,
             "display_name": node.organization.display_name,
             "type": "organization",
         }
-    else:
-        parent_name = node.name
-        d = {
-            "path": node.path,
-            "resource_name": node.name,
-            "display_name": node.display_name,
-            "type": "folder",
-        }
+    return node.name, {
+        "path": node.path,
+        "resource_name": node.name,
+        "display_name": node.display_name,
+        "type": "folder",
+    }
+
+
+def _get_child_folders(node: Union[OrganizationNode, Folder], parent_name: str) -> List[Folder]:
+    """Get sorted direct child folders of a node."""
+    org_ref = node if isinstance(node, OrganizationNode) else node.organization
+    if not org_ref:
+        return []
+    children = [f for f in org_ref.folders.values() if f.parent == parent_name]
+    children.sort(key=lambda x: x.display_name)
+    return children
+
+
+def serialize_tree_node(
+    node: Union[OrganizationNode, Folder],
+    projects_by_parent: Dict[str, List[Project]],
+    level: Optional[int] = None,
+    current_depth: int = 0,
+    type_filter: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Recursively serialize a tree node to a dict with children.
+
+    Args:
+        type_filter: If set, only include children of this type ("folder" or "project").
+                     Folders are always recursed into to find matching descendants.
+    """
+    parent_name, d = _node_to_dict(node)
 
     if level is not None and current_depth >= level:
         d["children"] = []
@@ -82,30 +100,16 @@ def serialize_tree_node(
 
     children: List[Dict[str, Any]] = []
 
-    # Child folders
-    org_node_ref = (
-        node if isinstance(node, OrganizationNode) else node.organization
-    )
-    children_folders: List[Folder] = []
-    if org_node_ref:
-        for f in org_node_ref.folders.values():
-            if f.parent == parent_name:
-                children_folders.append(f)
-    children_folders.sort(key=lambda x: x.display_name)
+    for f in _get_child_folders(node, parent_name):
+        sub = serialize_tree_node(f, projects_by_parent, level, current_depth + 1, type_filter)
+        if type_filter == "project":
+            children.extend(sub.get("children", []))
+        else:
+            children.append(sub)
 
-    for f in children_folders:
-        children.append(
-            serialize_tree_node(
-                f, projects_by_parent, level, current_depth + 1
-            )
-        )
-
-    # Child projects
-    children_projects = sorted(
-        projects_by_parent.get(parent_name, []), key=lambda x: x.display_name
-    )
-    for p in children_projects:
-        children.append(serialize_resource(p.path, p))
+    if type_filter != "folder":
+        for p in sorted(projects_by_parent.get(parent_name, []), key=lambda x: x.display_name):
+            children.append(serialize_resource(p.path, p))
 
     d["children"] = children
     return d
@@ -116,15 +120,16 @@ def serialize_tree(
     projects_by_parent: Dict[str, List[Project]],
     level: Optional[int] = None,
     orgless_projects: Optional[List[Project]] = None,
+    type_filter: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """Top-level tree serialization."""
     result = []
     for node in nodes_to_process:
         result.append(
-            serialize_tree_node(node, projects_by_parent, level)
+            serialize_tree_node(node, projects_by_parent, level, type_filter=type_filter)
         )
 
-    if orgless_projects:
+    if orgless_projects and type_filter != "folder":
         orgless_children = []
         for p in sorted(orgless_projects, key=lambda x: x.display_name):
             orgless_children.append(serialize_resource(p.path, p))
@@ -137,6 +142,20 @@ def serialize_tree(
         )
 
     return result
+
+
+def serialize_ancestors(
+    chain: List[Tuple[str, str, str]],
+) -> List[Dict[str, str]]:
+    """Serialize ancestry chain to a list of dicts.
+
+    Args:
+        chain: List of (resource_name, display_name, type) tuples from root to leaf.
+    """
+    return [
+        {"resource_name": name, "display_name": dn, "type": t}
+        for name, dn, t in chain
+    ]
 
 
 def serialize_name_results(

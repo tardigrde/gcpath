@@ -75,18 +75,22 @@ def test_ls_long_format_shows_org_resource_names(mock_load, mock_hierarchy):
 
 
 @patch("gcpath.core.Hierarchy.load")
-def test_ls_long_format_shows_folder_resource_names(mock_load, mock_hierarchy):
+@patch("gcpath.cli.Hierarchy.resolve_ancestry")
+def test_ls_long_format_shows_folder_resource_names(mock_resolve, mock_load, mock_hierarchy):
     """Verify folder resource names appear in long format"""
     mock_load.return_value = mock_hierarchy
+    mock_resolve.return_value = "//example.com"
     result = runner.invoke(app, ["ls", "-l", "organizations/123"])
     assert result.exit_code == 0
     assert "folders/1" in result.stdout
 
 
 @patch("gcpath.core.Hierarchy.load")
-def test_ls_long_format_shows_project_resource_names(mock_load, mock_hierarchy):
+@patch("gcpath.cli.Hierarchy.resolve_ancestry")
+def test_ls_long_format_shows_project_resource_names(mock_resolve, mock_load, mock_hierarchy):
     """Verify project resource names appear in long format"""
     mock_load.return_value = mock_hierarchy
+    mock_resolve.return_value = "//example.com/f1"
     result = runner.invoke(app, ["ls", "-l", "folders/1"])
     assert result.exit_code == 0
     assert "projects/p1" in result.stdout
@@ -957,3 +961,284 @@ def test_json_output_no_rich_markup(mock_load, mock_hierarchy):
     assert "[dim]" not in result.stdout
     assert "[bold" not in result.stdout
     assert "[green]" not in result.stdout
+
+
+# --- --type filter tests ---
+
+
+@patch("gcpath.core.Hierarchy.load")
+def test_ls_type_folder(mock_load, mock_hierarchy):
+    """ls --type folder shows only folders."""
+    mock_load.return_value = mock_hierarchy
+    result = runner.invoke(app, ["ls", "--type", "folder", "-R"])
+    assert result.exit_code == 0
+    assert "f1" in result.stdout
+    assert "f11" in result.stdout
+    # Projects should not appear
+    assert "Project" not in result.stdout
+    assert "Standalone" not in result.stdout
+
+
+@patch("gcpath.core.Hierarchy.load")
+def test_ls_type_project(mock_load, mock_hierarchy):
+    """ls --type project shows only projects."""
+    mock_load.return_value = mock_hierarchy
+    result = runner.invoke(app, ["ls", "--type", "project", "-R"])
+    assert result.exit_code == 0
+    assert "Project" in result.stdout
+    assert "Standalone" in result.stdout
+    # Folders should not appear (except as path components)
+    lines = [line for line in result.stdout.strip().split("\n") if line]
+    for line in lines:
+        assert "project" in line.lower() or "standalone" in line.lower() or "//" in line
+
+
+@patch("gcpath.core.Hierarchy.load")
+def test_ls_type_organization(mock_load, mock_hierarchy):
+    """ls --type organization shows only organizations."""
+    mock_load.return_value = mock_hierarchy
+    result = runner.invoke(app, ["ls", "--type", "organization"])
+    assert result.exit_code == 0
+    assert any(token == "//example.com" for token in result.stdout.split())
+
+
+def test_ls_type_invalid():
+    """ls --type invalid should fail."""
+    result = runner.invoke(app, ["ls", "--type", "invalid"])
+    assert result.exit_code == 1
+    assert "Invalid type" in result.output
+
+
+@patch("gcpath.core.Hierarchy.load")
+@patch("typer.confirm")
+def test_tree_type_folder(mock_confirm, mock_load, mock_hierarchy):
+    """tree --type folder shows only folders."""
+    mock_confirm.return_value = True
+    mock_load.return_value = mock_hierarchy
+    result = runner.invoke(app, ["tree", "--type", "folder"])
+    assert result.exit_code == 0
+    assert "f1" in result.stdout
+    assert "f11" in result.stdout
+    # Projects should not appear
+    assert "Project 1" not in result.stdout
+    assert "(organizationless)" not in result.stdout
+
+
+@patch("gcpath.core.Hierarchy.load")
+@patch("typer.confirm")
+def test_tree_type_project(mock_confirm, mock_load, mock_hierarchy):
+    """tree --type project shows only projects."""
+    mock_confirm.return_value = True
+    mock_load.return_value = mock_hierarchy
+    result = runner.invoke(app, ["tree", "--type", "project"])
+    assert result.exit_code == 0
+    assert "Project 1" in result.stdout
+    # Folders should not appear as visible nodes
+    # (but org root is still shown)
+
+
+@patch("gcpath.core.Hierarchy.load")
+def test_ls_type_folder_json(mock_load, mock_hierarchy):
+    """ls --type folder --json shows only folders."""
+    mock_load.return_value = mock_hierarchy
+    result = runner.invoke(app, ["--json", "ls", "--type", "folder", "-R"])
+    assert result.exit_code == 0
+    data = json.loads(result.stdout)
+    assert all(item["type"] == "folder" for item in data)
+
+
+@patch("gcpath.core.Hierarchy.load")
+@patch("typer.confirm")
+def test_tree_type_folder_json(mock_confirm, mock_load, mock_hierarchy):
+    """tree --type folder --json excludes projects from children."""
+    mock_confirm.return_value = True
+    mock_load.return_value = mock_hierarchy
+    result = runner.invoke(app, ["--json", "tree", "--type", "folder"])
+    assert result.exit_code == 0
+    data = json.loads(result.stdout)
+    # Check that no project children appear
+    def check_no_projects(nodes):
+        for node in nodes:
+            if "children" in node:
+                for child in node["children"]:
+                    assert child.get("type") != "project"
+                    check_no_projects([child] if "children" in child else [])
+    check_no_projects(data)
+
+
+# --- -L depth limit on ls -R tests ---
+
+
+@patch("gcpath.core.Hierarchy.load")
+def test_ls_recursive_with_level(mock_load, mock_hierarchy):
+    """ls -R -L 1 shows org root and direct children only."""
+    mock_load.return_value = mock_hierarchy
+    result = runner.invoke(app, ["ls", "-R", "-L", "1"])
+    assert result.exit_code == 0
+    # Org-level items (depth 0) should be present
+    assert any(token == "//example.com" for token in result.stdout.split())
+    # Direct children of orgs (depth 1) should be present
+    assert "//example.com/f1" in result.stdout
+    assert "//_/Standalone" in result.stdout
+    # Deeper items (depth 2+) should not
+    assert "//example.com/f1/f11" not in result.stdout
+    assert "Project%201" not in result.stdout
+
+
+@patch("gcpath.core.Hierarchy.load")
+def test_ls_recursive_with_level_2(mock_load, mock_hierarchy):
+    """ls -R -L 2 includes items up to depth 2."""
+    mock_load.return_value = mock_hierarchy
+    result = runner.invoke(app, ["ls", "-R", "-L", "2"])
+    assert result.exit_code == 0
+    assert "//example.com/f1" in result.stdout
+    assert "//example.com/f1/f11" in result.stdout
+    assert "//example.com/f1/Project%201" in result.stdout
+
+
+@patch("gcpath.core.Hierarchy.load")
+def test_ls_recursive_with_level_json(mock_load, mock_hierarchy):
+    """ls -R -L 1 --json limits depth."""
+    mock_load.return_value = mock_hierarchy
+    result = runner.invoke(app, ["--json", "ls", "-R", "-L", "1"])
+    assert result.exit_code == 0
+    data = json.loads(result.stdout)
+    paths = [item["path"] for item in data]
+    assert any(p == "//example.com" for p in paths)
+    assert "//example.com/f1" in paths
+    # Deeper items should not appear
+    assert "//example.com/f1/f11" not in paths
+
+
+# --- find command tests ---
+
+
+@patch("gcpath.core.Hierarchy.load")
+def test_find_command(mock_load, mock_hierarchy):
+    """find matches by display name pattern."""
+    mock_load.return_value = mock_hierarchy
+    result = runner.invoke(app, ["find", "f*"])
+    assert result.exit_code == 0
+    assert "f1" in result.stdout
+    assert "f11" in result.stdout
+
+
+@patch("gcpath.core.Hierarchy.load")
+def test_find_command_exact(mock_load, mock_hierarchy):
+    """find with exact name."""
+    mock_load.return_value = mock_hierarchy
+    result = runner.invoke(app, ["find", "f1"])
+    assert result.exit_code == 0
+    assert "f1" in result.stdout
+    assert "f11" not in result.stdout
+
+
+@patch("gcpath.core.Hierarchy.load")
+def test_find_type_filter(mock_load, mock_hierarchy):
+    """find --type project filters results."""
+    mock_load.return_value = mock_hierarchy
+    result = runner.invoke(app, ["find", "--type", "project", "*"])
+    assert result.exit_code == 0
+    assert "Project" in result.stdout
+    assert "Standalone" in result.stdout
+    # Folders should not appear
+    lines = result.stdout.strip().split("\n")
+    for line in lines:
+        if line.strip():
+            assert "f1" not in line.split("/")[-1] or "Project" in line
+
+
+@patch("gcpath.core.Hierarchy.load")
+def test_find_no_match(mock_load, mock_hierarchy):
+    """find with no matches shows message."""
+    mock_load.return_value = mock_hierarchy
+    result = runner.invoke(app, ["find", "nonexistent-xyz"])
+    assert result.exit_code == 0
+    assert "No resources matching" in result.stdout
+
+
+@patch("gcpath.core.Hierarchy.load")
+def test_find_json_output(mock_load, mock_hierarchy):
+    """find --json outputs JSON."""
+    mock_load.return_value = mock_hierarchy
+    result = runner.invoke(app, ["--json", "find", "f*"])
+    assert result.exit_code == 0
+    data = json.loads(result.stdout)
+    assert isinstance(data, list)
+    assert len(data) >= 2  # f1 and f11
+    assert all("path" in item for item in data)
+    assert all("type" in item for item in data)
+
+
+@patch("gcpath.core.Hierarchy.load")
+def test_find_case_insensitive(mock_load, mock_hierarchy):
+    """find is case-insensitive."""
+    mock_load.return_value = mock_hierarchy
+    result = runner.invoke(app, ["find", "PROJECT*"])
+    assert result.exit_code == 0
+    assert "Project" in result.stdout
+
+
+def test_find_type_invalid():
+    """find --type invalid should fail."""
+    result = runner.invoke(app, ["find", "--type", "invalid", "*"])
+    assert result.exit_code == 1
+    assert "Invalid type" in result.output
+
+
+# --- ancestors command tests ---
+
+
+@patch("gcpath.core.Hierarchy.resolve_ancestry_chain")
+def test_ancestors_command(mock_chain):
+    """ancestors shows full ancestry chain."""
+    mock_chain.return_value = [
+        ("organizations/123", "example.com", "organization"),
+        ("folders/456", "engineering", "folder"),
+        ("projects/p1", "my-project", "project"),
+    ]
+    result = runner.invoke(app, ["ancestors", "projects/p1"])
+    assert result.exit_code == 0
+    assert "organizations/123" in result.stdout
+    assert any(token == "example.com" for token in result.stdout.split())
+    assert "folders/456" in result.stdout
+    assert "engineering" in result.stdout
+    assert "projects/p1" in result.stdout
+    assert "my-project" in result.stdout
+
+
+@patch("gcpath.core.Hierarchy.resolve_ancestry_chain")
+def test_ancestors_json(mock_chain):
+    """ancestors --json outputs structured data."""
+    mock_chain.return_value = [
+        ("organizations/123", "example.com", "organization"),
+        ("folders/456", "engineering", "folder"),
+    ]
+    result = runner.invoke(app, ["--json", "ancestors", "folders/456"])
+    assert result.exit_code == 0
+    data = json.loads(result.stdout)
+    assert len(data) == 2
+    assert data[0]["resource_name"] == "organizations/123"
+    assert data[0]["type"] == "organization"
+    assert data[1]["resource_name"] == "folders/456"
+    assert data[1]["type"] == "folder"
+
+
+@patch("gcpath.core.Hierarchy.resolve_ancestry_chain")
+def test_ancestors_yaml(mock_chain):
+    """ancestors --yaml outputs structured data."""
+    mock_chain.return_value = [
+        ("organizations/123", "example.com", "organization"),
+    ]
+    result = runner.invoke(app, ["--yaml", "ancestors", "organizations/123"])
+    assert result.exit_code == 0
+    data = yaml.safe_load(result.stdout)
+    assert len(data) == 1
+    assert data[0]["resource_name"] == "organizations/123"
+
+
+def test_ancestors_invalid_resource():
+    """ancestors with invalid resource format should fail."""
+    result = runner.invoke(app, ["ancestors", "invalid/123"])
+    assert result.exit_code == 1
+    assert "Invalid resource format" in result.output
