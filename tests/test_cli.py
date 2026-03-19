@@ -999,7 +999,7 @@ def test_ls_type_organization(mock_load, mock_hierarchy):
     mock_load.return_value = mock_hierarchy
     result = runner.invoke(app, ["ls", "--type", "organization"])
     assert result.exit_code == 0
-    assert "//example.com" in result.stdout.split()
+    assert any(token == "//example.com" for token in result.stdout.split())
 
 
 def test_ls_type_invalid():
@@ -1076,7 +1076,7 @@ def test_ls_recursive_with_level(mock_load, mock_hierarchy):
     result = runner.invoke(app, ["ls", "-R", "-L", "1"])
     assert result.exit_code == 0
     # Org-level items (depth 0) should be present
-    assert "//example.com" in result.stdout.split()
+    assert any(token == "//example.com" for token in result.stdout.split())
     # Direct children of orgs (depth 1) should be present
     assert "//example.com/f1" in result.stdout
     assert "//_/Standalone" in result.stdout
@@ -1200,7 +1200,7 @@ def test_ancestors_command(mock_chain):
     result = runner.invoke(app, ["ancestors", "projects/p1"])
     assert result.exit_code == 0
     assert "organizations/123" in result.stdout
-    assert "example.com" in result.stdout.split()
+    assert any(token == "example.com" for token in result.stdout.split())
     assert "folders/456" in result.stdout
     assert "engineering" in result.stdout
     assert "projects/p1" in result.stdout
