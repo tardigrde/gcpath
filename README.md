@@ -16,6 +16,10 @@ It helps you translate between GCP resource names (e.g., `folders/12345`) and hu
 - **Recursive Listing**: List all folders and projects in your organization as paths.
 - **Path Resolution**: Get the resource name (ID) for a given path.
 - **Reverse Lookup**: Get the path for a given resource name (ID).
+- **Find**: Search for resources by name using glob patterns.
+- **Ancestors**: Show the full ancestry chain from any resource up to the org root.
+- **Type Filtering**: Filter `ls`, `tree`, and `find` output by resource type (folder, project, organization).
+- **Structured Output**: `--json` and `--yaml` flags for machine-readable output across all commands.
 - **Dual Mode**:
   - **Cloud Asset API (Default)**: Fast, bulk loading using GCP Cloud Asset Inventory.
   - **Resource Manager API**: Iterative loading using standard Resource Manager API (slower, but different permissions).
@@ -56,6 +60,15 @@ gcpath ls
 # List children of a specific folder
 gcpath ls folders/123456789
 
+# List only folders, recursively, up to depth 2
+gcpath ls -R --type folder -L 2
+
+# Find resources by name pattern
+gcpath find "*prod*"
+
+# Show ancestry chain of a resource
+gcpath ancestors projects/my-project
+
 # Find ID of a specific path
 gcpath name //example.com/engineering
 
@@ -73,6 +86,10 @@ gcpath diagram
 
 # Generate a D2 diagram scoped to a folder
 gcpath diagram folders/123456789 --format d2
+
+# Machine-readable output
+gcpath --json ls -R
+gcpath --yaml tree -L 2
 ```
 
 ## Usage
@@ -89,6 +106,8 @@ Options:
 
 - `-l, --long`: Show resource IDs and numbers (for projects).
 - `-R, --recursive`: List resources recursively.
+- `-t, --type TYPE`: Filter by resource type: `folder`, `project`, `organization`.
+- `-L, --level N`: Limit depth for recursive listing (requires `-R`).
 
 Examples:
 
@@ -101,6 +120,12 @@ gcpath ls -R
 
 # List children of a specific folder
 gcpath ls folders/123456789
+
+# List only folders, recursively
+gcpath ls -R --type folder
+
+# Recursive listing limited to depth 2
+gcpath ls -R -L 2
 ```
 
 ### Tree View (`tree`)
@@ -115,6 +140,7 @@ Options:
 
 - `-L, --level N`: Limit depth of the tree (no limit by default).
 - `-i, --ids`: Include resource IDs in the output.
+- `-t, --type TYPE`: Filter by resource type: `folder`, `project`.
 - `-y, --yes`: Skip confirmation prompts for large hierarchy loads.
 
 ### Generate Diagram (`diagram`)
@@ -169,6 +195,81 @@ Get the path from a resource name:
 
 ```bash
 gcpath path folders/987654321
+```
+
+### Find Resources (`find`)
+
+Search for resources by display name using glob patterns.
+
+```bash
+gcpath find PATTERN [RESOURCE]
+```
+
+Options:
+
+- `-t, --type TYPE`: Filter by resource type: `folder`, `project`, `organization`.
+
+The optional `RESOURCE` argument scopes the search to a subtree.
+
+Examples:
+
+```bash
+# Find all resources with "prod" in the name
+gcpath find "*prod*"
+
+# Find only projects matching a pattern
+gcpath find --type project "*backend*"
+
+# Search within a specific folder
+gcpath find "team-*" folders/123456789
+
+# Case-insensitive by default
+gcpath find "*STAGING*"
+```
+
+### Show Ancestry (`ancestors`)
+
+Show the full ancestry chain from a resource up to the organization root. Uses direct API calls without loading the full hierarchy.
+
+```bash
+gcpath ancestors RESOURCE_NAME
+```
+
+Examples:
+
+```bash
+# Show ancestry of a project
+gcpath ancestors projects/my-project
+
+# Show ancestry of a folder
+gcpath ancestors folders/123456789
+
+# JSON output for scripting
+gcpath --json ancestors projects/my-project
+```
+
+### Structured Output (`--json`, `--yaml`)
+
+All commands support `--json` and `--yaml` global flags for machine-readable output:
+
+```bash
+# JSON output
+gcpath --json ls -R
+gcpath --json tree -L 2
+gcpath --json find "*prod*"
+gcpath --json ancestors projects/my-project
+gcpath --json name //example.com/engineering
+gcpath --json path folders/123456789
+
+# YAML output
+gcpath --yaml ls
+gcpath --yaml tree
+```
+
+The flags are mutually exclusive. Structured output goes to stdout with status messages redirected to stderr, so it's safe to pipe:
+
+```bash
+gcpath --json ls -R | jq '.[] | select(.type == "project")'
 ```
 
 ## API Modes
