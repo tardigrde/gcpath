@@ -60,6 +60,34 @@ def extract_list_values(ancestors_wrapper: Any) -> List[str]:
     ]
 
 
+def extract_labels(labels_col: Any) -> Dict[str, str]:
+    """Extract labels from Asset API response column.
+
+    The Asset API returns labels as a MapComposite/dict-like structure
+    where keys and values are strings.
+
+    Args:
+        labels_col: Labels column from Asset API row
+
+    Returns:
+        Dict of label key-value pairs, empty dict if no labels
+    """
+    raw = extract_value(labels_col)
+    if not raw:
+        return {}
+
+    try:
+        # MapComposite behaves like a dict
+        if hasattr(raw, "items"):
+            return {str(k): str(v) for k, v in raw.items()}
+        if isinstance(raw, dict):
+            return {str(k): str(v) for k, v in raw.items()}
+    except (TypeError, AttributeError) as e:
+        logger.warning(f"Error extracting labels: {e}")
+
+    return {}
+
+
 def parse_parent_struct(parent_col: Any) -> Optional[str]:
     """Parse parent STRUCT from Asset API response.
 
@@ -130,21 +158,24 @@ def validate_row_structure(row: Any, expected_columns: int, row_type: str) -> bo
         return False
 
 
-def parse_project_row(row: Any) -> Dict[str, Any]:
+def parse_project_row(row: Any, has_labels: bool = False) -> Dict[str, Any]:
     """Parse a project row from Asset API.
 
     Expected columns: name, projectNumber, projectId, parent (STRUCT), ancestors
+    With labels: name, projectNumber, projectId, parent (STRUCT), ancestors, labels
 
     Args:
         row: Project row from Asset API response
+        has_labels: If True, expect labels column at index 5
 
     Returns:
-        Dict with keys: name, project_id, display_name, parent, ancestors
+        Dict with keys: name, project_id, display_name, parent, ancestors[, labels]
 
     Raises:
         ValueError: If row structure is invalid
     """
-    if not validate_row_structure(row, 5, "project"):
+    expected_cols = 6 if has_labels else 5
+    if not validate_row_structure(row, expected_cols, "project"):
         raise ValueError("Invalid project row structure")
 
     row_dict = dict(row)
@@ -159,12 +190,7 @@ def parse_project_row(row: Any) -> Dict[str, Any]:
     name = clean_asset_name(str(name_val))
     raw_ancestors = extract_list_values(ancestors_wrapper)
 
-    logger.debug(
-        f"Parsed project from Asset API: project_id={project_id}, name={name}, "
-        f"parent_from_api={parent_from_api}, ancestors={raw_ancestors}"
-    )
-
-    return {
+    result: Dict[str, Any] = {
         "name": name,
         "project_id": str(project_id),
         "display_name": str(project_id),  # Use projectId as displayName
@@ -172,22 +198,35 @@ def parse_project_row(row: Any) -> Dict[str, Any]:
         "ancestors": raw_ancestors,
     }
 
+    if has_labels:
+        result["labels"] = extract_labels(f_list[5])
 
-def parse_folder_row(row: Any) -> Dict[str, Any]:
+    logger.debug(
+        f"Parsed project from Asset API: project_id={project_id}, name={name}, "
+        f"parent_from_api={parent_from_api}, ancestors={raw_ancestors}"
+    )
+
+    return result
+
+
+def parse_folder_row(row: Any, has_labels: bool = False) -> Dict[str, Any]:
     """Parse a folder row from Asset API.
 
     Expected columns: name, displayName, parent, ancestors
+    With labels: name, displayName, parent, ancestors, labels
 
     Args:
         row: Folder row from Asset API response
+        has_labels: If True, expect labels column at index 4
 
     Returns:
-        Dict with keys: name, display_name, parent, ancestors
+        Dict with keys: name, display_name, parent, ancestors[, labels]
 
     Raises:
         ValueError: If row structure is invalid or missing required fields
     """
-    if not validate_row_structure(row, 4, "folder"):
+    expected_cols = 5 if has_labels else 4
+    if not validate_row_structure(row, expected_cols, "folder"):
         raise ValueError("Invalid folder row structure")
 
     row_dict = dict(row)
@@ -206,17 +245,22 @@ def parse_folder_row(row: Any) -> Dict[str, Any]:
     parent = str(parent_val) if parent_val else None
     raw_ancestors = extract_list_values(ancestors_wrapper)
 
-    logger.debug(
-        f"Parsed folder from Asset API: name={name}, display_name={display_name}, "
-        f"parent={parent}, ancestors={raw_ancestors}"
-    )
-
-    return {
+    result: Dict[str, Any] = {
         "name": name,
         "display_name": display_name,
         "parent": parent,
         "ancestors": raw_ancestors,
     }
+
+    if has_labels:
+        result["labels"] = extract_labels(f_list[4])
+
+    logger.debug(
+        f"Parsed folder from Asset API: name={name}, display_name={display_name}, "
+        f"parent={parent}, ancestors={raw_ancestors}"
+    )
+
+    return result
 
 
 def build_folder_ancestors(

@@ -5,6 +5,7 @@ from gcpath.parsers import (
     clean_asset_name,
     extract_value,
     extract_list_values,
+    extract_labels,
     parse_parent_struct,
     validate_row_structure,
     parse_project_row,
@@ -326,3 +327,93 @@ def test_build_folder_ancestors_org_parent():
         name, raw_ancestors, parent, loaded_folders, org_name
     )
     assert result == ["folders/1", "organizations/123"]
+
+
+# Test extract_labels
+def test_extract_labels_from_dict():
+    """Test extracting labels from a dict-wrapped value."""
+    labels_col = {"v": {"env": "prod", "team": "infra"}}
+    result = extract_labels(labels_col)
+    assert result == {"env": "prod", "team": "infra"}
+
+
+def test_extract_labels_empty():
+    """Test extracting labels when value is None."""
+    labels_col = {"v": None}
+    result = extract_labels(labels_col)
+    assert result == {}
+
+
+def test_extract_labels_no_labels():
+    """Test extracting labels from empty dict."""
+    labels_col = {"v": {}}
+    result = extract_labels(labels_col)
+    assert result == {}
+
+
+# Test parse_folder_row with labels
+def test_parse_folder_row_with_labels():
+    """Test parsing a folder row with labels column."""
+    row = {
+        "f": [
+            {"v": "//cloudresourcemanager.googleapis.com/folders/456"},
+            {"v": "Test Folder"},
+            {"v": "folders/123"},
+            {"v": [{"v": "folders/456"}, {"v": "organizations/123"}]},
+            {"v": {"env": "prod"}},
+        ]
+    }
+
+    result = parse_folder_row(row, has_labels=True)
+    assert result["name"] == "folders/456"
+    assert result["labels"] == {"env": "prod"}
+
+
+def test_parse_folder_row_without_labels_flag():
+    """Test that labels are not parsed when has_labels=False."""
+    row = {
+        "f": [
+            {"v": "//cloudresourcemanager.googleapis.com/folders/456"},
+            {"v": "Test Folder"},
+            {"v": "folders/123"},
+            {"v": [{"v": "folders/456"}]},
+        ]
+    }
+
+    result = parse_folder_row(row, has_labels=False)
+    assert "labels" not in result
+
+
+# Test parse_project_row with labels
+def test_parse_project_row_with_labels():
+    """Test parsing a project row with labels column."""
+    row = {
+        "f": [
+            {"v": "//cloudresourcemanager.googleapis.com/projects/p1"},
+            {"v": "12345"},
+            {"v": "p1"},
+            {"v": {"f": [{"v": "folder"}, {"v": "456"}]}},
+            {"v": [{"v": "projects/p1"}]},
+            {"v": {"team": "backend", "env": "dev"}},
+        ]
+    }
+
+    result = parse_project_row(row, has_labels=True)
+    assert result["name"] == "projects/p1"
+    assert result["labels"] == {"team": "backend", "env": "dev"}
+
+
+def test_parse_project_row_without_labels_flag():
+    """Test that labels are not parsed when has_labels=False."""
+    row = {
+        "f": [
+            {"v": "//cloudresourcemanager.googleapis.com/projects/p1"},
+            {"v": "12345"},
+            {"v": "p1"},
+            {"v": {"f": [{"v": "folder"}, {"v": "456"}]}},
+            {"v": [{"v": "projects/p1"}]},
+        ]
+    }
+
+    result = parse_project_row(row, has_labels=False)
+    assert "labels" not in result

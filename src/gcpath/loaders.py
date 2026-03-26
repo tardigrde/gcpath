@@ -22,19 +22,23 @@ _FOLDER_PREFIX = "folders/"
 
 
 def build_folder_sql_query(
-    parent_filter: Optional[str] = None, ancestors_filter: Optional[str] = None
+    parent_filter: Optional[str] = None,
+    ancestors_filter: Optional[str] = None,
+    include_labels: bool = False,
 ) -> str:
     """Build SQL query for loading folders from Asset API.
 
     Args:
         parent_filter: Only load folders directly under this parent
         ancestors_filter: Only load folders with this resource in their ancestors
+        include_labels: If True, include resource.data.labels in SELECT
 
     Returns:
         SQL query string for Asset API
     """
+    labels_col = ", resource.data.labels" if include_labels else ""
     base_query = (
-        "SELECT name, resource.data.displayName, resource.data.parent, ancestors "
+        f"SELECT name, resource.data.displayName, resource.data.parent, ancestors{labels_col} "
         "FROM `cloudresourcemanager_googleapis_com_Folder` "
         "WHERE resource.data.lifecycleState = 'ACTIVE'"
     )
@@ -57,20 +61,24 @@ def build_folder_sql_query(
 
 
 def build_project_sql_query(
-    parent_filter: Optional[str] = None, ancestors_filter: Optional[str] = None
+    parent_filter: Optional[str] = None,
+    ancestors_filter: Optional[str] = None,
+    include_labels: bool = False,
 ) -> str:
     """Build SQL query for loading projects from Asset API.
 
     Args:
         parent_filter: Only load projects directly under this parent
         ancestors_filter: Only load projects with this resource in their ancestors
+        include_labels: If True, include resource.data.labels in SELECT
 
     Returns:
         SQL query string for Asset API
     """
+    labels_col = ", resource.data.labels" if include_labels else ""
     base_query = (
         "SELECT name, resource.data.projectNumber, resource.data.projectId, "
-        "resource.data.parent, ancestors "
+        f"resource.data.parent, ancestors{labels_col} "
         "FROM `cloudresourcemanager_googleapis_com_Project` "
         "WHERE resource.data.lifecycleState = 'ACTIVE'"
     )
@@ -277,6 +285,7 @@ def load_folders_asset(
     ancestors_filter: Optional[str] = None,
     query_parent: Optional[str] = None,
     root_ancestor: Optional[str] = None,
+    include_labels: bool = False,
 ):
     """Load folders from Asset API.
 
@@ -288,6 +297,7 @@ def load_folders_asset(
                       Defaults to node.organization.name.
         root_ancestor: Override for the root ancestor in ancestor chains.
                        Defaults to node.organization.name.
+        include_labels: If True, fetch labels for each folder.
 
     Note: parent_filter and ancestors_filter are mutually exclusive.
           If neither is provided, loads ALL folders under the org.
@@ -297,7 +307,7 @@ def load_folders_asset(
     root = root_ancestor or node.organization.name
 
     # Build SQL query
-    statement = build_folder_sql_query(parent_filter, ancestors_filter)
+    statement = build_folder_sql_query(parent_filter, ancestors_filter, include_labels=include_labels)
 
     logger.debug(f"Folders query: {statement}")
     query_request = asset_v1.QueryAssetsRequest(
@@ -319,7 +329,7 @@ def load_folders_asset(
     for row in response.query_result.rows:
         try:
             # Parse the folder row using parsers module
-            folder_data = parse_folder_row(row)
+            folder_data = parse_folder_row(row, has_labels=include_labels)
 
             # Get the parent - either from the API response or from parent_filter
             if folder_data["parent"]:
@@ -344,6 +354,7 @@ def load_folders_asset(
                 ancestors=ancestors,
                 organization=node,
                 parent=folder_parent,
+                labels=folder_data.get("labels", {}),
             )
             node.folders[f.name] = f
 
@@ -360,6 +371,7 @@ def load_projects_asset(
     parent_filter: Optional[str] = None,
     ancestors_filter: Optional[str] = None,
     query_parent: Optional[str] = None,
+    include_labels: bool = False,
 ):
     """Load projects from Asset API.
 
@@ -369,6 +381,7 @@ def load_projects_asset(
         ancestors_filter: Only load projects with this resource in their ancestors
         query_parent: Override for QueryAssetsRequest.parent (e.g., a folder).
                       Defaults to node.organization.name.
+        include_labels: If True, fetch labels for each project.
 
     Returns:
         List of Project objects
@@ -383,7 +396,7 @@ def load_projects_asset(
     projects: List[Project] = []
 
     # Build SQL query
-    statement = build_project_sql_query(parent_filter, ancestors_filter)
+    statement = build_project_sql_query(parent_filter, ancestors_filter, include_labels=include_labels)
 
     logger.debug(f"Projects query: {statement}")
     query_request = asset_v1.QueryAssetsRequest(
@@ -409,7 +422,7 @@ def load_projects_asset(
         for row in response.query_result.rows:
             try:
                 # Parse the project row using parsers module
-                project_data = parse_project_row(row)
+                project_data = parse_project_row(row, has_labels=include_labels)
 
                 # Determine parent - prefer from API, then ancestors, then fallback
                 if project_data["parent"]:
@@ -445,6 +458,7 @@ def load_projects_asset(
                     parent=parent_res,
                     organization=node,
                     folder=parent_folder,
+                    labels=project_data.get("labels", {}),
                 )
                 logger.debug(
                     f"Added project {project_data['project_id']} to hierarchy "
@@ -520,3 +534,95 @@ def load_organizationless_projects(existing_project_names: set):
         logger.error(f"Error searching organizationless projects: {e}")
 
     return projects
+
+
+def _parse_tag_binding_row(row) -> Optional[tuple]:
+    """Parse a single TagBinding row from Asset API.
+
+    Returns (parent_resource_name, tag_key, tag_value) or None on error.
+    """
+    from gcpath.parsers import extract_value, clean_asset_name
+
+    try:
+        row_dict = dict(row)
+        f_list = row_dict.get("f", [])
+        if len(f_list) < 4:
+            return None
+
+        parent_val = extract_value(f_list[1])
+        tag_key = extract_value(f_list[2])
+        tag_value = extract_value(f_list[3])
+
+        if not parent_val or not tag_key or not tag_value:
+            return None
+
+        parent_name = clean_asset_name(str(parent_val))
+        return (parent_name, str(tag_key), str(tag_value))
+    except (TypeError, AttributeError, KeyError) as e:
+        logger.warning(f"Error parsing tag binding row: {e}")
+        return None
+
+
+def load_tags_asset(parent: str) -> Dict[str, Dict[str, str]]:
+    """Load tag bindings from Asset API.
+
+    Queries the TagBinding asset type to get all tag bindings for resources
+    under the given parent scope.
+
+    Args:
+        parent: The scope to query (e.g., 'organizations/123' or 'folders/456')
+
+    Returns:
+        Dict mapping resource names to their tags: {resource_name: {tag_key: tag_value}}
+    """
+    asset_client = asset_v1.AssetServiceClient()
+    tags_map: Dict[str, Dict[str, str]] = {}
+
+    statement = (
+        "SELECT name, resource.data.parent, resource.data.tagKey, resource.data.tagValue "
+        "FROM `cloudresourcemanager_googleapis_com_TagBinding`"
+    )
+
+    logger.debug(f"Tags query: {statement}")
+    query_request = asset_v1.QueryAssetsRequest(
+        parent=parent,
+        statement=statement,
+    )
+
+    try:
+        response = asset_client.query_assets(request=query_request)
+        logger.debug(f"GCP API: query_assets(tags) returned for {parent}")
+
+        if not response.query_result or not response.query_result.rows:
+            logger.debug("No tag binding rows returned from Asset API")
+            return tags_map
+
+        for row in response.query_result.rows:
+            parsed = _parse_tag_binding_row(row)
+            if parsed:
+                parent_name, tag_key, tag_value = parsed
+                if parent_name not in tags_map:
+                    tags_map[parent_name] = {}
+                tags_map[parent_name][tag_key] = tag_value
+
+    except exceptions.PermissionDenied:
+        logger.warning("Permission denied querying tag bindings")
+    except Exception as e:
+        logger.error(f"Error querying tag bindings via Asset API: {e}")
+
+    return tags_map
+
+
+def apply_tags(hierarchy, tags_map: Dict[str, Dict[str, str]]) -> None:
+    """Apply tag bindings to resources in a hierarchy.
+
+    Args:
+        hierarchy: Hierarchy object to update
+        tags_map: Dict mapping resource names to their tags
+    """
+    for folder in hierarchy.folders:
+        if folder.name in tags_map:
+            folder.tags = tags_map[folder.name]
+    for project in hierarchy.projects:
+        if project.name in tags_map:
+            project.tags = tags_map[project.name]

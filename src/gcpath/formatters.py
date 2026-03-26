@@ -235,12 +235,37 @@ def sort_resources(items: List[Tuple[str, Any]]) -> List[Tuple[str, Any]]:
     return sorted(items, key=lambda x: x[0])
 
 
-def format_tree_label(item: Union[Folder, Project], show_ids: bool = False) -> str:
+def _format_metadata_suffix(
+    item: Union[Folder, Project],
+    show_labels: bool = False,
+    show_tags: bool = False,
+) -> str:
+    """Build a Rich markup suffix for labels and tags."""
+    parts = []
+    if show_labels and hasattr(item, "labels") and item.labels:
+        label_str = ", ".join(f"{k}={v}" for k, v in sorted(item.labels.items()))
+        parts.append(f"[dim]labels: {label_str}[/dim]")
+    if show_tags and hasattr(item, "tags") and item.tags:
+        tag_str = ", ".join(f"{k}={v}" for k, v in sorted(item.tags.items()))
+        parts.append(f"[dim]tags: {tag_str}[/dim]")
+    if not parts:
+        return ""
+    return " [" + " | ".join(parts) + "]"
+
+
+def format_tree_label(
+    item: Union[Folder, Project],
+    show_ids: bool = False,
+    show_labels: bool = False,
+    show_tags: bool = False,
+) -> str:
     """Format label for tree display.
 
     Args:
         item: The resource to format
         show_ids: Whether to include resource IDs
+        show_labels: Whether to include GCP labels
+        show_tags: Whether to include GCP tags
 
     Returns:
         Formatted label string with rich markup
@@ -249,11 +274,13 @@ def format_tree_label(item: Union[Folder, Project], show_ids: bool = False) -> s
         label = f"[bold blue]{item.display_name}[/bold blue]"
         if show_ids:
             label += f" [dim]({item.name})[/dim]"
+        label += _format_metadata_suffix(item, show_labels, show_tags)
         return label
     elif isinstance(item, Project):
         label = f"[green]{item.display_name}[/green]"
         if show_ids:
             label += f" [dim]({item.name})[/dim]"
+        label += _format_metadata_suffix(item, show_labels, show_tags)
         return label
     return ""
 
@@ -286,6 +313,8 @@ def build_tree_view(
     current_depth: int = 0,
     show_ids: bool = False,
     type_filter: Optional[str] = None,
+    show_labels: bool = False,
+    show_tags: bool = False,
 ):
     """Recursively build tree view of resources.
 
@@ -299,18 +328,23 @@ def build_tree_view(
         show_ids: Whether to show resource IDs
         type_filter: If set, only show resources of this type ("folder" or "project").
                      Folders are always recursed into to find matching descendants.
+        show_labels: Whether to display GCP labels
+        show_tags: Whether to display GCP tags
     """
     if level is not None and current_depth >= level:
         return
 
     parent_name = _get_node_parent_name(current_node)
-    recurse_args = (hierarchy, projects_by_parent, level, current_depth + 1, show_ids, type_filter)
+    recurse_args = (
+        hierarchy, projects_by_parent, level, current_depth + 1,
+        show_ids, type_filter, show_labels, show_tags,
+    )
 
     for f in _get_child_folders(current_node, parent_name):
         if type_filter == "project":
             build_tree_view(tree_node, f, *recurse_args)
         else:
-            sub_node = tree_node.add(format_tree_label(f, show_ids))
+            sub_node = tree_node.add(format_tree_label(f, show_ids, show_labels, show_tags))
             build_tree_view(sub_node, f, *recurse_args)
 
     if type_filter != "folder":
@@ -318,7 +352,7 @@ def build_tree_view(
             projects_by_parent.get(parent_name, []), key=lambda x: x.display_name
         )
         for p in children_projects:
-            tree_node.add(format_tree_label(p, show_ids))
+            tree_node.add(format_tree_label(p, show_ids, show_labels, show_tags))
 
 
 # --- Diagram generation (Mermaid / D2) ---

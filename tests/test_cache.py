@@ -25,7 +25,8 @@ from gcpath.cache import (
 from gcpath.core import Hierarchy, OrganizationNode, Folder, Project
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
-SAMPLE_CACHE_FILE = FIXTURES_DIR / "sample_cache_v1.json"
+SAMPLE_CACHE_FILE = FIXTURES_DIR / "sample_cache_v2.json"
+SAMPLE_CACHE_V1_FILE = FIXTURES_DIR / "sample_cache_v1.json"
 
 
 @pytest.fixture
@@ -124,6 +125,28 @@ def test_load_from_fixture():
     assert hierarchy is not None
     assert len(hierarchy.organizations) == 1
     assert len(hierarchy.projects) == 2
+
+    # Verify labels/tags round-trip
+    folder = hierarchy.organizations[0].folders["folders/456"]
+    assert folder.labels == {"env": "prod", "team": "eng"}
+    assert folder.tags == {}
+
+    project = next(p for p in hierarchy.projects if p.name == "projects/789")
+    assert project.labels == {"env": "staging"}
+    assert project.tags == {"org/environment": "staging"}
+
+    orphan = next(p for p in hierarchy.projects if p.name == "projects/000")
+    assert orphan.labels == {}
+    assert orphan.tags == {}
+
+
+def test_load_v1_fixture_rejected():
+    """Test that v1 cache fixtures are rejected due to version mismatch."""
+    with open(SAMPLE_CACHE_V1_FILE, "r") as f:
+        data = json.load(f)
+
+    hierarchy = _dict_to_hierarchy(data)
+    assert hierarchy is None
 
 
 @patch("gcpath.cache.CACHE_FILE")

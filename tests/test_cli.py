@@ -4,6 +4,7 @@ import pytest
 import yaml
 from typer.testing import CliRunner
 from unittest.mock import patch, MagicMock
+from conftest import make_test_hierarchy
 from gcpath.cli import app
 from gcpath.core import OrganizationNode, Hierarchy, Project, GCPathError
 from gcpath.cache import CacheInfo
@@ -1242,3 +1243,99 @@ def test_ancestors_invalid_resource():
     result = runner.invoke(app, ["ancestors", "invalid/123"])
     assert result.exit_code == 1
     assert "Invalid resource format" in result.output
+
+
+# --- Label/tag CLI tests ---
+
+
+@patch("gcpath.core.Hierarchy.load")
+def test_ls_show_labels(mock_load):
+    """ls --show-labels --long should show a Labels column."""
+    hierarchy = make_test_hierarchy()
+    f1 = hierarchy.organizations[0].folders["folders/1"]
+    f1.labels = {"env": "prod"}
+    mock_load.return_value = hierarchy
+
+    result = runner.invoke(app, ["ls", "--show-labels", "-l"])
+    assert result.exit_code == 0
+    assert "Labels" in result.stdout
+    assert "env=prod" in result.stdout
+
+
+@patch("gcpath.core.Hierarchy.load")
+def test_ls_label_filter(mock_load):
+    """ls --label env=prod should only show matching resources."""
+    hierarchy = make_test_hierarchy()
+    f1 = hierarchy.organizations[0].folders["folders/1"]
+    f1.labels = {"env": "prod"}
+    f11 = hierarchy.organizations[0].folders["folders/11"]
+    f11.labels = {"env": "dev"}
+    mock_load.return_value = hierarchy
+
+    result = runner.invoke(app, ["ls", "-R", "--label", "env=prod"])
+    assert result.exit_code == 0
+    assert "f1" in result.stdout
+    # f11 has env=dev, should be filtered out
+    assert "f11" not in result.stdout
+
+
+@patch("gcpath.core.Hierarchy.load")
+def test_ls_label_filter_key_only(mock_load):
+    """ls --label env should match any resource with the env label key."""
+    hierarchy = make_test_hierarchy()
+    f1 = hierarchy.organizations[0].folders["folders/1"]
+    f1.labels = {"env": "prod"}
+    f11 = hierarchy.organizations[0].folders["folders/11"]
+    f11.labels = {}
+    mock_load.return_value = hierarchy
+
+    result = runner.invoke(app, ["ls", "-R", "--label", "env"])
+    assert result.exit_code == 0
+    assert "f1" in result.stdout
+    assert "f11" not in result.stdout
+
+
+@patch("gcpath.core.Hierarchy.load")
+def test_ls_show_tags_long(mock_load):
+    """ls --show-tags --long should show a Tags column."""
+    hierarchy = make_test_hierarchy()
+    p1 = next(p for p in hierarchy.projects if p.name == "projects/p1")
+    p1.tags = {"org/env": "production"}
+    mock_load.return_value = hierarchy
+
+    result = runner.invoke(app, ["ls", "--show-tags", "-l", "-R"])
+    assert result.exit_code == 0
+    assert "Tags" in result.stdout
+    assert "org/env=production" in result.stdout
+
+
+@patch("gcpath.core.Hierarchy.load")
+def test_ls_json_with_labels(mock_load):
+    """ls --json with labels should include labels in JSON output."""
+    hierarchy = make_test_hierarchy()
+    f1 = hierarchy.organizations[0].folders["folders/1"]
+    f1.labels = {"env": "prod"}
+    mock_load.return_value = hierarchy
+
+    result = runner.invoke(app, ["--json", "ls", "-R", "--show-labels"])
+    assert result.exit_code == 0
+    data = json.loads(result.stdout)
+    labeled = [item for item in data if item.get("labels")]
+    assert len(labeled) >= 1
+    assert labeled[0]["labels"] == {"env": "prod"}
+
+
+@patch("gcpath.core.Hierarchy.load")
+def test_find_with_label_filter(mock_load):
+    """find --label should filter search results by label."""
+    hierarchy = make_test_hierarchy()
+    f1 = hierarchy.organizations[0].folders["folders/1"]
+    f1.labels = {"env": "prod"}
+    f11 = hierarchy.organizations[0].folders["folders/11"]
+    f11.labels = {}
+    mock_load.return_value = hierarchy
+
+    result = runner.invoke(app, ["find", "f*", "--label", "env=prod"])
+    assert result.exit_code == 0
+    assert "f1" in result.stdout
+    assert "f11" not in result.stdout

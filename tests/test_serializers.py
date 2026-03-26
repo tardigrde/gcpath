@@ -221,3 +221,37 @@ class TestSerializeAncestors:
 
     def test_empty(self):
         assert serialize_ancestors([]) == []
+
+
+class TestSerializeResourceWithLabelsAndTags:
+    def test_folder_with_labels(self):
+        hierarchy = make_test_hierarchy()
+        org_node = hierarchy.organizations[0]
+        f1 = org_node.folders["folders/1"]
+        f1.labels = {"env": "prod", "team": "eng"}
+        d = serialize_resource(f1.path, f1)
+        assert d["labels"] == {"env": "prod", "team": "eng"}
+        assert "tags" not in d  # Empty tags should not appear
+
+    def test_project_with_tags(self):
+        hierarchy = make_test_hierarchy()
+        p1 = next(p for p in hierarchy.projects if p.name == "projects/p1")
+        p1.tags = {"org/env": "production"}
+        d = serialize_resource(p1.path, p1)
+        assert d["tags"] == {"org/env": "production"}
+        assert "labels" not in d  # Empty labels should not appear
+
+    def test_no_labels_no_tags(self):
+        hierarchy = make_test_hierarchy()
+        org_node = hierarchy.organizations[0]
+        f1 = org_node.folders["folders/1"]
+        d = serialize_resource(f1.path, f1)
+        assert "labels" not in d
+        assert "tags" not in d
+
+    def test_organization_has_no_labels(self):
+        hierarchy = make_test_hierarchy()
+        org_node = hierarchy.organizations[0]
+        d = serialize_resource("//example.com", org_node)
+        assert "labels" not in d
+        assert "tags" not in d

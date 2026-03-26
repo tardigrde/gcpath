@@ -37,10 +37,18 @@ def serialize_resource(
     elif isinstance(item, Folder):
         d["resource_name"] = item.name
         d["display_name"] = item.display_name
+        if item.labels:
+            d["labels"] = item.labels
+        if item.tags:
+            d["tags"] = item.tags
     elif isinstance(item, Project):
         d["resource_name"] = item.name
         d["display_name"] = item.display_name
         d["project_id"] = item.project_id
+        if item.labels:
+            d["labels"] = item.labels
+        if item.tags:
+            d["tags"] = item.tags
 
     return d
 

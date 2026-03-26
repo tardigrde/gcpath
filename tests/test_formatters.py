@@ -539,3 +539,90 @@ def test_build_tree_view_type_filter_project(
 
     # Projects from inside folders should be added directly to root
     assert len(root.children) == 1  # The project, bubbled up
+
+
+# --- Label/tag display tests ---
+
+
+def test_format_tree_label_with_labels():
+    """Test tree label with labels displayed."""
+    org = OrganizationNode(
+        organization=resourcemanager_v3.Organization(
+            name="organizations/1", display_name="org"
+        )
+    )
+    folder = Folder(
+        name="folders/1",
+        display_name="TestFolder",
+        ancestors=["folders/1", "organizations/1"],
+        organization=org,
+        parent="organizations/1",
+        labels={"env": "prod", "team": "infra"},
+    )
+
+    label = format_tree_label(folder, show_labels=True)
+    assert "TestFolder" in label
+    assert "env=prod" in label
+    assert "team=infra" in label
+
+
+def test_format_tree_label_with_tags():
+    """Test tree label with tags displayed."""
+    org = OrganizationNode(
+        organization=resourcemanager_v3.Organization(
+            name="organizations/1", display_name="org"
+        )
+    )
+    project = Project(
+        name="projects/p1",
+        project_id="p1",
+        display_name="MyProject",
+        parent="organizations/1",
+        organization=org,
+        folder=None,
+        tags={"org/env": "production"},
+    )
+
+    label = format_tree_label(project, show_tags=True)
+    assert "MyProject" in label
+    assert "org/env=production" in label
+
+
+def test_format_tree_label_no_labels_no_tags():
+    """Test tree label without labels or tags when not requested."""
+    org = OrganizationNode(
+        organization=resourcemanager_v3.Organization(
+            name="organizations/1", display_name="org"
+        )
+    )
+    folder = Folder(
+        name="folders/1",
+        display_name="TestFolder",
+        ancestors=["folders/1", "organizations/1"],
+        organization=org,
+        parent="organizations/1",
+        labels={"env": "prod"},
+    )
+
+    label = format_tree_label(folder, show_labels=False)
+    assert "env=prod" not in label
+
+
+def test_format_tree_label_empty_labels():
+    """Test tree label when labels are empty (no suffix added)."""
+    org = OrganizationNode(
+        organization=resourcemanager_v3.Organization(
+            name="organizations/1", display_name="org"
+        )
+    )
+    folder = Folder(
+        name="folders/1",
+        display_name="TestFolder",
+        ancestors=["folders/1", "organizations/1"],
+        organization=org,
+        parent="organizations/1",
+        labels={},
+    )
+
+    label = format_tree_label(folder, show_labels=True)
+    assert "labels:" not in label
