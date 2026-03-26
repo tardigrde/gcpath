@@ -1,0 +1,43 @@
+{
+  "version": 2,
+  "timestamp": "2023-10-27T10:00:00Z",
+  "organizations": [
+    {
+      "organization": {
+        "name": "organizations/123",
+        "display_name": "example.com"
+      },
+      "folders": {
+        "folders/456": {
+          "name": "folders/456",
+          "display_name": "Engineering",
+          "ancestors": ["folders/456", "organizations/123"],
+          "parent": "organizations/123",
+          "labels": {"env": "prod", "team": "eng"},
+          "tags": {}
+        }
+      },
+      "projects": [
+        {
+          "name": "projects/789",
+          "project_id": "test-project",
+          "display_name": "Test Project",
+          "parent": "folders/456",
+          "folder_name": "folders/456",
+          "labels": {"env": "staging"},
+          "tags": {"org/environment": "staging"}
+        }
+      ]
+    }
+  ],
+  "organizationless_projects": [
+     {
+          "name": "projects/000",
+          "project_id": "orphan-project",
+          "display_name": "Orphan Project",
+          "parent": "organizations/0",
+          "labels": {},
+          "tags": {}
+        }
+  ]
+}

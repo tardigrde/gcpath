@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 CACHE_DIR = Path.home() / ".gcpath"
 CACHE_FILE = CACHE_DIR / "cache.json"
-CACHE_VERSION = 1
+CACHE_VERSION = 2
 DEFAULT_CACHE_TTL_HOURS = 72
 
 
@@ -53,6 +53,8 @@ def _hierarchy_to_dict(hierarchy: Hierarchy, scope: Optional[str] = None) -> Dic
             "display_name": project.display_name,
             "parent": project.parent,
             "folder_name": project.folder.name if project.folder else None,
+            "labels": project.labels,
+            "tags": project.tags,
         }
 
         if project.organization:
@@ -76,6 +78,8 @@ def _hierarchy_to_dict(hierarchy: Hierarchy, scope: Optional[str] = None) -> Dic
                 "display_name": folder.display_name,
                 "ancestors": folder.ancestors,
                 "parent": folder.parent,
+                "labels": folder.labels,
+                "tags": folder.tags,
             }
             for name, folder in org_node.folders.items()
         }
@@ -130,6 +134,8 @@ def _dict_to_hierarchy(data: Dict[str, Any]) -> Optional[Hierarchy]:
                 ancestors=folder_data["ancestors"],
                 parent=folder_data["parent"],
                 organization=node,
+                labels=folder_data.get("labels", {}),
+                tags=folder_data.get("tags", {}),
             )
             node.folders[folder_name] = folder
 
@@ -145,6 +151,8 @@ def _dict_to_hierarchy(data: Dict[str, Any]) -> Optional[Hierarchy]:
                 parent=p_data["parent"],
                 organization=node,
                 folder=parent_folder,
+                labels=p_data.get("labels", {}),
+                tags=p_data.get("tags", {}),
             )
             projects.append(project)
 
@@ -157,6 +165,8 @@ def _dict_to_hierarchy(data: Dict[str, Any]) -> Optional[Hierarchy]:
             parent=p_data["parent"],
             organization=None,
             folder=None,
+            labels=p_data.get("labels", {}),
+            tags=p_data.get("tags", {}),
         )
         projects.append(project)
 

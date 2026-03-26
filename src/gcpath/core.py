@@ -12,6 +12,8 @@ from gcpath.loaders import (
     load_projects_asset,
     load_scope_folder,
     load_organizationless_projects,
+    load_tags_asset,
+    apply_tags,
 )
 
 # We use a logger but don't configure it here.
@@ -90,6 +92,8 @@ class Folder:
     parent: str = (
         ""  # Parent resource name (e.g., 'organizations/123' or 'folders/456')
     )
+    labels: Dict[str, str] = field(default_factory=dict)
+    tags: Dict[str, str] = field(default_factory=dict)
 
     def is_path_match(self, path_parts: List[str]) -> bool:
         # path matching logic
@@ -133,6 +137,8 @@ class Project:
     parent: str
     organization: Optional["OrganizationNode"]
     folder: Optional[Folder]
+    labels: Dict[str, str] = field(default_factory=dict)
+    tags: Dict[str, str] = field(default_factory=dict)
 
     @property
     def path(self) -> str:
@@ -169,6 +175,8 @@ class Hierarchy:
         via_resource_manager: bool = True,
         scope_resource: Optional[str] = None,
         recursive: bool = False,
+        include_labels: bool = False,
+        include_tags: bool = False,
     ) -> "Hierarchy":
         """Load the GCP resource hierarchy from GCP APIs.
 
@@ -180,6 +188,8 @@ class Hierarchy:
                            If None, defaults to loading from organization level.
             recursive: If True, load all descendants. If False, only load direct children.
                       Only applies when via_resource_manager=False (Asset API mode).
+            include_labels: If True, fetch GCP labels for folders and projects.
+            include_tags: If True, fetch GCP resource tag bindings.
         """
         logger.debug("Loading hierarchy from GCP API.")
         org_client = resourcemanager_v3.OrganizationsClient()
@@ -187,7 +197,8 @@ class Hierarchy:
 
         # Load Organizations
         org_nodes = cls._load_organizations(
-            org_client, display_names, via_resource_manager, scope_resource, recursive
+            org_client, display_names, via_resource_manager, scope_resource, recursive,
+            include_labels=include_labels,
         )
 
         # Fallback: if no orgs found and scope is a folder, try folder-scoped loading
@@ -200,15 +211,25 @@ class Hierarchy:
                 f"No organizations found, falling back to folder-scoped loading for {scope_resource}"
             )
             return cls._load_from_folder_scope(
-                scope_resource, via_resource_manager, recursive
+                scope_resource, via_resource_manager, recursive,
+                include_labels=include_labels, include_tags=include_tags,
             )
 
         # Load Projects
         all_projects = cls._load_all_projects(
-            project_client, org_nodes, via_resource_manager, scope_resource, recursive
+            project_client, org_nodes, via_resource_manager, scope_resource, recursive,
+            include_labels=include_labels,
         )
 
-        return cls(organizations=org_nodes, projects=all_projects)
+        hierarchy = cls(organizations=org_nodes, projects=all_projects)
+
+        # Load tags if requested (separate Asset API query)
+        if include_tags and not via_resource_manager:
+            for org_node in org_nodes:
+                tags_map = load_tags_asset(org_node.organization.name)
+                apply_tags(hierarchy, tags_map)
+
+        return hierarchy
 
     @classmethod
     def _load_organizations(
@@ -218,6 +239,7 @@ class Hierarchy:
         via_resource_manager: bool,
         scope_resource: Optional[str],
         recursive: bool,
+        include_labels: bool = False,
     ) -> List[OrganizationNode]:
         """Load organizations and their folders."""
         org_nodes = []
@@ -245,7 +267,8 @@ class Hierarchy:
 
                 # Load folders for this organization
                 cls._load_folders_for_org(
-                    node, via_resource_manager, scope_resource, recursive
+                    node, via_resource_manager, scope_resource, recursive,
+                    include_labels=include_labels,
                 )
 
                 logger.debug(
@@ -265,6 +288,8 @@ class Hierarchy:
         scope_resource: str,
         via_resource_manager: bool,
         recursive: bool,
+        include_labels: bool = False,
+        include_tags: bool = False,
     ) -> "Hierarchy":
         """Load hierarchy rooted at a folder when org access is unavailable.
 
@@ -339,6 +364,7 @@ class Hierarchy:
                 recursive=recursive,
                 query_parent=scope_resource,
                 root_ancestor=scope_resource,
+                include_labels=include_labels,
             )
 
         # Load projects
@@ -346,16 +372,25 @@ class Hierarchy:
         if via_resource_manager:
             # RM path: search_projects returns all accessible, filter by parent
             project_client = resourcemanager_v3.ProjectsClient()
-            all_projects = cls._load_projects_rm(project_client, [node])
+            all_projects = cls._load_projects_rm(
+                project_client, [node], include_labels=include_labels,
+            )
         else:
             all_projects = cls._load_projects_asset_all_orgs(
                 [node],
                 scope_resource=scope_resource,
                 recursive=recursive,
                 query_parent=scope_resource,
+                include_labels=include_labels,
             )
 
-        return cls(organizations=[node], projects=all_projects)
+        hierarchy = cls(organizations=[node], projects=all_projects)
+
+        if include_tags and not via_resource_manager:
+            tags_map = load_tags_asset(scope_resource)
+            apply_tags(hierarchy, tags_map)
+
+        return hierarchy
 
     @classmethod
     def _load_folders_for_org(
@@ -366,6 +401,7 @@ class Hierarchy:
         recursive: bool,
         query_parent: Optional[str] = None,
         root_ancestor: Optional[str] = None,
+        include_labels: bool = False,
     ):
         """Load folders for a single organization."""
         if via_resource_manager:
@@ -390,6 +426,7 @@ class Hierarchy:
                 ancestors_filter=folder_ancestors_filter,
                 query_parent=query_parent,
                 root_ancestor=root_ancestor,
+                include_labels=include_labels,
             )
 
             # Load scope folder separately if needed (for recursive scoped loads)
@@ -404,16 +441,20 @@ class Hierarchy:
         via_resource_manager: bool,
         scope_resource: Optional[str],
         recursive: bool,
+        include_labels: bool = False,
     ) -> List[Project]:
         """Load all projects across all organizations."""
         all_projects = []
 
         if via_resource_manager:
-            all_projects = cls._load_projects_rm(project_client, org_nodes)
+            all_projects = cls._load_projects_rm(
+                project_client, org_nodes, include_labels=include_labels,
+            )
         else:
             # Asset API mode
             all_projects = cls._load_projects_asset_all_orgs(
-                org_nodes, scope_resource, recursive
+                org_nodes, scope_resource, recursive,
+                include_labels=include_labels,
             )
 
             # Load organizationless projects
@@ -425,7 +466,8 @@ class Hierarchy:
 
     @classmethod
     def _load_projects_rm(
-        cls, project_client, org_nodes: List[OrganizationNode]
+        cls, project_client, org_nodes: List[OrganizationNode],
+        include_labels: bool = False,
     ) -> List[Project]:
         """Load projects using Resource Manager API."""
         all_projects = []
@@ -452,6 +494,8 @@ class Hierarchy:
                             parent_org = o
                             break
 
+                labels = dict(p_proto.labels) if include_labels and p_proto.labels else {}
+
                 proj = Project(
                     name=p_proto.name,
                     project_id=p_proto.project_id,
@@ -459,6 +503,7 @@ class Hierarchy:
                     parent=p_proto.parent,
                     organization=parent_org,
                     folder=parent_folder,
+                    labels=labels,
                 )
                 all_projects.append(proj)
 
@@ -476,6 +521,7 @@ class Hierarchy:
         scope_resource: Optional[str],
         recursive: bool,
         query_parent: Optional[str] = None,
+        include_labels: bool = False,
     ) -> List[Project]:
         """Load projects for all organizations using Asset API."""
         all_projects = []
@@ -498,6 +544,7 @@ class Hierarchy:
                 parent_filter=project_parent_filter,
                 ancestors_filter=project_ancestors_filter,
                 query_parent=query_parent,
+                include_labels=include_labels,
             )
             all_projects.extend(org_projects)
 

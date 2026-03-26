@@ -82,6 +82,69 @@ def _matches_type(
     return get_resource_type(obj) == type_filter
 
 
+def _parse_label_filter(label_str: str) -> tuple:
+    """Parse a label filter string 'key=value' into (key, value) tuple."""
+    if "=" not in label_str:
+        return (label_str, None)
+    key, _, value = label_str.partition("=")
+    return (key, value)
+
+
+def _matches_labels(
+    obj: Union[OrganizationNode, Folder, Project],
+    label_filters: List[str],
+) -> bool:
+    """Check if a resource matches ALL label filters (ANDed)."""
+    if not label_filters:
+        return True
+    labels = getattr(obj, "labels", {})
+    for lf in label_filters:
+        key, value = _parse_label_filter(lf)
+        if value is None:
+            # Key-only filter: check if key exists
+            if key not in labels:
+                return False
+        else:
+            if labels.get(key) != value:
+                return False
+    return True
+
+
+def _matches_tags(
+    obj: Union[OrganizationNode, Folder, Project],
+    tag_filters: List[str],
+) -> bool:
+    """Check if a resource matches ALL tag filters (ANDed)."""
+    if not tag_filters:
+        return True
+    tags = getattr(obj, "tags", {})
+    for tf in tag_filters:
+        key, value = _parse_label_filter(tf)
+        if value is None:
+            if key not in tags:
+                return False
+        else:
+            if tags.get(key) != value:
+                return False
+    return True
+
+
+def _format_labels(obj: Union[OrganizationNode, Folder, Project]) -> str:
+    """Format labels as comma-separated key=value string."""
+    labels = getattr(obj, "labels", {})
+    if not labels:
+        return ""
+    return ", ".join(f"{k}={v}" for k, v in sorted(labels.items()))
+
+
+def _format_tags(obj: Union[OrganizationNode, Folder, Project]) -> str:
+    """Format tags as comma-separated key=value string."""
+    tags = getattr(obj, "tags", {})
+    if not tags:
+        return ""
+    return ", ".join(f"{k}={v}" for k, v in sorted(tags.items()))
+
+
 @dataclass
 class _ScopeResult:
     """Result of resolving a resource scope argument."""
@@ -381,6 +444,8 @@ def _load_hierarchy(
     recursive: bool,
     force_refresh: bool,
     filter_orgs: Optional[List[str]] = None,
+    include_labels: bool = False,
+    include_tags: bool = False,
 ) -> Hierarchy:
     """Helper to load hierarchy with cache orchestration.
 
@@ -409,6 +474,8 @@ def _load_hierarchy(
         via_resource_manager=not ctx.obj["use_asset_api"],
         scope_resource=scope_resource,
         recursive=effective_recursive,
+        include_labels=include_labels,
+        include_tags=include_tags,
     )
 
     if is_cacheable:
@@ -435,6 +502,8 @@ def _prepare_hierarchy_command(
     level: Optional[int],
     yes: bool,
     force_refresh: bool,
+    include_labels: bool = False,
+    include_tags: bool = False,
 ) -> Optional[_HierarchyCommandContext]:
     """Shared setup for tree-like commands (tree, diagram).
 
@@ -508,6 +577,8 @@ def _prepare_hierarchy_command(
         recursive=True,
         force_refresh=force_refresh,
         filter_orgs=filter_orgs,
+        include_labels=include_labels,
+        include_tags=include_tags,
     )
 
     logger.debug(
@@ -621,12 +692,28 @@ def ls(
         "-F",
         help=_REFRESH_HELP,
     ),
+    show_labels: bool = typer.Option(
+        False, "--show-labels", help="Display GCP labels on resources"
+    ),
+    show_tags: bool = typer.Option(
+        False, "--show-tags", help="Display GCP resource tags"
+    ),
+    label_filters: Optional[List[str]] = typer.Option(
+        None, "--label", help="Filter by label (key=value). Repeatable, ANDed together"
+    ),
+    tag_filters: Optional[List[str]] = typer.Option(
+        None, "--tag", help="Filter by tag (key=value). Repeatable, ANDed together"
+    ),
 ) -> None:
     """
     List folders and projects. Defaults to the root organization.
     """
     try:
         _validate_type_filter(resource_type)
+
+        # Implicitly enable label/tag fetching when filters are specified
+        include_labels = show_labels or bool(label_filters)
+        include_tags = show_tags or bool(tag_filters)
 
         ep = ctx.obj.get("entrypoint")
         scope = _resolve_scope(resource, ep)
@@ -642,6 +729,8 @@ def ls(
             recursive=recursive,
             force_refresh=force_refresh,
             filter_orgs=scope.filter_orgs,
+            include_labels=include_labels,
+            include_tags=include_tags,
         )
 
         logger.debug(
@@ -718,6 +807,12 @@ def ls(
         if resource_type:
             items = [(p, obj) for p, obj in items if _matches_type(obj, resource_type)]
 
+        # Apply label/tag filters
+        if label_filters:
+            items = [(p, obj) for p, obj in items if _matches_labels(obj, label_filters)]
+        if tag_filters:
+            items = [(p, obj) for p, obj in items if _matches_tags(obj, tag_filters)]
+
         # Apply depth limit for recursive listing
         if level is not None and recursive:
             # Paths look like "//example.com/f1/f2". Splitting on "/" gives
@@ -745,6 +840,10 @@ def ls(
             )
             table.add_column("Path", overflow="fold")
             table.add_column("Resource Name", overflow="fold")
+            if show_labels:
+                table.add_column("Labels", overflow="fold")
+            if show_tags:
+                table.add_column("Tags", overflow="fold")
 
             for path, obj in items:
                 resource_name = ""
@@ -756,7 +855,12 @@ def ls(
                 elif isinstance(obj, Project):
                     resource_name = obj.name
 
-                table.add_row(path, resource_name)
+                row = [path, resource_name]
+                if show_labels:
+                    row.append(_format_labels(obj))
+                if show_tags:
+                    row.append(_format_tags(obj))
+                table.add_row(*row)
 
             console.print(table)
         else:
@@ -795,6 +899,18 @@ def tree(
         "-F",
         help=_REFRESH_HELP,
     ),
+    show_labels: bool = typer.Option(
+        False, "--show-labels", help="Display GCP labels on resources"
+    ),
+    show_tags: bool = typer.Option(
+        False, "--show-tags", help="Display GCP resource tags"
+    ),
+    label_filters: Optional[List[str]] = typer.Option(
+        None, "--label", help="Filter by label (key=value). Repeatable, ANDed together"
+    ),
+    tag_filters: Optional[List[str]] = typer.Option(
+        None, "--tag", help="Filter by tag (key=value). Repeatable, ANDed together"
+    ),
 ) -> None:
     """
     Display the resource hierarchy in a tree format.
@@ -804,8 +920,13 @@ def tree(
     try:
         _validate_type_filter(resource_type)
 
+        # Implicitly enable label/tag fetching when filters are specified
+        include_labels = show_labels or bool(label_filters)
+        include_tags = show_tags or bool(tag_filters)
+
         hctx = _prepare_hierarchy_command(
-            ctx, "tree", resource, level, yes, force_refresh
+            ctx, "tree", resource, level, yes, force_refresh,
+            include_labels=include_labels, include_tags=include_tags,
         )
         if hctx is None:
             return
@@ -860,6 +981,8 @@ def tree(
                 0,
                 show_ids,
                 type_filter=resource_type,
+                show_labels=show_labels,
+                show_tags=show_tags,
             )
 
         # Organizationless projects
@@ -875,7 +998,7 @@ def tree(
                 ]
                 orgless_projs.sort(key=lambda x: x.display_name)
                 for p in orgless_projs:
-                    label = format_tree_label(p, show_ids)
+                    label = format_tree_label(p, show_ids, show_labels, show_tags)
                     orgless_node.add(label)
 
         console.print(root_tree)
@@ -1176,12 +1299,21 @@ def find(
     force_refresh: bool = typer.Option(
         False, "--force-refresh", "-F", help=_REFRESH_HELP
     ),
+    label_filters: Optional[List[str]] = typer.Option(
+        None, "--label", help="Filter by label (key=value). Repeatable, ANDed together"
+    ),
+    tag_filters: Optional[List[str]] = typer.Option(
+        None, "--tag", help="Filter by tag (key=value). Repeatable, ANDed together"
+    ),
 ) -> None:
     """
     Search for resources by display name pattern (glob syntax).
     """
     try:
         _validate_type_filter(resource_type)
+
+        include_labels = bool(label_filters)
+        include_tags = bool(tag_filters)
 
         ep = ctx.obj.get("entrypoint")
         scope = _resolve_scope(resource, ep)
@@ -1192,9 +1324,17 @@ def find(
             recursive=True,
             force_refresh=force_refresh,
             filter_orgs=scope.filter_orgs,
+            include_labels=include_labels,
+            include_tags=include_tags,
         )
 
         items = sort_resources(_search_hierarchy(hierarchy, pattern, resource_type))
+
+        # Apply label/tag filters
+        if label_filters:
+            items = [(p, obj) for p, obj in items if _matches_labels(obj, label_filters)]
+        if tag_filters:
+            items = [(p, obj) for p, obj in items if _matches_tags(obj, tag_filters)]
 
         dumper = _get_dumper(ctx.obj.get("output_format", "text"))
         if dumper:
@@ -1218,6 +1358,12 @@ def ancestors(
     resource_name: Annotated[
         str, typer.Argument(help="Resource name (e.g., folders/123, projects/my-proj)")
     ],
+    show_labels: bool = typer.Option(
+        False, "--show-labels", help="Display GCP labels on resources"
+    ),
+    show_tags: bool = typer.Option(
+        False, "--show-tags", help="Display GCP resource tags"
+    ),
 ) -> None:
     """
     Show the full ancestry chain from a resource up to the org root.

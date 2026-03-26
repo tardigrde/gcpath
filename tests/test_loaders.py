@@ -925,3 +925,88 @@ def test_load_projects_asset_ancestors_first_not_self_with_filter(mock_asset_cli
     assert len(projects) == 1
     # ancestors[0] is folders/f4, so that wins over parent_filter
     assert projects[0].parent == "folders/f4"
+
+
+# --- Label support tests ---
+
+
+def test_build_folder_sql_query_with_labels():
+    """Test that include_labels adds resource.data.labels to SELECT."""
+    query = build_folder_sql_query(include_labels=True)
+    assert "resource.data.labels" in query
+    assert "lifecycleState = 'ACTIVE'" in query
+
+
+def test_build_folder_sql_query_without_labels():
+    """Test that include_labels=False does not add labels to SELECT."""
+    query = build_folder_sql_query(include_labels=False)
+    assert "resource.data.labels" not in query
+
+
+def test_build_project_sql_query_with_labels():
+    """Test that include_labels adds resource.data.labels to SELECT."""
+    query = build_project_sql_query(include_labels=True)
+    assert "resource.data.labels" in query
+    assert "lifecycleState = 'ACTIVE'" in query
+
+
+def test_build_project_sql_query_without_labels():
+    """Test that include_labels=False does not add labels to SELECT."""
+    query = build_project_sql_query(include_labels=False)
+    assert "resource.data.labels" not in query
+
+
+@patch("google.cloud.asset_v1.AssetServiceClient")
+def test_load_folders_asset_with_labels(mock_asset_client_cls, mock_org_node):
+    """Test that labels are parsed when include_labels is True."""
+    mock_client = mock_asset_client_cls.return_value
+
+    row = {
+        "f": [
+            {"v": "//cloudresourcemanager.googleapis.com/folders/1"},
+            {"v": "f1"},
+            {"v": "organizations/123"},
+            {"v": [{"v": "folders/1"}, {"v": "organizations/123"}]},
+            {"v": {"env": "prod", "team": "eng"}},
+        ]
+    }
+
+    mock_query_result = MagicMock()
+    mock_query_result.rows = [row]
+    mock_response = MagicMock()
+    mock_response.query_result = mock_query_result
+    mock_client.query_assets.return_value = mock_response
+
+    load_folders_asset(mock_org_node, include_labels=True)
+
+    assert "folders/1" in mock_org_node.folders
+    f = mock_org_node.folders["folders/1"]
+    assert f.labels == {"env": "prod", "team": "eng"}
+
+
+@patch("google.cloud.asset_v1.AssetServiceClient")
+def test_load_projects_asset_with_labels(mock_asset_client_cls, mock_org_node):
+    """Test that labels are parsed when include_labels is True."""
+    mock_client = mock_asset_client_cls.return_value
+
+    row = {
+        "f": [
+            {"v": "//cloudresourcemanager.googleapis.com/projects/p1"},
+            {"v": "12345"},
+            {"v": "p1"},
+            {"v": {"f": [{"v": "organization"}, {"v": "123"}]}},
+            {"v": [{"v": "projects/p1"}, {"v": "organizations/123"}]},
+            {"v": {"env": "dev"}},
+        ]
+    }
+
+    mock_query_result = MagicMock()
+    mock_query_result.rows = [row]
+    mock_response = MagicMock()
+    mock_response.query_result = mock_query_result
+    mock_client.query_assets.return_value = mock_response
+
+    projects = load_projects_asset(mock_org_node, include_labels=True)
+
+    assert len(projects) == 1
+    assert projects[0].labels == {"env": "dev"}
