@@ -90,59 +90,31 @@ def _parse_label_filter(label_str: str) -> tuple:
     return (key, value)
 
 
-def _matches_labels(
+def _matches_metadata(
     obj: Union[OrganizationNode, Folder, Project],
-    label_filters: List[str],
+    filters: List[str],
+    attr: str,
 ) -> bool:
-    """Check if a resource matches ALL label filters (ANDed)."""
-    if not label_filters:
+    """Check if a resource matches ALL filters (ANDed) for a given metadata attribute."""
+    if not filters:
         return True
-    labels = getattr(obj, "labels", {})
-    for lf in label_filters:
-        key, value = _parse_label_filter(lf)
+    metadata = getattr(obj, attr, {})
+    for f in filters:
+        key, value = _parse_label_filter(f)
         if value is None:
-            # Key-only filter: check if key exists
-            if key not in labels:
+            if key not in metadata:
                 return False
-        else:
-            if labels.get(key) != value:
-                return False
+        elif metadata.get(key) != value:
+            return False
     return True
 
 
-def _matches_tags(
-    obj: Union[OrganizationNode, Folder, Project],
-    tag_filters: List[str],
-) -> bool:
-    """Check if a resource matches ALL tag filters (ANDed)."""
-    if not tag_filters:
-        return True
-    tags = getattr(obj, "tags", {})
-    for tf in tag_filters:
-        key, value = _parse_label_filter(tf)
-        if value is None:
-            if key not in tags:
-                return False
-        else:
-            if tags.get(key) != value:
-                return False
-    return True
-
-
-def _format_labels(obj: Union[OrganizationNode, Folder, Project]) -> str:
-    """Format labels as comma-separated key=value string."""
-    labels = getattr(obj, "labels", {})
-    if not labels:
+def _format_metadata(obj: Union[OrganizationNode, Folder, Project], attr: str) -> str:
+    """Format a metadata dict attribute as comma-separated key=value string."""
+    metadata = getattr(obj, attr, {})
+    if not metadata:
         return ""
-    return ", ".join(f"{k}={v}" for k, v in sorted(labels.items()))
-
-
-def _format_tags(obj: Union[OrganizationNode, Folder, Project]) -> str:
-    """Format tags as comma-separated key=value string."""
-    tags = getattr(obj, "tags", {})
-    if not tags:
-        return ""
-    return ", ".join(f"{k}={v}" for k, v in sorted(tags.items()))
+    return ", ".join(f"{k}={v}" for k, v in sorted(metadata.items()))
 
 
 @dataclass
@@ -809,9 +781,9 @@ def ls(
 
         # Apply label/tag filters
         if label_filters:
-            items = [(p, obj) for p, obj in items if _matches_labels(obj, label_filters)]
+            items = [(p, obj) for p, obj in items if _matches_metadata(obj, label_filters, "labels")]
         if tag_filters:
-            items = [(p, obj) for p, obj in items if _matches_tags(obj, tag_filters)]
+            items = [(p, obj) for p, obj in items if _matches_metadata(obj, tag_filters, "tags")]
 
         # Apply depth limit for recursive listing
         if level is not None and recursive:
@@ -857,9 +829,9 @@ def ls(
 
                 row = [path, resource_name]
                 if show_labels:
-                    row.append(_format_labels(obj))
+                    row.append(_format_metadata(obj, "labels"))
                 if show_tags:
-                    row.append(_format_tags(obj))
+                    row.append(_format_metadata(obj, "tags"))
                 table.add_row(*row)
 
             console.print(table)
@@ -1118,7 +1090,7 @@ def stats(
                 raise typer.Exit(code=1)
             elif any(
                 effective_resource.startswith(p)
-                for p in ["organizations/", "folders/"]
+                for p in [_RESOURCE_PREFIX_ORGS, _RESOURCE_PREFIX_FOLDERS]
             ):
                 target_resource_name = effective_resource
             else:
@@ -1145,7 +1117,7 @@ def stats(
         table.add_column("Resource", style="bold")
         table.add_column("Count", justify="right")
 
-        if not target_resource_name or target_resource_name.startswith("organizations/"):
+        if not target_resource_name or target_resource_name.startswith(_RESOURCE_PREFIX_ORGS):
             table.add_row("Organizations", str(len(hierarchy.organizations)))
         table.add_row("Folders", str(folder_count))
         table.add_row("Projects", str(project_count))
@@ -1332,9 +1304,9 @@ def find(
 
         # Apply label/tag filters
         if label_filters:
-            items = [(p, obj) for p, obj in items if _matches_labels(obj, label_filters)]
+            items = [(p, obj) for p, obj in items if _matches_metadata(obj, label_filters, "labels")]
         if tag_filters:
-            items = [(p, obj) for p, obj in items if _matches_tags(obj, tag_filters)]
+            items = [(p, obj) for p, obj in items if _matches_metadata(obj, tag_filters, "tags")]
 
         dumper = _get_dumper(ctx.obj.get("output_format", "text"))
         if dumper:
@@ -1358,12 +1330,6 @@ def ancestors(
     resource_name: Annotated[
         str, typer.Argument(help="Resource name (e.g., folders/123, projects/my-proj)")
     ],
-    show_labels: bool = typer.Option(
-        False, "--show-labels", help="Display GCP labels on resources"
-    ),
-    show_tags: bool = typer.Option(
-        False, "--show-tags", help="Display GCP resource tags"
-    ),
 ) -> None:
     """
     Show the full ancestry chain from a resource up to the org root.

@@ -366,6 +366,31 @@ def load_folders_asset(
     fix_folder_ancestors(node, root_ancestor=root)
 
 
+def _resolve_project_parent(
+    project_data: dict,
+    parent_filter: Optional[str],
+    fallback_parent: str,
+) -> str:
+    """Determine the parent resource name for a project from Asset API data.
+
+    Priority: explicit parent > ancestors > parent_filter > org fallback.
+    """
+    if project_data["parent"]:
+        return project_data["parent"]
+
+    ancestors = project_data["ancestors"]
+    if not ancestors:
+        return parent_filter or fallback_parent
+
+    # If first ancestor is the project itself, use second ancestor as parent
+    if ancestors[0] == project_data["name"]:
+        if len(ancestors) > 1:
+            return ancestors[1]
+        return parent_filter or fallback_parent
+
+    return ancestors[0]
+
+
 def load_projects_asset(
     node,
     parent_filter: Optional[str] = None,
@@ -395,9 +420,7 @@ def load_projects_asset(
     api_parent = query_parent or node.organization.name
     projects: List[Project] = []
 
-    # Build SQL query
     statement = build_project_sql_query(parent_filter, ancestors_filter, include_labels=include_labels)
-
     logger.debug(f"Projects query: {statement}")
     query_request = asset_v1.QueryAssetsRequest(
         parent=api_parent,
@@ -406,50 +429,19 @@ def load_projects_asset(
 
     try:
         response = asset_client.query_assets(request=query_request)
-        logger.debug(
-            f"GCP API: query_assets(projects) returned for {api_parent}"
-        )
+        logger.debug(f"GCP API: query_assets(projects) returned for {api_parent}")
 
-        # Iterate directly over the response
         if not response.query_result or not response.query_result.rows:
             logger.debug("No project rows returned from Asset API")
-            logger.debug(f"Query result: {response.query_result}")
             return projects
-
-        # Import Project class locally to avoid circular dependency
-        from gcpath.core import Project
 
         for row in response.query_result.rows:
             try:
-                # Parse the project row using parsers module
                 project_data = parse_project_row(row, has_labels=include_labels)
-
-                # Determine parent - prefer from API, then ancestors, then fallback
-                if project_data["parent"]:
-                    parent_res = project_data["parent"]
-                elif not project_data["ancestors"]:
-                    # No ancestors and no parent from API - use parent_filter if set, otherwise org
-                    if parent_filter:
-                        parent_res = parent_filter
-                    else:
-                        parent_res = node.organization.name
-                elif (
-                    project_data["ancestors"]
-                    and project_data["ancestors"][0] == project_data["name"]
-                ):
-                    if len(project_data["ancestors"]) > 1:
-                        parent_res = project_data["ancestors"][1]
-                    elif parent_filter:
-                        parent_res = parent_filter
-                    else:
-                        parent_res = node.organization.name
-                else:
-                    # ancestors is guaranteed non-empty here (checked in elif above)
-                    parent_res = project_data["ancestors"][0]
-
-                parent_folder = None
-                if parent_res.startswith(_FOLDER_PREFIX):
-                    parent_folder = node.folders.get(parent_res)
+                parent_res = _resolve_project_parent(
+                    project_data, parent_filter, node.organization.name,
+                )
+                parent_folder = node.folders.get(parent_res) if parent_res.startswith(_FOLDER_PREFIX) else None
 
                 proj = Project(
                     name=project_data["name"],

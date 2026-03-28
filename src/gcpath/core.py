@@ -225,11 +225,28 @@ class Hierarchy:
 
         # Load tags if requested (separate Asset API query)
         if include_tags and not via_resource_manager:
-            for org_node in org_nodes:
-                tags_map = load_tags_asset(org_node.organization.name)
+            tag_scopes = [scope_resource] if scope_resource else [
+                org_node.organization.name for org_node in org_nodes
+            ]
+            for tag_scope in tag_scopes:
+                tags_map = load_tags_asset(tag_scope)
                 apply_tags(hierarchy, tags_map)
 
         return hierarchy
+
+    @classmethod
+    def _search_organizations(cls, org_client) -> List[resourcemanager_v3.Organization]:
+        """Search for accessible organizations."""
+        try:
+            page_result = org_client.search_organizations(
+                request=resourcemanager_v3.SearchOrganizationsRequest()
+            )
+            return list(page_result)
+        except exceptions.PermissionDenied:
+            logger.warning("Permission denied searching organizations")
+        except Exception as e:
+            logger.error(f"Error searching organizations: {e}")
+        return []
 
     @classmethod
     def _load_organizations(
@@ -242,43 +259,25 @@ class Hierarchy:
         include_labels: bool = False,
     ) -> List[OrganizationNode]:
         """Load organizations and their folders."""
+        display_names_set = set(display_names) if display_names else None
         org_nodes = []
-        try:
+
+        for org in cls._search_organizations(org_client):
+            if display_names_set and org.display_name not in display_names_set:
+                logger.debug(f"Skipping organization '{org.display_name}' (not in filter)")
+                continue
+
+            logger.debug(f"Processing organization: {org.display_name} (name: {org.name})")
+            node = OrganizationNode(organization=org)
+            org_nodes.append(node)
+
+            cls._load_folders_for_org(
+                node, via_resource_manager, scope_resource, recursive,
+                include_labels=include_labels,
+            )
             logger.debug(
-                f"Calling search_organizations() with display_names filter: {display_names}"
+                f"Loaded {len(node.folders)} folders for org {node.organization.display_name}"
             )
-            page_result = org_client.search_organizations(
-                request=resourcemanager_v3.SearchOrganizationsRequest()
-            )
-            logger.debug("search_organizations() returned successfully")
-
-            for org in page_result:
-                if display_names and org.display_name not in display_names:
-                    logger.debug(
-                        f"Skipping organization '{org.display_name}' (not in filter)"
-                    )
-                    continue
-
-                logger.debug(
-                    f"Processing organization: {org.display_name} (name: {org.name})"
-                )
-                node = OrganizationNode(organization=org)
-                org_nodes.append(node)
-
-                # Load folders for this organization
-                cls._load_folders_for_org(
-                    node, via_resource_manager, scope_resource, recursive,
-                    include_labels=include_labels,
-                )
-
-                logger.debug(
-                    f"Loaded {len(node.folders)} folders for org {node.organization.display_name}"
-                )
-
-        except exceptions.PermissionDenied:
-            logger.warning("Permission denied searching organizations")
-        except Exception as e:
-            logger.error(f"Error searching organizations: {e}")
 
         return org_nodes
 
@@ -624,132 +623,97 @@ class Hierarchy:
         raise ResourceNotFoundError(f"Unsupported resource name '{resource_name}'")
 
     @staticmethod
+    def _get_resource_info(
+        name: str, folders_client, projects_client, org_client,
+    ) -> tuple[str, Optional[str]]:
+        """Fetch display name and parent for a resource.
+
+        Returns (display_name, parent_name_or_None).
+        Raises ResourceNotFoundError on permission issues.
+        """
+        if name.startswith(_PREFIX_PROJECTS):
+            try:
+                p = projects_client.get_project(name=name)
+                logger.debug(f"GCP API: get_project({name}) returned")
+                return (p.display_name or p.project_id), p.parent
+            except exceptions.PermissionDenied:
+                raise ResourceNotFoundError(
+                    f"Permission denied accessing project {name}"
+                )
+
+        if name.startswith(_PREFIX_FOLDERS):
+            try:
+                f = folders_client.get_folder(name=name)
+                logger.debug(f"GCP API: get_folder({name}) returned")
+                return f.display_name, f.parent
+            except exceptions.PermissionDenied:
+                raise ResourceNotFoundError(
+                    f"Permission denied accessing folder {name}"
+                )
+
+        if name.startswith(_PREFIX_ORGS):
+            try:
+                o = org_client.get_organization(name=name)
+                logger.debug(f"GCP API: get_organization({name}) returned")
+                return o.display_name, None
+            except exceptions.PermissionDenied:
+                return f"_unknown_org_({name})", None
+
+        raise ResourceNotFoundError(f"Unknown resource type: {name}")
+
+    @staticmethod
+    def _resolve_org_directly(resource_name: str) -> Optional[str]:
+        """Resolve an organization resource name to its path. Returns None for non-org resources."""
+        if not resource_name.startswith(_PREFIX_ORGS):
+            return None
+        try:
+            org_client = resourcemanager_v3.OrganizationsClient()
+            org = org_client.get_organization(name=resource_name)
+            logger.debug(f"GCP API: get_organization({resource_name}) returned")
+            return "//" + path_escape(org.display_name)
+        except exceptions.PermissionDenied:
+            logger.warning(f"Permission denied accessing organization {resource_name}")
+            return f"//_unknown_org_({resource_name})"
+
+    @staticmethod
     def resolve_ancestry(resource_name: str) -> str:
         """
         Resolves the path for a given resource name by traversing up the hierarchy.
         This avoids loading the entire hierarchy.
         """
-        # Lazily initialize clients only when needed to avoid triggering
-        # credential lookup for unused client types
-        _folders_client = None
-        _projects_client = None
-        _org_client = None
+        # Handle organization directly
+        org_path = Hierarchy._resolve_org_directly(resource_name)
+        if org_path is not None:
+            return org_path
 
-        def folders_client():
-            nonlocal _folders_client
-            if _folders_client is None:
-                _folders_client = resourcemanager_v3.FoldersClient()
-            return _folders_client
-
-        def projects_client():
-            nonlocal _projects_client
-            if _projects_client is None:
-                _projects_client = resourcemanager_v3.ProjectsClient()
-            return _projects_client
-
-        def org_client():
-            nonlocal _org_client
-            if _org_client is None:
-                _org_client = resourcemanager_v3.OrganizationsClient()
-            return _org_client
+        # Lazy client initialization
+        folders_client = resourcemanager_v3.FoldersClient()
+        projects_client = resourcemanager_v3.ProjectsClient()
+        org_client = resourcemanager_v3.OrganizationsClient()
 
         segments: List[str] = []
-        current_resource_name = resource_name
+        current = resource_name
 
-        # First, allow organizations/ID directly
-        if current_resource_name.startswith(_PREFIX_ORGS):
+        while current:
             try:
-                org = org_client().get_organization(name=current_resource_name)
-                logger.debug(
-                    f"GCP API: get_organization({current_resource_name}) returned"
+                display_name, parent = Hierarchy._get_resource_info(
+                    current, folders_client, projects_client, org_client,
                 )
-                return "//" + path_escape(org.display_name)
-            except exceptions.PermissionDenied:
-                logger.warning(
-                    f"Permission denied accessing organization {current_resource_name}"
-                )
-                return f"//_unknown_org_({current_resource_name})"  # Fallback
-            except Exception as e:
-                logger.error(
-                    f"Error fetching organization {current_resource_name}: {e}"
-                )
-                raise
-
-        # Helper to fetch display name and parent
-        def get_resource_info(name: str):
-            if name.startswith(_PREFIX_PROJECTS):
-                try:
-                    p = projects_client().get_project(name=name)
-                    logger.debug(f"GCP API: get_project({name}) returned")
-                    # Project display_name is optional, fallback to projectId
-                    d_name = p.display_name or p.project_id
-                    return d_name, p.parent
-                except exceptions.PermissionDenied:
-                    # If we can't see the project, we can't resolve its path
-                    raise ResourceNotFoundError(
-                        f"Permission denied accessing project {name}"
-                    )
-
-            elif name.startswith(_PREFIX_FOLDERS):
-                try:
-                    f = folders_client().get_folder(name=name)
-                    logger.debug(f"GCP API: get_folder({name}) returned")
-                    return f.display_name, f.parent
-                except exceptions.PermissionDenied:
-                    raise ResourceNotFoundError(
-                        f"Permission denied accessing folder {name}"
-                    )
-
-            elif name.startswith(_PREFIX_ORGS):
-                try:
-                    o = org_client().get_organization(name=name)
-                    logger.debug(f"GCP API: get_organization({name}) returned")
-                    return o.display_name, None
-                except exceptions.PermissionDenied:
-                    # This might happen at the top of the chain
-                    return f"_unknown_org_({name})", None
-
-            raise ResourceNotFoundError(f"Unknown resource type: {name}")
-
-        # Traverse up
-        while current_resource_name:
-            try:
-                display_name, parent = get_resource_info(current_resource_name)
-                # We build the path relevant to the resource itself,
-                # but we need to handle the root (Org).
-                # If it's an organization, it becomes the prefix //Org
-                if current_resource_name.startswith(_PREFIX_ORGS):
-                    # We reached the top
-                    path_prefix = "//" + path_escape(display_name)
-                    # Prepend prefix to existing segments
-                    full_path = path_prefix + (
-                        ("/" + "/".join(segments)) if segments else ""
-                    )
-                    return full_path
-
-                # If it's a project or folder, add to segments
-                # Note: We are traversing UP, so we are collecting child -> parent
-                # We insert at the beginning of the list later or just reverse.
-                # Actually simpler: append to a list and reverse at the end?
-                # But we build segments usually as [Folder, Subfolder, Resource]
-                # Here we get Resource, then Parent (Folder), etc.
-                segments.insert(0, path_escape(display_name))
-
-                # Check for organizationless project
-                if not parent:
-                    # Missing parent usually implies Organizationless (or error)
-                    # If we are at a project and it has no parent or parent is not org/folder
-                    # (though get_resource_info handles standard types)
-                    return "//_/" + "/".join(segments)
-
-                current_resource_name = parent
-
             except exceptions.NotFound:
-                raise ResourceNotFoundError(
-                    f"Resource not found: {current_resource_name}"
-                )
+                raise ResourceNotFoundError(f"Resource not found: {current}")
 
-        return "//?/" + "/".join(segments)  # Should not be reached ideally
+            if current.startswith(_PREFIX_ORGS):
+                prefix = "//" + path_escape(display_name)
+                return prefix + ("/" + "/".join(segments) if segments else "")
+
+            segments.insert(0, path_escape(display_name))
+
+            if not parent:
+                return "//_/" + "/".join(segments)
+
+            current = parent
+
+        return "//?/" + "/".join(segments)
 
     @staticmethod
     def _fetch_chain_link(

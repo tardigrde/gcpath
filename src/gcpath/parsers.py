@@ -263,6 +263,39 @@ def parse_folder_row(row: Any, has_labels: bool = False) -> Dict[str, Any]:
     return result
 
 
+def _ensure_org_tail(ancestors: List[str], org_name: str) -> None:
+    """Append org_name to ancestors if the chain doesn't already end with an organization."""
+    if not ancestors or not ancestors[-1].startswith("organizations/"):
+        ancestors.append(org_name)
+
+
+def _build_chain_from_parent(
+    name: str,
+    parent: str,
+    loaded_folders: Dict[str, Any],
+    org_name: str,
+) -> List[str]:
+    """Build ancestor chain starting from name, traversing through parent."""
+    ancestors = [name]
+    if not (parent and parent.startswith("folders/")):
+        _ensure_org_tail(ancestors, org_name)
+        return ancestors
+
+    ancestors.append(parent)
+    if parent in loaded_folders:
+        parent_folder = loaded_folders[parent]
+        ancestors_set = set(ancestors)
+        for anc in parent_folder.ancestors:
+            if anc not in ancestors_set:
+                ancestors.append(anc)
+                ancestors_set.add(anc)
+    else:
+        ancestors.append(org_name)
+
+    _ensure_org_tail(ancestors, org_name)
+    return ancestors
+
+
 def build_folder_ancestors(
     name: str,
     raw_ancestors: List[str],
@@ -285,37 +318,13 @@ def build_folder_ancestors(
         Complete ancestor chain from folder to organization
     """
     # Ensure ancestors start with self
-    if not raw_ancestors or raw_ancestors[0] != name:
-        ancestors = [name] + raw_ancestors
-    else:
+    if raw_ancestors and raw_ancestors[0] == name:
         ancestors = raw_ancestors
+    else:
+        ancestors = [name] + raw_ancestors
 
-    # If we have empty or single-item ancestors, build the full chain
-    if not ancestors or (len(ancestors) == 1 and ancestors[0] == name):
-        ancestors = [name]
-        current_parent = parent
-
-        # Traverse up the parent chain
-        while current_parent and current_parent.startswith("folders/"):
-            ancestors.append(current_parent)
-
-            # Check if this parent is already loaded
-            if current_parent in loaded_folders:
-                parent_folder = loaded_folders[current_parent]
-                # Add remaining ancestors from the parent (excluding duplicates)
-                for anc in parent_folder.ancestors:
-                    if anc != current_parent and anc not in ancestors:
-                        ancestors.append(anc)
-                break
-            else:
-                # Parent not loaded yet, add org and break
-                ancestors.append(org_name)
-                break
-
-        # If we didn't find any folders in the chain, add org
-        if len(ancestors) == 1 or (
-            len(ancestors) > 1 and not ancestors[-1].startswith("organizations/")
-        ):
-            ancestors.append(org_name)
+    # If ancestors are incomplete (just [self] or empty), build the full chain
+    if len(ancestors) <= 1:
+        return _build_chain_from_parent(name, parent, loaded_folders, org_name)
 
     return ancestors

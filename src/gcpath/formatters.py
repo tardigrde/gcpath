@@ -9,6 +9,33 @@ from typing import List, Dict, Tuple, Union, Optional, Any
 from gcpath.core import OrganizationNode, Folder, Project, path_escape, Hierarchy
 
 
+def _children_of_target(
+    hierarchy: Hierarchy, target: str
+) -> Tuple[List[Folder], List[Project]]:
+    """Return folders and projects whose parent matches the target resource."""
+    folders = [f for f in hierarchy.folders if f.parent == target]
+    projects = [p for p in hierarchy.projects if p.parent == target]
+    return folders, projects
+
+
+def _org_level_children(
+    hierarchy: Hierarchy,
+) -> Tuple[List[Folder], List[Project]]:
+    """Return org-level folders and projects (including organizationless)."""
+    org_names = {org.organization.name for org in hierarchy.organizations}
+    folders = [
+        f
+        for org in hierarchy.organizations
+        for f in org.folders.values()
+        if f.parent == org.organization.name
+    ]
+    projects = [
+        p for p in hierarchy.projects
+        if (p.organization and p.parent in org_names) or not p.organization
+    ]
+    return folders, projects
+
+
 def filter_direct_children(
     hierarchy: Hierarchy, target_resource_name: Optional[str] = None
 ) -> Tuple[List[Folder], List[Project]]:
@@ -21,30 +48,9 @@ def filter_direct_children(
     Returns:
         Tuple of (folders, projects) that are direct children
     """
-    current_folders = []
-    current_projects = []
-
     if target_resource_name:
-        # Find direct children of the target resource
-        for f in hierarchy.folders:
-            if f.parent == target_resource_name:
-                current_folders.append(f)
-        for p in hierarchy.projects:
-            if p.parent == target_resource_name:
-                current_projects.append(p)
-    else:
-        # No target: show org-level resources
-        for org in hierarchy.organizations:
-            for f in org.folders.values():
-                if f.parent == org.organization.name:
-                    current_folders.append(f)
-        for p in hierarchy.projects:
-            if p.organization and p.parent == p.organization.organization.name:
-                current_projects.append(p)
-        # Add organizationless projects
-        current_projects.extend([p for p in hierarchy.projects if not p.organization])
-
-    return current_folders, current_projects
+        return _children_of_target(hierarchy, target_resource_name)
+    return _org_level_children(hierarchy)
 
 
 def get_display_path(
@@ -82,6 +88,46 @@ def get_display_path(
     return ""
 
 
+def _collect_recursive_items(
+    hierarchy: Hierarchy,
+    target_path_prefix: str,
+    target_resource_name: Optional[str],
+) -> List[Tuple[str, Union[OrganizationNode, Folder, Project]]]:
+    """Collect all items for recursive listing."""
+    def _path(item, is_direct=False):
+        return get_display_path(item, target_path_prefix, target_resource_name, is_direct, True)
+
+    items: List[Tuple[str, Union[OrganizationNode, Folder, Project]]] = []
+    if target_resource_name:
+        items.extend((_path(f), f) for f in hierarchy.folders)
+        items.extend((_path(p), p) for p in hierarchy.projects)
+    else:
+        for org in hierarchy.organizations:
+            items.append((_path(org), org))
+            items.extend((_path(f), f) for f in org.folders.values())
+        items.extend((_path(p), p) for p in hierarchy.projects)
+    return items
+
+
+def _collect_nonrecursive_items(
+    hierarchy: Hierarchy,
+    current_folders: List[Folder],
+    current_projects: List[Project],
+    target_path_prefix: str,
+    target_resource_name: Optional[str],
+) -> List[Tuple[str, Union[OrganizationNode, Folder, Project]]]:
+    """Collect items for non-recursive (direct children) listing."""
+    def _path(item, is_direct=False):
+        return get_display_path(item, target_path_prefix, target_resource_name, is_direct, False)
+
+    items: List[Tuple[str, Union[OrganizationNode, Folder, Project]]] = []
+    if not target_resource_name:
+        items.extend((_path(org), org) for org in hierarchy.organizations)
+    items.extend((_path(f, True), f) for f in current_folders)
+    items.extend((_path(p, True), p) for p in current_projects)
+    return items
+
+
 def build_items_list(
     hierarchy: Hierarchy,
     current_folders: List[Folder],
@@ -103,124 +149,11 @@ def build_items_list(
     Returns:
         List of (path, resource) tuples
     """
-    items: List[Tuple[str, Union[OrganizationNode, Folder, Project]]] = []
-
     if recursive:
-        # Recursive listing - list everything under the target
-        if target_resource_name:
-            # All loaded folders and projects are descendants
-            for f in hierarchy.folders:
-                items.append(
-                    (
-                        get_display_path(
-                            f,
-                            target_path_prefix,
-                            target_resource_name,
-                            is_direct_child=False,
-                            recursive=True,
-                        ),
-                        f,
-                    )
-                )
-            for p in hierarchy.projects:
-                items.append(
-                    (
-                        get_display_path(
-                            p,
-                            target_path_prefix,
-                            target_resource_name,
-                            is_direct_child=False,
-                            recursive=True,
-                        ),
-                        p,
-                    )
-                )
-        else:
-            # Full recursive list
-            for org in hierarchy.organizations:
-                items.append(
-                    (
-                        get_display_path(
-                            org,
-                            target_path_prefix,
-                            target_resource_name,
-                            is_direct_child=False,
-                            recursive=True,
-                        ),
-                        org,
-                    )
-                )
-                for f in org.folders.values():
-                    items.append(
-                        (
-                            get_display_path(
-                                f,
-                                target_path_prefix,
-                                target_resource_name,
-                                is_direct_child=False,
-                                recursive=True,
-                            ),
-                            f,
-                        )
-                    )
-            for p in hierarchy.projects:
-                items.append(
-                    (
-                        get_display_path(
-                            p,
-                            target_path_prefix,
-                            target_resource_name,
-                            is_direct_child=False,
-                            recursive=True,
-                        ),
-                        p,
-                    )
-                )
-    else:
-        # Non-recursive - only direct children
-        if not target_resource_name:
-            for org in hierarchy.organizations:
-                items.append(
-                    (
-                        get_display_path(
-                            org,
-                            target_path_prefix,
-                            target_resource_name,
-                            is_direct_child=False,
-                            recursive=False,
-                        ),
-                        org,
-                    )
-                )
-
-        for f in current_folders:
-            items.append(
-                (
-                    get_display_path(
-                        f,
-                        target_path_prefix,
-                        target_resource_name,
-                        is_direct_child=True,
-                        recursive=False,
-                    ),
-                    f,
-                )
-            )
-        for p in current_projects:
-            items.append(
-                (
-                    get_display_path(
-                        p,
-                        target_path_prefix,
-                        target_resource_name,
-                        is_direct_child=True,
-                        recursive=False,
-                    ),
-                    p,
-                )
-            )
-
-    return items
+        return _collect_recursive_items(hierarchy, target_path_prefix, target_resource_name)
+    return _collect_nonrecursive_items(
+        hierarchy, current_folders, current_projects, target_path_prefix, target_resource_name,
+    )
 
 
 def sort_resources(items: List[Tuple[str, Any]]) -> List[Tuple[str, Any]]:
