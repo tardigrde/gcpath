@@ -105,7 +105,7 @@ def _dict_to_hierarchy(data: Dict[str, Any]) -> Optional[Hierarchy]:
     """Deserializes a dictionary to a Hierarchy object."""
     if data.get("version") != CACHE_VERSION:
         logger.warning(
-            f"Cache version mismatch (expected {CACHE_VERSION}, got {data.get('version')}). Ignoring cache."
+            "Cache version mismatch (expected %s). Ignoring cache.", CACHE_VERSION
         )
         return None
 
