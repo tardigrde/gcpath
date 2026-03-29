@@ -16,8 +16,9 @@ from gcpath.config import (
 def tmp_config(tmp_path):
     """Patch CONFIG_FILE to a temporary location."""
     config_file = tmp_path / "config.json"
-    with patch("gcpath.config.CONFIG_FILE", config_file), patch(
-        "gcpath.config.CACHE_DIR", tmp_path
+    with (
+        patch("gcpath.config.CONFIG_FILE", config_file),
+        patch("gcpath.config.CACHE_DIR", tmp_path),
     ):
         yield config_file
 

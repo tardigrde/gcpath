@@ -107,7 +107,8 @@ class TestSerializeTree:
         _, org_node, _, p1, orgless_p = _h()
         projects_by_parent = {"folders/1": [p1]}
         result = serialize_tree(
-            [org_node], projects_by_parent,
+            [org_node],
+            projects_by_parent,
             orgless_projects=[orgless_p],
         )
         assert len(result) == 2
@@ -197,7 +198,8 @@ class TestSerializeTreeTypeFilter:
         _, org_node, _, p1, orgless_p = _h()
         projects_by_parent = {"folders/1": [p1]}
         result = serialize_tree(
-            [org_node], projects_by_parent,
+            [org_node],
+            projects_by_parent,
             orgless_projects=[orgless_p],
             type_filter="folder",
         )
@@ -215,9 +217,21 @@ class TestSerializeAncestors:
         ]
         result = serialize_ancestors(chain)
         assert len(result) == 3
-        assert result[0] == {"resource_name": "organizations/123", "display_name": "example.com", "type": "organization"}
-        assert result[1] == {"resource_name": "folders/456", "display_name": "engineering", "type": "folder"}
-        assert result[2] == {"resource_name": "projects/p1", "display_name": "my-project", "type": "project"}
+        assert result[0] == {
+            "resource_name": "organizations/123",
+            "display_name": "example.com",
+            "type": "organization",
+        }
+        assert result[1] == {
+            "resource_name": "folders/456",
+            "display_name": "engineering",
+            "type": "folder",
+        }
+        assert result[2] == {
+            "resource_name": "projects/p1",
+            "display_name": "my-project",
+            "type": "project",
+        }
 
     def test_empty(self):
         assert serialize_ancestors([]) == []

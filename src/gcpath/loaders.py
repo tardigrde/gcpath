@@ -307,7 +307,9 @@ def load_folders_asset(
     root = root_ancestor or node.organization.name
 
     # Build SQL query
-    statement = build_folder_sql_query(parent_filter, ancestors_filter, include_labels=include_labels)
+    statement = build_folder_sql_query(
+        parent_filter, ancestors_filter, include_labels=include_labels
+    )
 
     logger.debug(f"Folders query: {statement}")
     query_request = asset_v1.QueryAssetsRequest(
@@ -420,7 +422,9 @@ def load_projects_asset(
     api_parent = query_parent or node.organization.name
     projects: List[Project] = []
 
-    statement = build_project_sql_query(parent_filter, ancestors_filter, include_labels=include_labels)
+    statement = build_project_sql_query(
+        parent_filter, ancestors_filter, include_labels=include_labels
+    )
     logger.debug(f"Projects query: {statement}")
     query_request = asset_v1.QueryAssetsRequest(
         parent=api_parent,
@@ -439,9 +443,15 @@ def load_projects_asset(
             try:
                 project_data = parse_project_row(row, has_labels=include_labels)
                 parent_res = _resolve_project_parent(
-                    project_data, parent_filter, node.organization.name,
+                    project_data,
+                    parent_filter,
+                    node.organization.name,
                 )
-                parent_folder = node.folders.get(parent_res) if parent_res.startswith(_FOLDER_PREFIX) else None
+                parent_folder = (
+                    node.folders.get(parent_res)
+                    if parent_res.startswith(_FOLDER_PREFIX)
+                    else None
+                )
 
                 proj = Project(
                     name=project_data["name"],

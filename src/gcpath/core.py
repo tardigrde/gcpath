@@ -197,7 +197,11 @@ class Hierarchy:
 
         # Load Organizations
         org_nodes = cls._load_organizations(
-            org_client, display_names, via_resource_manager, scope_resource, recursive,
+            org_client,
+            display_names,
+            via_resource_manager,
+            scope_resource,
+            recursive,
             include_labels=include_labels,
         )
 
@@ -211,13 +215,20 @@ class Hierarchy:
                 f"No organizations found, falling back to folder-scoped loading for {scope_resource}"
             )
             return cls._load_from_folder_scope(
-                scope_resource, via_resource_manager, recursive,
-                include_labels=include_labels, include_tags=include_tags,
+                scope_resource,
+                via_resource_manager,
+                recursive,
+                include_labels=include_labels,
+                include_tags=include_tags,
             )
 
         # Load Projects
         all_projects = cls._load_all_projects(
-            project_client, org_nodes, via_resource_manager, scope_resource, recursive,
+            project_client,
+            org_nodes,
+            via_resource_manager,
+            scope_resource,
+            recursive,
             include_labels=include_labels,
         )
 
@@ -225,9 +236,11 @@ class Hierarchy:
 
         # Load tags if requested (separate Asset API query)
         if include_tags and not via_resource_manager:
-            tag_scopes = [scope_resource] if scope_resource else [
-                org_node.organization.name for org_node in org_nodes
-            ]
+            tag_scopes = (
+                [scope_resource]
+                if scope_resource
+                else [org_node.organization.name for org_node in org_nodes]
+            )
             for tag_scope in tag_scopes:
                 tags_map = load_tags_asset(tag_scope)
                 apply_tags(hierarchy, tags_map)
@@ -264,15 +277,22 @@ class Hierarchy:
 
         for org in cls._search_organizations(org_client):
             if display_names_set and org.display_name not in display_names_set:
-                logger.debug(f"Skipping organization '{org.display_name}' (not in filter)")
+                logger.debug(
+                    f"Skipping organization '{org.display_name}' (not in filter)"
+                )
                 continue
 
-            logger.debug(f"Processing organization: {org.display_name} (name: {org.name})")
+            logger.debug(
+                f"Processing organization: {org.display_name} (name: {org.name})"
+            )
             node = OrganizationNode(organization=org)
             org_nodes.append(node)
 
             cls._load_folders_for_org(
-                node, via_resource_manager, scope_resource, recursive,
+                node,
+                via_resource_manager,
+                scope_resource,
+                recursive,
                 include_labels=include_labels,
             )
             logger.debug(
@@ -372,7 +392,9 @@ class Hierarchy:
             # RM path: search_projects returns all accessible, filter by parent
             project_client = resourcemanager_v3.ProjectsClient()
             all_projects = cls._load_projects_rm(
-                project_client, [node], include_labels=include_labels,
+                project_client,
+                [node],
+                include_labels=include_labels,
             )
         else:
             all_projects = cls._load_projects_asset_all_orgs(
@@ -447,12 +469,16 @@ class Hierarchy:
 
         if via_resource_manager:
             all_projects = cls._load_projects_rm(
-                project_client, org_nodes, include_labels=include_labels,
+                project_client,
+                org_nodes,
+                include_labels=include_labels,
             )
         else:
             # Asset API mode
             all_projects = cls._load_projects_asset_all_orgs(
-                org_nodes, scope_resource, recursive,
+                org_nodes,
+                scope_resource,
+                recursive,
                 include_labels=include_labels,
             )
 
@@ -465,7 +491,9 @@ class Hierarchy:
 
     @classmethod
     def _load_projects_rm(
-        cls, project_client, org_nodes: List[OrganizationNode],
+        cls,
+        project_client,
+        org_nodes: List[OrganizationNode],
         include_labels: bool = False,
     ) -> List[Project]:
         """Load projects using Resource Manager API."""
@@ -493,7 +521,9 @@ class Hierarchy:
                             parent_org = o
                             break
 
-                labels = dict(p_proto.labels) if include_labels and p_proto.labels else {}
+                labels = (
+                    dict(p_proto.labels) if include_labels and p_proto.labels else {}
+                )
 
                 proj = Project(
                     name=p_proto.name,
@@ -624,7 +654,10 @@ class Hierarchy:
 
     @staticmethod
     def _get_resource_info(
-        name: str, folders_client, projects_client, org_client,
+        name: str,
+        folders_client,
+        projects_client,
+        org_client,
     ) -> tuple[str, Optional[str]]:
         """Fetch display name and parent for a resource.
 
@@ -697,7 +730,10 @@ class Hierarchy:
         while current:
             try:
                 display_name, parent = Hierarchy._get_resource_info(
-                    current, folders_client, projects_client, org_client,
+                    current,
+                    folders_client,
+                    projects_client,
+                    org_client,
                 )
             except exceptions.NotFound:
                 raise ResourceNotFoundError(f"Resource not found: {current}")

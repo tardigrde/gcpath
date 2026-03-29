@@ -38,7 +38,9 @@ class CacheInfo:
     scope: Optional[str] = None
 
 
-def _hierarchy_to_dict(hierarchy: Hierarchy, scope: Optional[str] = None) -> Dict[str, Any]:
+def _hierarchy_to_dict(
+    hierarchy: Hierarchy, scope: Optional[str] = None
+) -> Dict[str, Any]:
     """Serializes the Hierarchy object to a dictionary."""
     organizations_data = []
 
@@ -267,9 +269,7 @@ def get_cache_info(
         if timestamp_str:
             try:
                 cached_time = datetime.fromisoformat(timestamp_str)
-                age_seconds = (
-                    datetime.now(timezone.utc) - cached_time
-                ).total_seconds()
+                age_seconds = (datetime.now(timezone.utc) - cached_time).total_seconds()
             except (ValueError, TypeError):
                 pass
 

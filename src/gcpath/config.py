@@ -36,7 +36,9 @@ def write_config(config: Dict[str, Any]) -> None:
 
 def _validate_entrypoint(resource: str) -> None:
     """Validate that the entrypoint is a valid resource name."""
-    if not resource.startswith("organizations/") and not resource.startswith("folders/"):
+    if not resource.startswith("organizations/") and not resource.startswith(
+        "folders/"
+    ):
         raise ValueError(
             f"Entrypoint must start with 'organizations/' or 'folders/', got '{resource}'"
         )
