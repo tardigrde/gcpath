@@ -1,6 +1,73 @@
 # CHANGELOG
 
 
+## v0.10.0 (2026-03-29)
+
+### Bug Fixes
+
+- Address PR review comments and SonarCloud findings
+  ([`c756062`](https://github.com/tardigrde/gcpath/commit/c75606241587851f9224c4bf149bde1c9f6d8555))
+
+- Remove unimplemented --show-labels/--show-tags from ancestors command - Deduplicate
+  _matches_labels/_matches_tags into generic _matches_metadata - Deduplicate
+  _format_labels/_format_tags into generic _format_metadata - Use scope_resource for tag lookups
+  instead of always querying org root - Replace duplicated "organizations/" literal with
+  _RESOURCE_PREFIX_ORGS constant - Sanitize user-controlled data from cache log message - Fix
+  single-iteration loop in build_folder_ancestors (parsers.py) - Reduce cognitive complexity across
+  cli.py, core.py, formatters.py, loaders.py, and parsers.py by extracting helper functions
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+
+- Findings
+  ([`3be86b0`](https://github.com/tardigrde/gcpath/commit/3be86b03d357dfdae65d983db330bbecc3b1fa97))
+
+### Chores
+
+- Update uv.lock
+  ([`ea0a688`](https://github.com/tardigrde/gcpath/commit/ea0a6889a087f6ed0a65423971526271bd238ce6))
+
+https://claude.ai/code/session_01HugtU9fbaL97tbb7zaqNPL
+
+- **deps**: Bump pyasn1 in the uv group across 1 directory
+  ([`8adfd85`](https://github.com/tardigrde/gcpath/commit/8adfd8516d85343895dbd8189a907d86a7bb83cf))
+
+Bumps the uv group with 1 update in the / directory: [pyasn1](https://github.com/pyasn1/pyasn1).
+
+Updates `pyasn1` from 0.6.2 to 0.6.3 - [Release notes](https://github.com/pyasn1/pyasn1/releases) -
+  [Changelog](https://github.com/pyasn1/pyasn1/blob/main/CHANGES.rst) -
+  [Commits](https://github.com/pyasn1/pyasn1/compare/v0.6.2...v0.6.3)
+
+--- updated-dependencies: - dependency-name: pyasn1 dependency-version: 0.6.3
+
+dependency-type: indirect
+
+dependency-group: uv ...
+
+Signed-off-by: dependabot[bot] <support@github.com>
+
+### Features
+
+- Add GCP labels and tags support to CLI commands
+  ([`d428c9a`](https://github.com/tardigrde/gcpath/commit/d428c9a161cd19cb928d39ffb8c9ba1d55916370))
+
+Add opt-in support for GCP resource labels (key-value pairs) and resource tags (Tag Manager
+  bindings) across CLI commands. Labels are fetched via an additional SQL column in Asset API
+  queries (cheap). Tags require a separate Asset API query against TagBinding resources (expensive).
+  Both are only fetched when explicitly requested via CLI flags.
+
+New CLI options on ls, tree, find, ancestors: - --show-labels: display labels in output -
+  --show-tags: display tags in output - --label key=value: filter by label (repeatable, ANDed) -
+  --tag key=value: filter by tag (repeatable, ANDed)
+
+Changes across the stack: - core.py: labels/tags fields on Folder and Project dataclasses -
+  parsers.py: extract_labels() and has_labels param on parse functions - loaders.py: include_labels
+  in SQL builders, load_tags_asset/apply_tags - cache.py: bump CACHE_VERSION to 2,
+  serialize/deserialize labels+tags - serializers.py: include labels/tags in JSON/YAML output when
+  non-empty - formatters.py: show labels/tags in tree view labels
+
+https://claude.ai/code/session_01HugtU9fbaL97tbb7zaqNPL
+
+
 ## v0.9.0 (2026-03-19)
 
 ### Bug Fixes
