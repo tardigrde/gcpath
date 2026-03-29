@@ -625,7 +625,9 @@ def test_build_single_ancestor_chain_missing_parent(mock_org_node):
 
 
 @patch("google.cloud.asset_v1.AssetServiceClient")
-def test_load_folders_asset_no_parent_uses_parent_filter(mock_asset_client_cls, mock_org_node):
+def test_load_folders_asset_no_parent_uses_parent_filter(
+    mock_asset_client_cls, mock_org_node
+):
     """Test that folders with no parent from API fall back to parent_filter."""
     mock_client = mock_asset_client_cls.return_value
 
@@ -653,7 +655,9 @@ def test_load_folders_asset_no_parent_uses_parent_filter(mock_asset_client_cls, 
 
 
 @patch("google.cloud.asset_v1.AssetServiceClient")
-def test_load_folders_asset_no_parent_no_filter_uses_root(mock_asset_client_cls, mock_org_node):
+def test_load_folders_asset_no_parent_no_filter_uses_root(
+    mock_asset_client_cls, mock_org_node
+):
     """Test that folders with no parent and no parent_filter fall back to root (org name)."""
     mock_client = mock_asset_client_cls.return_value
 
@@ -680,7 +684,9 @@ def test_load_folders_asset_no_parent_no_filter_uses_root(mock_asset_client_cls,
 
 
 @patch("google.cloud.asset_v1.AssetServiceClient")
-def test_load_projects_asset_no_parent_no_ancestors_with_filter(mock_asset_client_cls, mock_org_node):
+def test_load_projects_asset_no_parent_no_ancestors_with_filter(
+    mock_asset_client_cls, mock_org_node
+):
     """Test project with no parent and no ancestors falls back to parent_filter."""
     mock_client = mock_asset_client_cls.return_value
 
@@ -707,7 +713,9 @@ def test_load_projects_asset_no_parent_no_ancestors_with_filter(mock_asset_clien
 
 
 @patch("google.cloud.asset_v1.AssetServiceClient")
-def test_load_projects_asset_no_parent_no_ancestors_no_filter(mock_asset_client_cls, mock_org_node):
+def test_load_projects_asset_no_parent_no_ancestors_no_filter(
+    mock_asset_client_cls, mock_org_node
+):
     """Test project with no parent and no ancestors falls back to org name."""
     mock_client = mock_asset_client_cls.return_value
 
@@ -734,7 +742,9 @@ def test_load_projects_asset_no_parent_no_ancestors_no_filter(mock_asset_client_
 
 
 @patch("google.cloud.asset_v1.AssetServiceClient")
-def test_load_projects_asset_self_in_ancestors_with_more(mock_asset_client_cls, mock_org_node):
+def test_load_projects_asset_self_in_ancestors_with_more(
+    mock_asset_client_cls, mock_org_node
+):
     """Test project where ancestors[0] == name and len > 1 uses ancestors[1]."""
     mock_client = mock_asset_client_cls.return_value
 
@@ -777,7 +787,9 @@ def test_load_projects_asset_self_in_ancestors_with_more(mock_asset_client_cls, 
 
 
 @patch("google.cloud.asset_v1.AssetServiceClient")
-def test_load_projects_asset_self_in_ancestors_only_with_filter(mock_asset_client_cls, mock_org_node):
+def test_load_projects_asset_self_in_ancestors_only_with_filter(
+    mock_asset_client_cls, mock_org_node
+):
     """Test project where ancestors has only self, falls back to parent_filter."""
     mock_client = mock_asset_client_cls.return_value
 
@@ -808,7 +820,9 @@ def test_load_projects_asset_self_in_ancestors_only_with_filter(mock_asset_clien
 
 
 @patch("google.cloud.asset_v1.AssetServiceClient")
-def test_load_projects_asset_self_in_ancestors_only_no_filter(mock_asset_client_cls, mock_org_node):
+def test_load_projects_asset_self_in_ancestors_only_no_filter(
+    mock_asset_client_cls, mock_org_node
+):
     """Test project where ancestors has only self and no filter, falls back to org."""
     mock_client = mock_asset_client_cls.return_value
 
@@ -839,7 +853,9 @@ def test_load_projects_asset_self_in_ancestors_only_no_filter(mock_asset_client_
 
 
 @patch("google.cloud.asset_v1.AssetServiceClient")
-def test_load_projects_asset_ancestors_first_not_self(mock_asset_client_cls, mock_org_node):
+def test_load_projects_asset_ancestors_first_not_self(
+    mock_asset_client_cls, mock_org_node
+):
     """Test project where ancestors[0] != name uses ancestors[0] as parent."""
     mock_client = mock_asset_client_cls.return_value
 
@@ -880,7 +896,9 @@ def test_load_projects_asset_ancestors_first_not_self(mock_asset_client_cls, moc
 
 
 @patch("google.cloud.asset_v1.AssetServiceClient")
-def test_load_projects_asset_ancestors_first_not_self_with_filter(mock_asset_client_cls, mock_org_node):
+def test_load_projects_asset_ancestors_first_not_self_with_filter(
+    mock_asset_client_cls, mock_org_node
+):
     """Test else branch with empty ancestors falls back to parent_filter."""
     mock_client = mock_asset_client_cls.return_value
 

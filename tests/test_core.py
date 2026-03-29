@@ -340,9 +340,7 @@ def test_hierarchy_get_path_errors():
 @patch("gcpath.loaders.resourcemanager_v3")
 @patch("gcpath.loaders.asset_v1")
 @patch("gcpath.core.resourcemanager_v3")
-def test_hierarchy_load_asset_api(
-    mock_core_rm, mock_loaders_asset, mock_loaders_rm
-):
+def test_hierarchy_load_asset_api(mock_core_rm, mock_loaders_asset, mock_loaders_rm):
     # Use the same mocks for both core and loaders
     mock_asset = mock_loaders_asset
     mock_rm = mock_core_rm
@@ -526,7 +524,9 @@ def test_find_orgless_project_not_found():
     """Test _find_orgless_project helper raises error when not found."""
     h = Hierarchy([], [])
 
-    with pytest.raises(ResourceNotFoundError, match="not found in organizationless scope"):
+    with pytest.raises(
+        ResourceNotFoundError, match="not found in organizationless scope"
+    ):
         h._find_orgless_project("//_/NonExistent")
 
 

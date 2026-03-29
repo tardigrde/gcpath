@@ -58,7 +58,11 @@ from rich.table import Table
 _RESOURCE_PREFIX_PROJECTS = "projects/"
 _RESOURCE_PREFIX_FOLDERS = "folders/"
 _RESOURCE_PREFIX_ORGS = "organizations/"
-_RESOURCE_PREFIXES = (_RESOURCE_PREFIX_ORGS, _RESOURCE_PREFIX_FOLDERS, _RESOURCE_PREFIX_PROJECTS)
+_RESOURCE_PREFIXES = (
+    _RESOURCE_PREFIX_ORGS,
+    _RESOURCE_PREFIX_FOLDERS,
+    _RESOURCE_PREFIX_PROJECTS,
+)
 _REFRESH_HELP = "Force a refresh of the cache from the GCP API"
 _VALID_TYPE_FILTERS = ("folder", "project", "organization")
 
@@ -120,6 +124,7 @@ def _format_metadata(obj: Union[OrganizationNode, Folder, Project], attr: str) -
 @dataclass
 class _ScopeResult:
     """Result of resolving a resource scope argument."""
+
     target_resource_name: Optional[str]
     target_org_name: Optional[str]
     filter_orgs: Optional[List[str]]
@@ -161,6 +166,7 @@ def _resolve_scope(
         target_org_name=target_org_name,
         filter_orgs=filter_orgs,
     )
+
 
 app = typer.Typer(
     name="gcpath",
@@ -245,7 +251,9 @@ def main(
     gcpath - Google Cloud Platform resource hierarchy utility
     """
     if json_output and yaml_output:
-        error_console.print("[red]Error:[/red] --json and --yaml are mutually exclusive.")
+        error_console.print(
+            "[red]Error:[/red] --json and --yaml are mutually exclusive."
+        )
         raise typer.Exit(code=1)
 
     ctx.ensure_object(dict)
@@ -398,7 +406,9 @@ def _try_read_cache(
 
     info = get_cache_info()
     age_str = _format_age(info.age_seconds) if info.age_seconds else "unknown"
-    error_console.print(f"[dim]Using cached data ({age_str} ago). Use -F to refresh.[/dim]")
+    error_console.print(
+        f"[dim]Using cached data ({age_str} ago). Use -F to refresh.[/dim]"
+    )
 
     # Apply org filter to cached data
     if filter_orgs:
@@ -467,6 +477,93 @@ class _HierarchyCommandContext:
     target_path: Optional[str]
 
 
+@dataclass
+class _ParsedResource:
+    """Result of parsing a resource argument for tree-like commands."""
+
+    target_resource_name: Optional[str]
+    target_org_name: Optional[str]
+    target_path: Optional[str]
+
+
+def _parse_resource_arg(effective_resource: str, command_name: str) -> _ParsedResource:
+    """Parse a resource argument, resolving its path and org name.
+
+    Raises typer.Exit(code=1) if the resource is a project.
+    """
+    if effective_resource.startswith(_RESOURCE_PREFIX_PROJECTS):
+        rprint(
+            f"[red]Error:[/red] '{command_name}' command does not support starting "
+            "from a project (projects are leaf nodes)."
+        )
+        raise typer.Exit(code=1)
+
+    target_org_name = None
+    target_resource_name = None
+    target_path = None
+
+    try:
+        target_path = _clean_resolve_path(
+            Hierarchy.resolve_ancestry(effective_resource)
+        )
+        if target_path.startswith("//"):
+            path_parts = target_path[2:].split("/")
+            if path_parts:
+                target_org_name = unquote(path_parts[0])
+
+        if effective_resource.startswith(
+            (_RESOURCE_PREFIX_FOLDERS, _RESOURCE_PREFIX_ORGS)
+        ):
+            target_resource_name = effective_resource
+    except Exception:
+        if effective_resource.startswith("//"):
+            target_path = effective_resource
+        else:
+            raise
+
+    return _ParsedResource(target_resource_name, target_org_name, target_path)
+
+
+def _find_target_nodes(
+    hierarchy: Hierarchy,
+    target_resource_name: str,
+    target_path: Optional[str],
+) -> List[Union[OrganizationNode, Folder]]:
+    """Find nodes matching target_resource_name in the hierarchy.
+
+    Creates a synthetic folder if the target folder is not found but the
+    hierarchy has organizations.
+    """
+    if target_resource_name.startswith(_RESOURCE_PREFIX_ORGS):
+        for o in hierarchy.organizations:
+            if o.organization.name == target_resource_name:
+                return [o]
+        return []
+
+    # Folder lookup
+    for o in hierarchy.organizations:
+        if target_resource_name in o.folders:
+            return [o.folders[target_resource_name]]
+
+    # Create synthetic folder from resolved path
+    if not target_path or not hierarchy.organizations:
+        return []
+
+    path_parts = target_path[2:].split("/") if target_path.startswith("//") else []
+    display_name = path_parts[-1] if path_parts else target_resource_name.split("/")[-1]
+
+    org_node = hierarchy.organizations[0]
+    synthetic_folder = Folder(
+        name=target_resource_name,
+        display_name=display_name,
+        ancestors=[target_resource_name, org_node.organization.name],
+        organization=org_node,
+        parent=org_node.organization.name,
+    )
+    org_node.folders[target_resource_name] = synthetic_folder
+    return [synthetic_folder]
+
+
 def _prepare_hierarchy_command(
     ctx: typer.Context,
     command_name: str,
@@ -479,14 +576,9 @@ def _prepare_hierarchy_command(
 ) -> Optional[_HierarchyCommandContext]:
     """Shared setup for tree-like commands (tree, diagram).
 
-    Handles confirmation prompting, resource argument parsing, hierarchy loading,
-    nodes_to_process construction (including synthetic folders), and
-    projects_by_parent building.
-
     Returns None if the user declines the confirmation prompt.
     Raises typer.Exit(code=1) for invalid or not-found resources.
     """
-    # Inject entrypoint when no explicit resource is given
     ep = ctx.obj.get("entrypoint")
     effective_resource = resource or ep
 
@@ -494,58 +586,26 @@ def _prepare_hierarchy_command(
     if not yes and effective_resource is None:
         cache_info = get_cache_info()
         if not cache_info.fresh and (level is None or level >= 4):
-            confirm = typer.confirm(
+            if not typer.confirm(
                 "This will load all folders and projects in the hierarchy, "
                 "which may take a long time. Continue?"
-            )
-            if not confirm:
+            ):
                 return None
 
     # Parse resource argument
-    target_org_name = None
-    target_resource_name = None
-    target_path = None
-
+    parsed = _ParsedResource(None, None, None)
     if effective_resource:
-        logger.debug(f"{command_name} command: processing resource argument {effective_resource}")
-        if effective_resource.startswith(_RESOURCE_PREFIX_PROJECTS):
-            rprint(
-                f"[red]Error:[/red] '{command_name}' command does not support starting "
-                "from a project (projects are leaf nodes)."
-            )
-            raise typer.Exit(code=1)
-
-        try:
-            target_path = _clean_resolve_path(
-                Hierarchy.resolve_ancestry(effective_resource)
-            )
-            if target_path.startswith("//"):
-                path_parts = target_path[2:].split("/")
-                if path_parts:
-                    target_org_name = unquote(path_parts[0])
-
-            if effective_resource.startswith(_RESOURCE_PREFIX_FOLDERS) or effective_resource.startswith(
-                _RESOURCE_PREFIX_ORGS
-            ):
-                target_resource_name = effective_resource
-        except Exception:
-            if effective_resource.startswith("//"):
-                target_path = effective_resource
-            else:
-                raise
+        parsed = _parse_resource_arg(effective_resource, command_name)
 
     # Skip org filtering when using entrypoint without explicit resource
-    if not resource and ep and target_org_name:
+    if not resource and ep and parsed.target_org_name:
         filter_orgs = None
     else:
-        filter_orgs = [target_org_name] if target_org_name else None
-    logger.debug(
-        f"{command_name}: loading hierarchy for resource='{resource}', filter_orgs={filter_orgs}"
-    )
+        filter_orgs = [parsed.target_org_name] if parsed.target_org_name else None
 
     hierarchy = _load_hierarchy(
         ctx,
-        scope_resource=target_resource_name,
+        scope_resource=parsed.target_resource_name,
         recursive=True,
         force_refresh=force_refresh,
         filter_orgs=filter_orgs,
@@ -553,74 +613,19 @@ def _prepare_hierarchy_command(
         include_tags=include_tags,
     )
 
-    logger.debug(
-        f"{command_name}: hierarchy loaded with {len(hierarchy.organizations)} orgs, "
-        f"{len(hierarchy.projects)} projects, {len(hierarchy.folders)} folders"
-    )
-
     # Build nodes_to_process
-    nodes_to_process: List[Union[OrganizationNode, Folder]] = []
-    if target_resource_name:
-        logger.debug(
-            f"{command_name} command: looking for target resource {target_resource_name}"
+    if parsed.target_resource_name:
+        nodes_to_process = _find_target_nodes(
+            hierarchy,
+            parsed.target_resource_name,
+            parsed.target_path,
         )
-        if target_resource_name.startswith(_RESOURCE_PREFIX_ORGS):
-            for o in hierarchy.organizations:
-                if o.organization.name == target_resource_name:
-                    logger.debug(f"{command_name} command: found target organization")
-                    nodes_to_process = [o]
-                    break
-        elif target_resource_name.startswith(_RESOURCE_PREFIX_FOLDERS):
-            for o in hierarchy.organizations:
-                if target_resource_name in o.folders:
-                    logger.debug(
-                        f"{command_name} command: found target folder in organization"
-                    )
-                    nodes_to_process = [o.folders[target_resource_name]]
-                    break
-
-            # If not found in loaded hierarchy, create a synthetic folder from resolved path
-            if not nodes_to_process and target_path and hierarchy.organizations:
-                logger.debug(
-                    f"{command_name} command: creating synthetic folder node for scope"
-                )
-                path_parts = (
-                    target_path[2:].split("/")
-                    if target_path.startswith("//")
-                    else []
-                )
-                display_name = (
-                    path_parts[-1]
-                    if path_parts
-                    else target_resource_name.split("/")[-1]
-                )
-
-                org_node = hierarchy.organizations[0]
-                synthetic_folder = Folder(
-                    name=target_resource_name,
-                    display_name=display_name,
-                    ancestors=[target_resource_name, org_node.organization.name],
-                    organization=org_node,
-                    parent=org_node.organization.name,
-                )
-                org_node.folders[target_resource_name] = synthetic_folder
-                nodes_to_process = [synthetic_folder]
-                logger.debug(
-                    f"{command_name} command: created synthetic folder {synthetic_folder.name}"
-                )
-
         if not nodes_to_process:
-            logger.warning(
-                f"{command_name} command: target resource '{target_resource_name}' not found"
-            )
             rprint(
-                f"[red]Error:[/red] Target resource '{target_resource_name}' not found."
+                f"[red]Error:[/red] Target resource '{parsed.target_resource_name}' not found."
             )
             raise typer.Exit(code=1)
     else:
-        logger.debug(
-            f"{command_name} command: processing all {len(hierarchy.organizations)} organizations"
-        )
         nodes_to_process = list(hierarchy.organizations)
 
     # Build projects_by_parent mapping
@@ -632,9 +637,152 @@ def _prepare_hierarchy_command(
         hierarchy=hierarchy,
         nodes_to_process=nodes_to_process,
         projects_by_parent=projects_by_parent,
-        target_resource_name=target_resource_name,
-        target_path=target_path,
+        target_resource_name=parsed.target_resource_name,
+        target_path=parsed.target_path,
     )
+
+
+def _handle_empty_hierarchy(dumper) -> None:
+    """Display message when no organizations or projects are found."""
+    if dumper:
+        print(dumper([]))
+        return
+
+    import google.auth
+
+    account_msg = ""
+    try:
+        credentials, _ = google.auth.default()
+        if hasattr(credentials, "account") and credentials.account:
+            if credentials.account.endswith("@gmail.com"):
+                account_msg = f" (Account: {credentials.account})"
+    except Exception:
+        pass
+
+    rprint(
+        f"[yellow]No organizations or projects found accessible to your account{account_msg}.[/yellow]"
+    )
+    if not account_msg:
+        rprint(
+            "[dim]Hint: You might not have access to any organizations. "
+            "Projects without organizations are shown with //_ prefix.[/dim]"
+        )
+
+
+def _resolve_target_path_prefix(target_resource_name: Optional[str]) -> str:
+    """Resolve the display path prefix for a target resource."""
+    if not target_resource_name:
+        return ""
+    try:
+        return _clean_resolve_path(Hierarchy.resolve_ancestry(target_resource_name))
+    except Exception as e:
+        logger.warning(f"Could not resolve target path: {e}")
+        return ""
+
+
+def _get_resource_name(obj: Union[OrganizationNode, Folder, Project]) -> str:
+    """Get the resource name string for any resource type."""
+    if isinstance(obj, OrganizationNode):
+        return obj.organization.name
+    return obj.name
+
+
+def _apply_ls_filters(
+    items: list,
+    resource_type: Optional[str],
+    label_filters: Optional[List[str]],
+    tag_filters: Optional[List[str]],
+) -> list:
+    """Apply type, label, and tag filters to items list."""
+    if resource_type:
+        items = [(p, obj) for p, obj in items if _matches_type(obj, resource_type)]
+    if label_filters:
+        items = [
+            (p, obj)
+            for p, obj in items
+            if _matches_metadata(obj, label_filters, "labels")
+        ]
+    if tag_filters:
+        items = [
+            (p, obj) for p, obj in items if _matches_metadata(obj, tag_filters, "tags")
+        ]
+    return items
+
+
+def _apply_depth_limit(
+    items: list,
+    level: Optional[int],
+    recursive: bool,
+    target_path_prefix: str,
+) -> list:
+    """Apply depth limit for recursive listing."""
+    if level is None or not recursive:
+        return items
+    base_segments = len(target_path_prefix.split("/")) - 3 if target_path_prefix else 0
+    return [
+        (p, obj) for p, obj in items if len(p.split("/")) - 3 - base_segments <= level
+    ]
+
+
+def _build_ls_items(
+    hierarchy: Hierarchy,
+    target_resource_name: Optional[str],
+    target_path_prefix: str,
+    recursive: bool,
+    resource_type: Optional[str],
+    label_filters: Optional[List[str]],
+    tag_filters: Optional[List[str]],
+    level: Optional[int],
+) -> list:
+    """Build, filter, and sort the items list for ls output."""
+    current_folders, current_projects = filter_direct_children(
+        hierarchy, target_resource_name
+    )
+    items = build_items_list(
+        hierarchy,
+        current_folders,
+        current_projects,
+        target_path_prefix,
+        target_resource_name,
+        recursive,
+    )
+    items = sort_resources(items)
+    items = _apply_ls_filters(items, resource_type, label_filters, tag_filters)
+    items = _apply_depth_limit(items, level, recursive, target_path_prefix)
+    return items
+
+
+def _display_ls_items(
+    items: list,
+    long: bool,
+    show_labels: bool,
+    show_tags: bool,
+) -> None:
+    """Display ls items in either long or short format."""
+    if not long:
+        for path, _ in items:
+            print(path)
+        return
+
+    table = Table(
+        show_header=True, header_style="bold magenta", box=None, padding=(0, 1)
+    )
+    table.add_column("Path", overflow="fold")
+    table.add_column("Resource Name", overflow="fold")
+    if show_labels:
+        table.add_column("Labels", overflow="fold")
+    if show_tags:
+        table.add_column("Tags", overflow="fold")
+
+    for path, obj in items:
+        row = [path, _get_resource_name(obj)]
+        if show_labels:
+            row.append(_format_metadata(obj, "labels"))
+        if show_tags:
+            row.append(_format_metadata(obj, "tags"))
+        table.add_row(*row)
+
+    console.print(table)
 
 
 @app.command()
@@ -653,7 +801,10 @@ def ls(
         False, "--recursive", "-R", help="List resources recursively"
     ),
     resource_type: Optional[str] = typer.Option(
-        None, "--type", "-t", help="Filter by resource type: folder, project, organization"
+        None,
+        "--type",
+        "-t",
+        help="Filter by resource type: folder, project, organization",
     ),
     level: Optional[int] = typer.Option(
         None, "--level", "-L", help="Max depth for recursive listing (requires -R)"
@@ -691,10 +842,6 @@ def ls(
         scope = _resolve_scope(resource, ep)
         target_resource_name = scope.target_resource_name
 
-        logger.debug(
-            f"ls: loading hierarchy for resource='{resource}', filter_orgs={scope.filter_orgs}, recursive={recursive}"
-        )
-
         hierarchy = _load_hierarchy(
             ctx,
             scope_resource=target_resource_name,
@@ -705,142 +852,77 @@ def ls(
             include_tags=include_tags,
         )
 
-        logger.debug(
-            f"ls: hierarchy loaded with {len(hierarchy.organizations)} orgs, {len(hierarchy.projects)} projects, {len(hierarchy.folders)} folders"
-        )
-
         dumper = _get_dumper(ctx.obj.get("output_format", "text"))
 
         if not hierarchy.organizations and not hierarchy.projects:
-            if dumper:
-                print(dumper([]))
-                return
-
-            # Check if it looks like a personal account
-            import google.auth
-
-            account_msg = ""
-            try:
-                credentials, _ = google.auth.default()
-                if hasattr(credentials, "account") and credentials.account:
-                    if credentials.account.endswith("@gmail.com"):
-                        account_msg = f" (Account: {credentials.account})"
-            except Exception:
-                pass
-
-            rprint(
-                f"[yellow]No organizations or projects found accessible to your account{account_msg}.[/yellow]"
-            )
-            if not account_msg:
-                rprint(
-                    "[dim]Hint: You might not have access to any organizations. Projects without organizations are shown with //_ prefix.[/dim]"
-                )
+            _handle_empty_hierarchy(dumper)
             return
 
-        # If a specific resource was targeted, we list its children
-        # Get the target path prefix for proper path display
-        target_path_prefix = ""
-        if target_resource_name:
-            logger.debug(
-                f"ls command: targeting specific resource {target_resource_name}"
-            )
-            if target_resource_name.startswith(_RESOURCE_PREFIX_PROJECTS):
-                # projects don't have children in this context
-                return
+        if target_resource_name and target_resource_name.startswith(
+            _RESOURCE_PREFIX_PROJECTS
+        ):
+            return
 
-            # Get the full path for the target resource to use as prefix
-            try:
-                target_path_prefix = _clean_resolve_path(
-                    Hierarchy.resolve_ancestry(target_resource_name)
-                )
-                logger.debug(f"ls: target path prefix: {target_path_prefix}")
-            except Exception as e:
-                logger.warning(f"Could not resolve target path: {e}")
+        target_path_prefix = _resolve_target_path_prefix(target_resource_name)
 
-        # Filter to get direct children
-        current_folders, current_projects = filter_direct_children(
-            hierarchy, target_resource_name
-        )
-
-        # Build items list for display
-        items = build_items_list(
+        items = _build_ls_items(
             hierarchy,
-            current_folders,
-            current_projects,
-            target_path_prefix,
             target_resource_name,
+            target_path_prefix,
             recursive,
+            resource_type,
+            label_filters,
+            tag_filters,
+            level,
         )
-
-        # Sort items by path
-        items = sort_resources(items)
-
-        # Apply type filter
-        if resource_type:
-            items = [(p, obj) for p, obj in items if _matches_type(obj, resource_type)]
-
-        # Apply label/tag filters
-        if label_filters:
-            items = [(p, obj) for p, obj in items if _matches_metadata(obj, label_filters, "labels")]
-        if tag_filters:
-            items = [(p, obj) for p, obj in items if _matches_metadata(obj, tag_filters, "tags")]
-
-        # Apply depth limit for recursive listing
-        if level is not None and recursive:
-            # Paths look like "//example.com/f1/f2". Splitting on "/" gives
-            # ["", "", "example.com", "f1", "f2"], so subtract 2 for the
-            # leading empty segments and 1 for the org root to get the
-            # folder/project depth (e.g. "//o/f1" → 3 parts after split → depth 0).
-            if target_path_prefix:
-                base_segments = len(target_path_prefix.split("/")) - 2 - 1
-            else:
-                base_segments = 0
-            items = [
-                (p, obj) for p, obj in items
-                if len(p.split("/")) - 2 - 1 - base_segments <= level
-            ]
-
-        logger.debug(f"ls: found {len(items)} items to display")
 
         if dumper:
             print(dumper(serialize_ls(items)))
             return
 
-        if long:
-            table = Table(
-                show_header=True, header_style="bold magenta", box=None, padding=(0, 1)
-            )
-            table.add_column("Path", overflow="fold")
-            table.add_column("Resource Name", overflow="fold")
-            if show_labels:
-                table.add_column("Labels", overflow="fold")
-            if show_tags:
-                table.add_column("Tags", overflow="fold")
-
-            for path, obj in items:
-                resource_name = ""
-
-                if isinstance(obj, OrganizationNode):
-                    resource_name = obj.organization.name
-                elif isinstance(obj, Folder):
-                    resource_name = obj.name
-                elif isinstance(obj, Project):
-                    resource_name = obj.name
-
-                row = [path, resource_name]
-                if show_labels:
-                    row.append(_format_metadata(obj, "labels"))
-                if show_tags:
-                    row.append(_format_metadata(obj, "tags"))
-                table.add_row(*row)
-
-            console.print(table)
-        else:
-            for path, _ in items:
-                print(path)
+        _display_ls_items(items, long, show_labels, show_tags)
 
     except Exception as e:
         handle_error(e)
+
+
+def _get_orgless_projects(hctx: _HierarchyCommandContext) -> Optional[List[Project]]:
+    """Get organizationless projects if not targeting a specific resource."""
+    if hctx.target_resource_name:
+        return None
+    orgless = [p for p in hctx.hierarchy.projects if not p.organization]
+    return orgless or None
+
+
+def _tree_root_label(
+    node: Union[OrganizationNode, Folder],
+    is_targeted: Optional[str],
+) -> tuple[str, str]:
+    """Build root tree label and node_id for a tree node."""
+    if isinstance(node, OrganizationNode):
+        safe_path = f"//{path_escape(node.organization.display_name)}"
+        color = "cyan" if is_targeted else "magenta"
+        return f"[bold {color}]{safe_path}[/bold {color}]", node.organization.name
+    return f"[bold cyan]{node.path}[/bold cyan]", node.name
+
+
+def _add_orgless_tree_nodes(
+    root_tree,
+    orgless_projects: Optional[List[Project]],
+    resource_type: Optional[str],
+    level: Optional[int],
+    show_ids: bool,
+    show_labels: bool,
+    show_tags: bool,
+) -> None:
+    """Add organizationless projects section to tree."""
+    if not orgless_projects or resource_type == "folder":
+        return
+    orgless_node = root_tree.add("[bold yellow](organizationless)[/bold yellow]")
+    if level is not None and level < 1:
+        return
+    for p in sorted(orgless_projects, key=lambda x: x.display_name):
+        orgless_node.add(format_tree_label(p, show_ids, show_labels, show_tags))
 
 
 @app.command()
@@ -892,25 +974,26 @@ def tree(
     try:
         _validate_type_filter(resource_type)
 
-        # Implicitly enable label/tag fetching when filters are specified
         include_labels = show_labels or bool(label_filters)
         include_tags = show_tags or bool(tag_filters)
 
         hctx = _prepare_hierarchy_command(
-            ctx, "tree", resource, level, yes, force_refresh,
-            include_labels=include_labels, include_tags=include_tags,
+            ctx,
+            "tree",
+            resource,
+            level,
+            yes,
+            force_refresh,
+            include_labels=include_labels,
+            include_tags=include_tags,
         )
         if hctx is None:
             return
 
+        orgless_projects = _get_orgless_projects(hctx)
+
         dumper = _get_dumper(ctx.obj.get("output_format", "text"))
         if dumper:
-            orgless_projects = None
-            if not hctx.target_resource_name:
-                orgless = [p for p in hctx.hierarchy.projects if not p.organization]
-                if orgless:
-                    orgless_projects = orgless
-
             data = serialize_tree(
                 hctx.nodes_to_process,
                 hctx.projects_by_parent,
@@ -927,19 +1010,8 @@ def tree(
             else "[bold cyan]GCP Hierarchy[/bold cyan]"
         )
 
-        # Add root nodes to tree
         for node in hctx.nodes_to_process:
-            if isinstance(node, OrganizationNode):
-                node_id = node.organization.name
-                if hctx.target_resource_name:
-                    safe_path = f"//{path_escape(node.organization.display_name)}"
-                    label = f"[bold cyan]{safe_path}[/bold cyan]"
-                else:
-                    label = f"[bold magenta]//{path_escape(node.organization.display_name)}[/bold magenta]"
-            else:
-                node_id = node.name
-                label = f"[bold cyan]{node.path}[/bold cyan]"
-
+            label, node_id = _tree_root_label(node, hctx.target_resource_name)
             if show_ids:
                 label += f" [dim]({node_id})[/dim]"
 
@@ -957,21 +1029,15 @@ def tree(
                 show_tags=show_tags,
             )
 
-        # Organizationless projects
-        if not hctx.target_resource_name and resource_type != "folder" and any(
-            not p.organization for p in hctx.hierarchy.projects
-        ):
-            orgless_node = root_tree.add(
-                "[bold yellow](organizationless)[/bold yellow]"
-            )
-            if level is None or level >= 1:
-                orgless_projs = [
-                    p for p in hctx.hierarchy.projects if not p.organization
-                ]
-                orgless_projs.sort(key=lambda x: x.display_name)
-                for p in orgless_projs:
-                    label = format_tree_label(p, show_ids, show_labels, show_tags)
-                    orgless_node.add(label)
+        _add_orgless_tree_nodes(
+            root_tree,
+            orgless_projects,
+            resource_type,
+            level,
+            show_ids,
+            show_labels,
+            show_tags,
+        )
 
         console.print(root_tree)
 
@@ -1117,7 +1183,9 @@ def stats(
         table.add_column("Resource", style="bold")
         table.add_column("Count", justify="right")
 
-        if not target_resource_name or target_resource_name.startswith(_RESOURCE_PREFIX_ORGS):
+        if not target_resource_name or target_resource_name.startswith(
+            _RESOURCE_PREFIX_ORGS
+        ):
             table.add_row("Organizations", str(len(hierarchy.organizations)))
         table.add_row("Folders", str(folder_count))
         table.add_row("Projects", str(project_count))
@@ -1260,13 +1328,18 @@ def _search_hierarchy(
 @app.command()
 def find(
     ctx: typer.Context,
-    pattern: Annotated[str, typer.Argument(help="Name pattern to search (glob syntax: *, ?)")],
+    pattern: Annotated[
+        str, typer.Argument(help="Name pattern to search (glob syntax: *, ?)")
+    ],
     resource: Annotated[
         Optional[str],
         typer.Argument(help="Resource to scope search within (e.g. folders/123)"),
     ] = None,
     resource_type: Optional[str] = typer.Option(
-        None, "--type", "-t", help="Filter by resource type: folder, project, organization"
+        None,
+        "--type",
+        "-t",
+        help="Filter by resource type: folder, project, organization",
     ),
     force_refresh: bool = typer.Option(
         False, "--force-refresh", "-F", help=_REFRESH_HELP
@@ -1304,9 +1377,17 @@ def find(
 
         # Apply label/tag filters
         if label_filters:
-            items = [(p, obj) for p, obj in items if _matches_metadata(obj, label_filters, "labels")]
+            items = [
+                (p, obj)
+                for p, obj in items
+                if _matches_metadata(obj, label_filters, "labels")
+            ]
         if tag_filters:
-            items = [(p, obj) for p, obj in items if _matches_metadata(obj, tag_filters, "tags")]
+            items = [
+                (p, obj)
+                for p, obj in items
+                if _matches_metadata(obj, tag_filters, "tags")
+            ]
 
         dumper = _get_dumper(ctx.obj.get("output_format", "text"))
         if dumper:
@@ -1349,7 +1430,9 @@ def ancestors(
             print(dumper(serialize_ancestors(chain)))
             return
 
-        table = Table(show_header=True, header_style="bold magenta", box=None, padding=(0, 1))
+        table = Table(
+            show_header=True, header_style="bold magenta", box=None, padding=(0, 1)
+        )
         table.add_column("Resource Name", overflow="fold")
         table.add_column("Display Name", overflow="fold")
         table.add_column("Type", overflow="fold")

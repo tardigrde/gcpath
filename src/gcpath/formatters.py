@@ -30,7 +30,8 @@ def _org_level_children(
         if f.parent == org.organization.name
     ]
     projects = [
-        p for p in hierarchy.projects
+        p
+        for p in hierarchy.projects
         if (p.organization and p.parent in org_names) or not p.organization
     ]
     return folders, projects
@@ -94,8 +95,11 @@ def _collect_recursive_items(
     target_resource_name: Optional[str],
 ) -> List[Tuple[str, Union[OrganizationNode, Folder, Project]]]:
     """Collect all items for recursive listing."""
+
     def _path(item, is_direct=False):
-        return get_display_path(item, target_path_prefix, target_resource_name, is_direct, True)
+        return get_display_path(
+            item, target_path_prefix, target_resource_name, is_direct, True
+        )
 
     items: List[Tuple[str, Union[OrganizationNode, Folder, Project]]] = []
     if target_resource_name:
@@ -117,8 +121,11 @@ def _collect_nonrecursive_items(
     target_resource_name: Optional[str],
 ) -> List[Tuple[str, Union[OrganizationNode, Folder, Project]]]:
     """Collect items for non-recursive (direct children) listing."""
+
     def _path(item, is_direct=False):
-        return get_display_path(item, target_path_prefix, target_resource_name, is_direct, False)
+        return get_display_path(
+            item, target_path_prefix, target_resource_name, is_direct, False
+        )
 
     items: List[Tuple[str, Union[OrganizationNode, Folder, Project]]] = []
     if not target_resource_name:
@@ -150,9 +157,15 @@ def build_items_list(
         List of (path, resource) tuples
     """
     if recursive:
-        return _collect_recursive_items(hierarchy, target_path_prefix, target_resource_name)
+        return _collect_recursive_items(
+            hierarchy, target_path_prefix, target_resource_name
+        )
     return _collect_nonrecursive_items(
-        hierarchy, current_folders, current_projects, target_path_prefix, target_resource_name,
+        hierarchy,
+        current_folders,
+        current_projects,
+        target_path_prefix,
+        target_resource_name,
     )
 
 
@@ -269,15 +282,23 @@ def build_tree_view(
 
     parent_name = _get_node_parent_name(current_node)
     recurse_args = (
-        hierarchy, projects_by_parent, level, current_depth + 1,
-        show_ids, type_filter, show_labels, show_tags,
+        hierarchy,
+        projects_by_parent,
+        level,
+        current_depth + 1,
+        show_ids,
+        type_filter,
+        show_labels,
+        show_tags,
     )
 
     for f in _get_child_folders(current_node, parent_name):
         if type_filter == "project":
             build_tree_view(tree_node, f, *recurse_args)
         else:
-            sub_node = tree_node.add(format_tree_label(f, show_ids, show_labels, show_tags))
+            sub_node = tree_node.add(
+                format_tree_label(f, show_ids, show_labels, show_tags)
+            )
             build_tree_view(sub_node, f, *recurse_args)
 
     if type_filter != "folder":
@@ -382,7 +403,7 @@ def _format_mermaid(labels: Dict[str, str], edges: List[Tuple[str, str]]) -> str
     """Format collected nodes and edges as a Mermaid flowchart."""
     lines = ["graph TD"]
     for node_id, label in labels.items():
-        safe_label = label.replace('"', '#quot;')
+        safe_label = label.replace('"', "#quot;")
         lines.append(f'    {node_id}["{safe_label}"]')
     for parent_id, child_id in edges:
         lines.append(f"    {parent_id} --> {child_id}")

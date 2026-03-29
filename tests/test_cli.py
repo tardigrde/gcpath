@@ -77,7 +77,9 @@ def test_ls_long_format_shows_org_resource_names(mock_load, mock_hierarchy):
 
 @patch("gcpath.core.Hierarchy.load")
 @patch("gcpath.cli.Hierarchy.resolve_ancestry")
-def test_ls_long_format_shows_folder_resource_names(mock_resolve, mock_load, mock_hierarchy):
+def test_ls_long_format_shows_folder_resource_names(
+    mock_resolve, mock_load, mock_hierarchy
+):
     """Verify folder resource names appear in long format"""
     mock_load.return_value = mock_hierarchy
     mock_resolve.return_value = "//example.com"
@@ -88,7 +90,9 @@ def test_ls_long_format_shows_folder_resource_names(mock_resolve, mock_load, moc
 
 @patch("gcpath.core.Hierarchy.load")
 @patch("gcpath.cli.Hierarchy.resolve_ancestry")
-def test_ls_long_format_shows_project_resource_names(mock_resolve, mock_load, mock_hierarchy):
+def test_ls_long_format_shows_project_resource_names(
+    mock_resolve, mock_load, mock_hierarchy
+):
     """Verify project resource names appear in long format"""
     mock_load.return_value = mock_hierarchy
     mock_resolve.return_value = "//example.com/f1"
@@ -136,8 +140,14 @@ def test_tree_prompts_on_unlimited_load(
 ):
     """Test that tree prompts when loading full org tree without limit"""
     mock_cache_info.return_value = CacheInfo(
-        exists=False, fresh=False, age_seconds=None, size_bytes=None,
-        version=None, org_count=0, folder_count=0, project_count=0
+        exists=False,
+        fresh=False,
+        age_seconds=None,
+        size_bytes=None,
+        version=None,
+        org_count=0,
+        folder_count=0,
+        project_count=0,
     )
     mock_confirm.return_value = True
     mock_load.return_value = mock_hierarchy
@@ -154,8 +164,14 @@ def test_tree_prompts_on_large_level(
 ):
     """Test that tree prompts when level >= 4"""
     mock_cache_info.return_value = CacheInfo(
-        exists=False, fresh=False, age_seconds=None, size_bytes=None,
-        version=None, org_count=0, folder_count=0, project_count=0
+        exists=False,
+        fresh=False,
+        age_seconds=None,
+        size_bytes=None,
+        version=None,
+        org_count=0,
+        folder_count=0,
+        project_count=0,
     )
     mock_confirm.return_value = True
     mock_load.return_value = mock_hierarchy
@@ -814,8 +830,14 @@ def test_try_read_cache_applies_org_filter(mock_rprint, mock_get_info, mock_read
 
     mock_read_cache.return_value = mock_hierarchy
     mock_get_info.return_value = CacheInfo(
-        exists=True, fresh=True, age_seconds=60.0,
-        size_bytes=100, version=1, org_count=2, folder_count=0, project_count=0
+        exists=True,
+        fresh=True,
+        age_seconds=60.0,
+        size_bytes=100,
+        version=1,
+        org_count=2,
+        folder_count=0,
+        project_count=0,
     )
 
     # Filter to only org1
@@ -1057,6 +1079,7 @@ def test_tree_type_folder_json(mock_confirm, mock_load, mock_hierarchy):
     result = runner.invoke(app, ["--json", "tree", "--type", "folder"])
     assert result.exit_code == 0
     data = json.loads(result.stdout)
+
     # Check that no project children appear
     def check_no_projects(nodes):
         for node in nodes:
@@ -1064,6 +1087,7 @@ def test_tree_type_folder_json(mock_confirm, mock_load, mock_hierarchy):
                 for child in node["children"]:
                     assert child.get("type") != "project"
                     check_no_projects([child] if "children" in child else [])
+
     check_no_projects(data)
 
 

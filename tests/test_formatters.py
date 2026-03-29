@@ -351,7 +351,9 @@ def test_get_node_label_project_with_ids(mock_project):
 
 
 # Test Mermaid diagram generation
-def test_build_diagram_mermaid(mock_org_node, mock_folder, mock_project, mock_hierarchy):
+def test_build_diagram_mermaid(
+    mock_org_node, mock_folder, mock_project, mock_hierarchy
+):
     """Test Mermaid diagram generation."""
     mock_org_node.folders = {"folders/456": mock_folder}
     projects_by_parent = {"folders/456": [mock_project]}
@@ -395,7 +397,9 @@ def test_build_diagram_d2(mock_org_node, mock_folder, mock_project, mock_hierarc
     assert "TestProject" in result
 
 
-def test_build_diagram_with_ids(mock_org_node, mock_folder, mock_project, mock_hierarchy):
+def test_build_diagram_with_ids(
+    mock_org_node, mock_folder, mock_project, mock_hierarchy
+):
     """Test diagram generation with resource IDs in labels."""
     mock_org_node.folders = {"folders/456": mock_folder}
     projects_by_parent = {"folders/456": [mock_project]}
@@ -472,7 +476,9 @@ def test_build_diagram_unsupported_format(mock_org_node, mock_hierarchy):
         )
 
 
-def test_build_diagram_folder_root(mock_org_node, mock_folder, mock_project, mock_hierarchy):
+def test_build_diagram_folder_root(
+    mock_org_node, mock_folder, mock_project, mock_hierarchy
+):
     """Test diagram generation with a folder as root node."""
     mock_org_node.folders = {"folders/456": mock_folder}
     projects_by_parent = {"folders/456": [mock_project]}

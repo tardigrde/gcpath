@@ -77,7 +77,9 @@ def _node_to_dict(node: Union[OrganizationNode, Folder]) -> Tuple[str, Dict[str,
     }
 
 
-def _get_child_folders(node: Union[OrganizationNode, Folder], parent_name: str) -> List[Folder]:
+def _get_child_folders(
+    node: Union[OrganizationNode, Folder], parent_name: str
+) -> List[Folder]:
     """Get sorted direct child folders of a node."""
     org_ref = node if isinstance(node, OrganizationNode) else node.organization
     if not org_ref:
@@ -109,14 +111,18 @@ def serialize_tree_node(
     children: List[Dict[str, Any]] = []
 
     for f in _get_child_folders(node, parent_name):
-        sub = serialize_tree_node(f, projects_by_parent, level, current_depth + 1, type_filter)
+        sub = serialize_tree_node(
+            f, projects_by_parent, level, current_depth + 1, type_filter
+        )
         if type_filter == "project":
             children.extend(sub.get("children", []))
         else:
             children.append(sub)
 
     if type_filter != "folder":
-        for p in sorted(projects_by_parent.get(parent_name, []), key=lambda x: x.display_name):
+        for p in sorted(
+            projects_by_parent.get(parent_name, []), key=lambda x: x.display_name
+        ):
             children.append(serialize_resource(p.path, p))
 
     d["children"] = children
@@ -134,7 +140,9 @@ def serialize_tree(
     result = []
     for node in nodes_to_process:
         result.append(
-            serialize_tree_node(node, projects_by_parent, level, type_filter=type_filter)
+            serialize_tree_node(
+                node, projects_by_parent, level, type_filter=type_filter
+            )
         )
 
     if orgless_projects and type_filter != "folder":
@@ -161,8 +169,7 @@ def serialize_ancestors(
         chain: List of (resource_name, display_name, type) tuples from root to leaf.
     """
     return [
-        {"resource_name": name, "display_name": dn, "type": t}
-        for name, dn, t in chain
+        {"resource_name": name, "display_name": dn, "type": t} for name, dn, t in chain
     ]
 
 
@@ -193,4 +200,6 @@ def dump_json(data: Any) -> str:
 
 def dump_yaml(data: Any) -> str:
     """Serialize data to YAML string."""
-    return yaml.dump(data, default_flow_style=False, allow_unicode=True, sort_keys=False)
+    return yaml.dump(
+        data, default_flow_style=False, allow_unicode=True, sort_keys=False
+    )

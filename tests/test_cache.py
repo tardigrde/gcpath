@@ -409,7 +409,9 @@ def test_read_cache_scope_mismatch(mock_json_load, mock_open, mock_cache_file):
 @patch("gcpath.cache.CACHE_FILE")
 @patch("builtins.open")
 @patch("json.load")
-def test_read_cache_old_cache_no_scope_field(mock_json_load, mock_open, mock_cache_file):
+def test_read_cache_old_cache_no_scope_field(
+    mock_json_load, mock_open, mock_cache_file
+):
     """Old cache without scope field works for unscoped loads (scope=None)."""
     mock_cache_file.exists.return_value = True
     mock_json_load.return_value = {
@@ -427,7 +429,9 @@ def test_read_cache_old_cache_no_scope_field(mock_json_load, mock_open, mock_cac
 @patch("gcpath.cache.CACHE_FILE")
 @patch("builtins.open")
 @patch("json.load")
-def test_read_cache_old_cache_rejected_for_scoped(mock_json_load, mock_open, mock_cache_file):
+def test_read_cache_old_cache_rejected_for_scoped(
+    mock_json_load, mock_open, mock_cache_file
+):
     """Old cache without scope field is rejected for scoped loads."""
     mock_cache_file.exists.return_value = True
     mock_json_load.return_value = {
