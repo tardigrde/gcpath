@@ -9,6 +9,7 @@ It helps you translate between GCP resource names (e.g., `folders/12345`) and hu
 - you can stay in the terminal for quick resource hierarchy lookups
 - no need to learn the complex `gcloud` interface
 - look-up only commands, so coding agents can't do harm using it
+- installable as an [Agent Skill](#agent-skill) so AI agents know how to use it
 
 ## Features
 
@@ -477,6 +478,27 @@ except GCPathError as e:
 | `ResourceNotFoundError` | Raised when a resource cannot be found in the hierarchy. |
 | `PathParsingError` | Raised when a path string cannot be parsed. |
 | `path_escape()` | URL-encodes a display name for safe use in paths. |
+
+## Agent Skill
+
+gcpath ships with an [Agent Skills](https://agentskills.io) definition so AI agents (Claude, Codex, etc.) can discover and use it without extra setup.
+
+Install the skill into your agent environment:
+
+```bash
+bunx skills add github:tardigrde/gcpath --skill gcpath
+# or
+npx skills add github:tardigrde/gcpath --skill gcpath
+```
+
+The skill teaches the agent:
+
+- when to reach for `gcpath` vs other GCP tools
+- all commands, flags, and output formats
+- common workflows (ancestry lookup, scoped listing, path ↔ name conversion)
+- gotchas (organizationless projects, caching behaviour, API modes)
+
+See [`skills/gcpath/SKILL.md`](skills/gcpath/SKILL.md) for the full skill definition and [`skills/gcpath/references/commands.md`](skills/gcpath/references/commands.md) for the compact command reference.
 
 ## Acknowledgments
 
