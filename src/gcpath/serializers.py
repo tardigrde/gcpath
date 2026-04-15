@@ -53,7 +53,7 @@ def _default_fields_for_items(
 
 def _truncate_metadata(
     metadata: Dict[str, str], limit: int = 5, full: bool = False
-) -> Any:
+) -> Dict[str, str]:
     if full or len(metadata) <= limit:
         return metadata
     shown = dict(sorted(metadata.items())[:limit])
@@ -65,6 +65,7 @@ def _truncate_metadata(
 def serialize_resource(
     path: str, item: Union[OrganizationNode, Folder, Project]
 ) -> Dict[str, Any]:
+    """Serialize a single resource to a dict."""
     d: Dict[str, Any] = {
         "path": path,
         "type": resource_type(item),

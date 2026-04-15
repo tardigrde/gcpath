@@ -141,6 +141,10 @@ def _resolve_scope(
     resource: Optional[str],
     entrypoint: Optional[str],
 ) -> _ScopeResult:
+    """Resolve resource/entrypoint into scope parameters for hierarchy loading.
+
+    Returns target_resource_name, target_org_name, and filter_orgs.
+    """
     effective_resource = resource or entrypoint
     target_resource_name = None
     target_org_name = None
@@ -1351,7 +1355,7 @@ def get_path_command(
                 p = Hierarchy.resolve_ancestry(name)
                 logger.debug(f"path: resolved {name} to {p}")
                 results.append((name, p))
-            except Exception as e:
+            except (gcp_exceptions.NotFound, gcp_exceptions.PermissionDenied, GCPathError) as e:
                 if len(resource_names) > 1:
                     print(toon_error(f"Error resolving {name}: {e}"))
                 else:
