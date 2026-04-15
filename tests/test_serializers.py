@@ -284,7 +284,7 @@ class TestSerializeResourceWithLabelsAndTags:
 
 class TestToonLs:
     def test_basic_output(self):
-        _, org_node, f1, p1, _ = _h()
+        _, _, f1, p1, _ = _h()
         items = [("//example.com/f1", f1), ("//example.com/f1/Project 1", p1)]
         output = toon_ls(items, total_in_scope=2)
         assert "count:" in output
@@ -296,7 +296,7 @@ class TestToonLs:
         assert "0" in output
 
     def test_with_help(self):
-        _, org_node, f1, p1, _ = _h()
+        _, _, f1, _, _ = _h()
         items = [("//example.com/f1", f1)]
         output = toon_ls(items, total_in_scope=1, help_lines=["Run `gcpath ls -R`"])
         assert "help" in output

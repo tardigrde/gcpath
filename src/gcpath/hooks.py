@@ -56,7 +56,7 @@ def _install_claude_code(command: str) -> bool:
         hooks["SessionStart"] = []
 
     for entry in hooks["SessionStart"]:
-        if isinstance(entry, dict) and entry.get("command", "").endswith("gcpath hook run"):
+        if isinstance(entry, dict) and entry.get("command", "").endswith(_GCPATH_HOOK_COMMAND):
             if entry.get("command") == command:
                 return False
             entry["command"] = command
@@ -84,7 +84,7 @@ def _uninstall_claude_code() -> bool:
     original_len = len(hooks["SessionStart"])
     hooks["SessionStart"] = [
         entry for entry in hooks["SessionStart"]
-        if not (isinstance(entry, dict) and "gcpath hook run" in entry.get("command", ""))
+        if not (isinstance(entry, dict) and _GCPATH_HOOK_COMMAND in entry.get("command", ""))
     ]
 
     if len(hooks["SessionStart"]) == original_len:
@@ -107,7 +107,7 @@ def _install_codex(command: str) -> bool:
         data["SessionStart"] = []
 
     for entry in data["SessionStart"]:
-        if isinstance(entry, dict) and entry.get("command", "").endswith("gcpath hook run"):
+        if isinstance(entry, dict) and entry.get("command", "").endswith(_GCPATH_HOOK_COMMAND):
             if entry.get("command") == command:
                 return False
             entry["command"] = command
@@ -128,7 +128,7 @@ def _uninstall_codex() -> bool:
     original_len = len(data["SessionStart"])
     data["SessionStart"] = [
         entry for entry in data["SessionStart"]
-        if not (isinstance(entry, dict) and "gcpath hook run" in entry.get("command", ""))
+        if not (isinstance(entry, dict) and _GCPATH_HOOK_COMMAND in entry.get("command", ""))
     ]
 
     if len(data["SessionStart"]) == original_len:
@@ -179,42 +179,38 @@ def repair_hooks() -> Dict[str, bool]:
     return results
 
 
+def _check_hook_entries(entries: list, command: str) -> tuple:
+    """Check if gcpath hook is installed in a list of hook entries."""
+    for entry in entries:
+        if isinstance(entry, dict) and _GCPATH_HOOK_COMMAND in entry.get("command", ""):
+            return True, entry.get("command") == command
+    return False, False
+
+
 def get_hook_status() -> Dict[str, Any]:
     """Report hook installation status for all targets."""
     command = _get_hook_command()
-    status: Dict[str, Any] = {}
 
     claude_data = _read_json(_CLAUDE_SETTINGS_PATH)
-    claude_installed = False
-    claude_path_ok = False
-    if claude_data and "hooks" in claude_data:
-        for entry in claude_data.get("hooks", {}).get("SessionStart", []):
-            if isinstance(entry, dict) and "gcpath hook run" in entry.get("command", ""):
-                claude_installed = True
-                claude_path_ok = entry.get("command") == command
-                break
-    status["claude_code"] = {
-        "installed": claude_installed,
-        "path_ok": claude_path_ok,
-        "location": str(_CLAUDE_SETTINGS_PATH),
-    }
+    claude_entries = (claude_data or {}).get("hooks", {}).get("SessionStart", [])
+    claude_installed, claude_path_ok = _check_hook_entries(claude_entries, command)
 
     codex_data = _read_json(_CODEX_HOOKS_PATH)
-    codex_installed = False
-    codex_path_ok = False
-    if codex_data and "SessionStart" in codex_data:
-        for entry in codex_data.get("SessionStart", []):
-            if isinstance(entry, dict) and "gcpath hook run" in entry.get("command", ""):
-                codex_installed = True
-                codex_path_ok = entry.get("command") == command
-                break
-    status["codex"] = {
-        "installed": codex_installed,
-        "path_ok": codex_path_ok,
-        "location": str(_CODEX_HOOKS_PATH),
-    }
+    codex_entries = (codex_data or {}).get("SessionStart", [])
+    codex_installed, codex_path_ok = _check_hook_entries(codex_entries, command)
 
-    return status
+    return {
+        "claude_code": {
+            "installed": claude_installed,
+            "path_ok": claude_path_ok,
+            "location": str(_CLAUDE_SETTINGS_PATH),
+        },
+        "codex": {
+            "installed": codex_installed,
+            "path_ok": codex_path_ok,
+            "location": str(_CODEX_HOOKS_PATH),
+        },
+    }
 
 
 def run_session_start() -> str:

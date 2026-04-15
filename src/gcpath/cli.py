@@ -261,7 +261,7 @@ def main(
         _show_home(ctx)
 
 
-def _show_home(ctx: typer.Context) -> None:
+def _show_home(_ctx: typer.Context) -> None:
     """Content-first home view (AXI Principle 8)."""
     gcpath_bin = _display_bin_path(shutil.which("gcpath") or "gcpath")
     info = get_cache_info()
@@ -332,6 +332,35 @@ def cache_clear(ctx: typer.Context) -> None:
             print(toon_confirmed(msg))
 
 
+def _cache_status_rich(info: Any) -> None:
+    """Render cache status as a Rich table."""
+    from rich.table import Table
+    from rich.console import Console
+    console = Console()
+    if not info.exists:
+        rprint(f"[yellow]No cache file found at {CACHE_FILE}[/yellow]")
+        return
+    table = Table(show_header=False, box=None, padding=(0, 1))
+    table.add_column("Key", style="bold")
+    table.add_column("Value")
+    table.add_row("Status", "[green]Fresh[/green]" if info.fresh else "[yellow]Stale[/yellow]")
+    if info.age_seconds is not None:
+        table.add_row("Age", format_age(info.age_seconds))
+    if info.size_bytes is not None:
+        size_kb = info.size_bytes / 1024
+        size_str = f"{size_kb / 1024:.1f} MB" if size_kb >= 1024 else f"{size_kb:.1f} KB"
+        table.add_row("Size", size_str)
+    if info.version is not None:
+        table.add_row("Version", str(info.version))
+    if info.scope is not None:
+        table.add_row("Scope", info.scope)
+    table.add_row("Organizations", str(info.org_count))
+    table.add_row("Folders", str(info.folder_count))
+    table.add_row("Projects", str(info.project_count))
+    table.add_row("Location", str(CACHE_FILE))
+    console.print(table)
+
+
 @cache_app.command("status")
 def cache_status(ctx: typer.Context) -> None:
     """Show cache status information."""
@@ -339,36 +368,7 @@ def cache_status(ctx: typer.Context) -> None:
     info = get_cache_info()
 
     if fmt == "rich":
-        from rich.table import Table
-        from rich.console import Console
-        console = Console()
-        if not info.exists:
-            rprint(f"[yellow]No cache file found at {CACHE_FILE}[/yellow]")
-            return
-        table = Table(show_header=False, box=None, padding=(0, 1))
-        table.add_column("Key", style="bold")
-        table.add_column("Value")
-        if info.fresh:
-            table.add_row("Status", "[green]Fresh[/green]")
-        else:
-            table.add_row("Status", "[yellow]Stale[/yellow]")
-        if info.age_seconds is not None:
-            table.add_row("Age", format_age(info.age_seconds))
-        if info.size_bytes is not None:
-            size_kb = info.size_bytes / 1024
-            if size_kb >= 1024:
-                table.add_row("Size", f"{size_kb / 1024:.1f} MB")
-            else:
-                table.add_row("Size", f"{size_kb:.1f} KB")
-        if info.version is not None:
-            table.add_row("Version", str(info.version))
-        if info.scope is not None:
-            table.add_row("Scope", info.scope)
-        table.add_row("Organizations", str(info.org_count))
-        table.add_row("Folders", str(info.folder_count))
-        table.add_row("Projects", str(info.project_count))
-        table.add_row("Location", str(CACHE_FILE))
-        console.print(table)
+        _cache_status_rich(info)
         return
 
     print(toon_cache_status(
@@ -609,7 +609,6 @@ def _prepare_hierarchy_command(
     ctx: typer.Context,
     command_name: str,
     resource: Optional[str],
-    level: Optional[int],
     force_refresh: bool,
     include_labels: bool = False,
     include_tags: bool = False,
@@ -774,7 +773,7 @@ def _build_ls_items(
     return items, total_in_scope
 
 
-def _ls_help_lines(recursive: bool, target_resource_name: Optional[str]) -> List[str]:
+def _ls_help_lines(recursive: bool) -> List[str]:
     lines = []
     if not recursive:
         lines.append("Run `gcpath ls <resource> -R` for nested listing")
@@ -943,7 +942,7 @@ def ls(
                 print(dumper(serialize_ls(items)))
             return
 
-        help_lines = _ls_help_lines(recursive, target_resource_name)
+        help_lines = _ls_help_lines(recursive)
         print(toon_ls(items, total, fields=parsed_fields, full=full, help_lines=help_lines))
 
     except Exception as e:
@@ -1042,7 +1041,6 @@ def tree(
             ctx,
             "tree",
             resource,
-            level,
             force_refresh,
             include_labels=include_labels,
             include_tags=include_tags,
@@ -1149,7 +1147,7 @@ def diagram(
             raise typer.Exit(code=1)
 
         hctx = _prepare_hierarchy_command(
-            ctx, "diagram", resource, level, force_refresh
+            ctx, "diagram", resource, force_refresh
         )
         if hctx is None:
             return
@@ -1185,6 +1183,41 @@ def diagram(
         handle_error(e)
 
 
+def _validate_stats_resource(effective_resource: Optional[str]) -> Optional[str]:
+    """Validate and return the target resource name for stats command."""
+    if not effective_resource:
+        return None
+    if effective_resource.startswith("projects/"):
+        print(toon_error("'stats' command does not support starting from a project."))
+        raise typer.Exit(code=1)
+    if any(effective_resource.startswith(p) for p in [_RESOURCE_PREFIX_ORGS, _RESOURCE_PREFIX_FOLDERS]):
+        return effective_resource
+    print(toon_error(
+        f"Invalid resource format '{effective_resource}'. Expected 'organizations/...' or 'folders/...'."
+    ))
+    raise typer.Exit(code=1)
+
+
+def _stats_rich(
+    scope_label: str, org_count: int, folder_count: int, project_count: int,
+    target_resource_name: Optional[str],
+) -> None:
+    """Render stats as a Rich table."""
+    from rich.table import Table
+    from rich.console import Console
+    from rich.markup import escape
+    console = Console()
+    rprint(f"[bold]Scope:[/bold] {escape(scope_label)}")
+    table = Table(show_header=False, box=None, padding=(0, 1))
+    table.add_column("Resource", style="bold")
+    table.add_column("Count", justify="right")
+    if not target_resource_name or target_resource_name.startswith(_RESOURCE_PREFIX_ORGS):
+        table.add_row("Organizations", str(org_count))
+    table.add_row("Folders", str(folder_count))
+    table.add_row("Projects", str(project_count))
+    console.print(table)
+
+
 @app.command()
 def stats(
     ctx: typer.Context,
@@ -1204,23 +1237,7 @@ def stats(
     """Show statistics about folders and projects in a scope."""
     try:
         ep = ctx.obj.get("entrypoint")
-        effective_resource = resource or ep
-
-        target_resource_name = None
-        if effective_resource:
-            if effective_resource.startswith("projects/"):
-                print(toon_error("'stats' command does not support starting from a project."))
-                raise typer.Exit(code=1)
-            elif any(
-                effective_resource.startswith(p)
-                for p in [_RESOURCE_PREFIX_ORGS, _RESOURCE_PREFIX_FOLDERS]
-            ):
-                target_resource_name = effective_resource
-            else:
-                print(toon_error(
-                    f"Invalid resource format '{effective_resource}'. Expected 'organizations/...' or 'folders/...'."
-                ))
-                raise typer.Exit(code=1)
+        target_resource_name = _validate_stats_resource(resource or ep)
 
         hierarchy = _load_hierarchy(
             ctx,
@@ -1231,49 +1248,28 @@ def stats(
 
         folder_count = len(hierarchy.folders)
         project_count = len(hierarchy.projects)
+        org_count = len(hierarchy.organizations)
         scope_label = target_resource_name or "all organizations"
 
         fmt = ctx.obj.get("output_format", "toon")
 
         if fmt == "rich":
-            from rich.table import Table
-            from rich.console import Console
-            from rich.markup import escape
-            console = Console()
-            rprint(f"[bold]Scope:[/bold] {escape(scope_label)}")
-            table = Table(show_header=False, box=None, padding=(0, 1))
-            table.add_column("Resource", style="bold")
-            table.add_column("Count", justify="right")
-            if not target_resource_name or target_resource_name.startswith(
-                _RESOURCE_PREFIX_ORGS
-            ):
-                table.add_row("Organizations", str(len(hierarchy.organizations)))
-            table.add_row("Folders", str(folder_count))
-            table.add_row("Projects", str(project_count))
-            console.print(table)
+            _stats_rich(scope_label, org_count, folder_count, project_count, target_resource_name)
             return
 
         if fmt in ("json", "yaml"):
             dumper = _get_dumper(fmt)
-            data = {
-                "scope": scope_label,
-                "organizations": len(hierarchy.organizations),
-                "folders": folder_count,
-                "projects": project_count,
-            }
             if dumper:
-                print(dumper(data))
+                print(dumper({"scope": scope_label, "organizations": org_count, "folders": folder_count, "projects": project_count}))
             return
 
-        help_lines = []
-        if target_resource_name:
-            help_lines.append("Run `gcpath stats` for all-organization statistics")
+        help_lines = ["Run `gcpath stats` for all-organization statistics"] if target_resource_name else []
         print(toon_stats(
             scope=scope_label,
-            organizations=len(hierarchy.organizations),
+            organizations=org_count,
             folders=folder_count,
             projects=project_count,
-            help_lines=help_lines if help_lines else None,
+            help_lines=help_lines or None,
         ))
 
     except Exception as e:
