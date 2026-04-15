@@ -14,6 +14,17 @@ from gcpath.serializers import (
     serialize_resource,
     serialize_tree,
     serialize_tree_node,
+    toon_ls,
+    toon_name,
+    toon_path,
+    toon_ancestors,
+    toon_find,
+    toon_stats,
+    toon_cache_status,
+    toon_config,
+    toon_confirmed,
+    _truncate_metadata,
+    _default_fields_for_items,
 )
 
 
@@ -269,3 +280,185 @@ class TestSerializeResourceWithLabelsAndTags:
         d = serialize_resource("//example.com", org_node)
         assert "labels" not in d
         assert "tags" not in d
+
+
+class TestToonLs:
+    def test_basic_output(self):
+        _, org_node, f1, p1, _ = _h()
+        items = [("//example.com/f1", f1), ("//example.com/f1/Project 1", p1)]
+        output = toon_ls(items, total_in_scope=2)
+        assert "count:" in output
+        assert "resources" in output
+        assert "f1" in output
+
+    def test_empty_items(self):
+        output = toon_ls([], total_in_scope=0)
+        assert "0" in output
+
+    def test_with_help(self):
+        _, org_node, f1, p1, _ = _h()
+        items = [("//example.com/f1", f1)]
+        output = toon_ls(items, total_in_scope=1, help_lines=["Run `gcpath ls -R`"])
+        assert "help" in output
+
+    def test_fields_override(self):
+        _, _, f1, _, _ = _h()
+        items = [("//example.com/f1", f1)]
+        output = toon_ls(items, total_in_scope=1, fields=("path", "type"))
+        assert "path" in output
+        assert "type" in output
+
+    def test_full_flag(self):
+        _, _, f1, _, _ = _h()
+        f1.labels = {f"k{i}": f"v{i}" for i in range(8)}
+        items = [("//example.com/f1", f1)]
+        output_truncated = toon_ls(
+            items, total_in_scope=1, fields=("path", "type", "labels"), full=False
+        )
+        output_full = toon_ls(
+            items, total_in_scope=1, fields=("path", "type", "labels"), full=True
+        )
+        assert "k7" in output_full
+        assert "--full" in output_truncated
+
+
+class TestToonName:
+    def test_single(self):
+        output = toon_name([("//example.com/f1", "folders/1")])
+        assert "resource_name:" in output
+        assert "folders/1" in output
+
+    def test_single_id_only(self):
+        output = toon_name([("//example.com/f1", "folders/1")], id_only=True)
+        assert "resource_id:" in output
+        assert "1" in output
+
+    def test_multiple(self):
+        output = toon_name([
+            ("//example.com", "organizations/123"),
+            ("//example.com/f1", "folders/1"),
+        ])
+        assert "organizations/123" in output
+        assert "folders/1" in output
+
+
+class TestToonPath:
+    def test_single(self):
+        output = toon_path([("folders/1", "//example.com/f1")])
+        assert "path:" in output
+        assert "//example.com/f1" in output
+
+    def test_multiple(self):
+        output = toon_path([
+            ("folders/1", "//example.com/f1"),
+            ("folders/2", "//example.com/f2"),
+        ])
+        assert "//example.com/f1" in output
+        assert "//example.com/f2" in output
+
+
+class TestToonAncestors:
+    def test_basic(self):
+        chain = [
+            ("organizations/123", "example.com", "organization"),
+            ("folders/456", "eng", "folder"),
+        ]
+        output = toon_ancestors(chain)
+        assert "organizations/123" in output
+        assert "example.com" in output
+        assert "folder" in output
+
+
+class TestToonFind:
+    def test_with_results(self):
+        _, _, f1, _, _ = _h()
+        items = [("//example.com/f1", f1)]
+        output = toon_find(items, "f*", total_searched=5)
+        assert "count:" in output
+        assert "1 of 5 searched" in output
+        assert "f1" in output
+
+    def test_empty(self):
+        output = toon_find([], "xyz*")
+        assert "0" in output
+
+
+class TestToonStats:
+    def test_basic(self):
+        output = toon_stats("all organizations", organizations=2, folders=10, projects=25)
+        assert "scope:" in output
+        assert "2" in output
+        assert "10" in output
+        assert "25" in output
+
+    def test_scoped(self):
+        output = toon_stats("folders/123", folders=5, projects=8, help_lines=["Run `gcpath stats`"])
+        assert "folders/123" in output
+        assert "help" in output
+
+
+class TestToonCacheStatus:
+    def test_fresh(self):
+        output = toon_cache_status(
+            exists=True, fresh=True, age_seconds=300.0, org_count=1, folder_count=5, project_count=10, location="/tmp/cache"
+        )
+        assert "fresh" in output
+        assert "5m" in output
+
+    def test_empty(self):
+        output = toon_cache_status(exists=False, fresh=False, location="/tmp/cache")
+        assert "empty" in output
+
+    def test_stale(self):
+        output = toon_cache_status(
+            exists=True, fresh=False, age_seconds=7200.0, org_count=0, folder_count=0, project_count=0, location="/tmp/cache"
+        )
+        assert "stale" in output
+
+
+class TestToonConfig:
+    def test_with_data(self):
+        output = toon_config({"entrypoint": "folders/123"}, "/tmp/config")
+        assert "folders/123" in output
+
+    def test_empty(self):
+        output = toon_config({}, "/tmp/config")
+        assert "empty" in output
+
+
+class TestToonConfirmed:
+    def test_basic(self):
+        output = toon_confirmed("Cache cleared")
+        assert "ok" in output
+        assert "Cache cleared" in output
+
+
+class TestTruncateMetadata:
+    def test_short_dict(self):
+        d = {"a": "1", "b": "2"}
+        result = _truncate_metadata(d)
+        assert result == d
+
+    def test_long_dict_truncated(self):
+        d = {f"k{i}": f"v{i}" for i in range(8)}
+        result = _truncate_metadata(d, limit=5)
+        assert len(result) == 6  # 5 real + 1 truncation notice
+
+    def test_full_flag_overrides(self):
+        d = {f"k{i}": f"v{i}" for i in range(8)}
+        result = _truncate_metadata(d, limit=5, full=True)
+        assert len(result) == 8
+
+
+class TestDefaultFieldsForItems:
+    def test_with_projects(self):
+        _, _, _, p1, _ = _h()
+        items = [("//x", p1)]
+        fields = _default_fields_for_items(items)
+        assert "project_id" in fields
+
+    def test_without_projects(self):
+        _, _, f1, _, _ = _h()
+        items = [("//x", f1)]
+        fields = _default_fields_for_items(items)
+        assert "project_id" not in fields
