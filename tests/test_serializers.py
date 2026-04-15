@@ -400,29 +400,29 @@ class TestToonStats:
 class TestToonCacheStatus:
     def test_fresh(self):
         output = toon_cache_status(
-            exists=True, fresh=True, age_seconds=300.0, org_count=1, folder_count=5, project_count=10, location="/tmp/cache"
+            exists=True, fresh=True, age_seconds=300.0, org_count=1, folder_count=5, project_count=10, location="/var/cache/gcpath/test"
         )
         assert "fresh" in output
         assert "5m" in output
 
     def test_empty(self):
-        output = toon_cache_status(exists=False, fresh=False, location="/tmp/cache")
+        output = toon_cache_status(exists=False, fresh=False, location="/var/cache/gcpath/test")
         assert "empty" in output
 
     def test_stale(self):
         output = toon_cache_status(
-            exists=True, fresh=False, age_seconds=7200.0, org_count=0, folder_count=0, project_count=0, location="/tmp/cache"
+            exists=True, fresh=False, age_seconds=7200.0, org_count=0, folder_count=0, project_count=0, location="/var/cache/gcpath/test"
         )
         assert "stale" in output
 
 
 class TestToonConfig:
     def test_with_data(self):
-        output = toon_config({"entrypoint": "folders/123"}, "/tmp/config")
+        output = toon_config({"entrypoint": "folders/123"}, "/var/cache/gcpath/config")
         assert "folders/123" in output
 
     def test_empty(self):
-        output = toon_config({}, "/tmp/config")
+        output = toon_config({}, "/var/cache/gcpath/config")
         assert "empty" in output
 
 
