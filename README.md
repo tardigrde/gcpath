@@ -1,15 +1,29 @@
 # gcpath
 
-`gcpath` is a CLI utility to query Google Cloud Platform resource hierarchy paths.
-It helps you translate between GCP resource names (e.g., `folders/12345`) and human-readable paths (e.g., `//example.com/department/team`).
+`gcpath` is an agent-native, read-only CLI for querying Google Cloud Platform resource hierarchy paths. It translates between GCP resource names (e.g., `folders/12345`) and human-readable paths (e.g., `//example.com/department/team`).
 
-## Why should I use gcpath?
+## Why gcpath?
 
-- familiar linux-like CLI
-- you can stay in the terminal for quick resource hierarchy lookups
-- no need to learn the complex `gcloud` interface
-- look-up only commands, so coding agents can't do harm using it
-- installable as an [Agent Skill](#agent-skill) so AI agents know how to use it
+GCP's resource hierarchy — organizations, folders, projects — is central to how teams structure access, billing, and governance. But navigating it with `gcloud` means juggling multiple subcommands, parsing verbose output, and stitching together parent-child relationships yourself.
+
+gcpath gives you a single tool that treats the hierarchy as a first-class concept: list, search, resolve paths, and traverse ancestry with Unix-style commands.
+
+### Built for AI agents
+
+gcpath is designed from the ground up to be used by AI coding agents (Claude Code, Codex, etc.), not just humans:
+
+- **Fully read-only** — every command is a query, never a mutation. Agents can run gcpath freely with zero risk of modifying your GCP environment.
+- **[AXI-compliant](https://axi.md/) output** — defaults to [TOON format](https://github.com/mwmwmw/toon-format), a token-efficient structured format that agents parse natively. Includes pre-computed aggregates, definitive empty states, structured errors, and contextual help sections — no screen-scraping required.
+- **Ambient context hooks** — `gcpath hook install` registers a session-start hook with Claude Code and Codex so the agent automatically knows your GCP hierarchy context when a session begins. No manual prompting needed.
+- **Agent Skill definition** — ships with an [Agent Skills](https://agentskills.io) manifest that teaches agents when to use gcpath, what commands are available, and common workflows — so the agent reaches for the right tool without you telling it to.
+- **Multiple output formats** — `--format toon|json|yaml|rich` lets agents pick the format that suits the task, with TOON as the default for maximum token efficiency.
+
+### Also great for humans
+
+- Familiar Linux-like CLI (`ls`, `tree`, `find`)
+- Stay in the terminal for quick hierarchy lookups
+- Rich colored output with `--format rich`
+- No need to learn the complex `gcloud` resource manager interface
 
 ## Features
 
@@ -20,8 +34,8 @@ It helps you translate between GCP resource names (e.g., `folders/12345`) and hu
 - **Find**: Search for resources by name using glob patterns.
 - **Ancestors**: Show the full ancestry chain from any resource up to the org root.
 - **Type Filtering**: Filter `ls`, `tree`, and `find` output by resource type (folder, project, organization).
-- **Structured Output**: `--json` and `--yaml` flags for machine-readable output across all commands.
-- **Dual Mode**:
+- **Structured Output**: `--format toon|json|yaml|rich` for machine-readable or human-friendly output across all commands.
+- **Dual API Mode**:
   - **Cloud Asset API (Default)**: Fast, bulk loading using GCP Cloud Asset Inventory.
   - **Resource Manager API**: Iterative loading using standard Resource Manager API (slower, but different permissions).
 
@@ -249,29 +263,32 @@ gcpath ancestors folders/123456789
 gcpath --json ancestors projects/my-project
 ```
 
-### Structured Output (`--json`, `--yaml`)
+### Output Formats (`--format`)
 
-All commands support `--json` and `--yaml` global flags for machine-readable output:
+All commands support `--format toon|json|yaml|rich`:
+
+| Format | Best for | Description |
+|--------|----------|-------------|
+| `toon` | AI agents (default) | Token-efficient structured format with aggregates and help sections |
+| `json` | Scripting / piping | Standard JSON |
+| `yaml` | Config files / readability | Standard YAML |
+| `rich` | Humans in a terminal | Colored tables and trees |
 
 ```bash
-# JSON output
-gcpath --json ls -R
-gcpath --json tree -L 2
-gcpath --json find "*prod*"
-gcpath --json ancestors projects/my-project
-gcpath --json name //example.com/engineering
-gcpath --json path folders/123456789
+# Default TOON output (agent-optimized)
+gcpath ls -R
+
+# JSON for scripting
+gcpath --format json ls -R | jq '.[] | select(.type == "project")'
+
+# Rich colored output for humans
+gcpath --format rich ls -R
 
 # YAML output
-gcpath --yaml ls
-gcpath --yaml tree
+gcpath --format yaml ancestors projects/my-project
 ```
 
-The flags are mutually exclusive. Structured output goes to stdout with status messages redirected to stderr, so it's safe to pipe:
-
-```bash
-gcpath --json ls -R | jq '.[] | select(.type == "project")'
-```
+The `--json` and `--yaml` flags are shorthand for `--format json` and `--format yaml`.
 
 ## API Modes
 
@@ -479,11 +496,30 @@ except GCPathError as e:
 | `PathParsingError` | Raised when a path string cannot be parsed. |
 | `path_escape()` | URL-encodes a display name for safe use in paths. |
 
-## Agent Skill
+## Agent Integration
 
-gcpath ships with an [Agent Skills](https://agentskills.io) definition so AI agents (Claude, Codex, etc.) can discover and use it without extra setup.
+gcpath is designed to work seamlessly with AI coding agents. There are two complementary ways to set this up.
 
-Install the skill into your agent environment:
+### Ambient Context Hooks
+
+Session-start hooks inject your GCP hierarchy context into the agent's conversation automatically — the agent knows about your orgs, folders, and projects from the moment a session begins.
+
+```bash
+# Install hooks for Claude Code and Codex
+gcpath hook install
+
+# Check hook status
+gcpath hook status
+
+# Remove hooks
+gcpath hook uninstall
+```
+
+This registers a `SessionStart` hook that runs `gcpath hook run`, which outputs a compact TOON dashboard of your cached hierarchy (under 500 tokens). The agent sees this context without you having to explain your GCP setup each session.
+
+### Agent Skill
+
+gcpath ships with an [Agent Skills](https://agentskills.io) definition that teaches agents when and how to use it.
 
 ```bash
 bunx skills add github:tardigrde/gcpath --skill gcpath
@@ -493,10 +529,10 @@ npx skills add github:tardigrde/gcpath --skill gcpath
 
 The skill teaches the agent:
 
-- when to reach for `gcpath` vs other GCP tools
+- when to reach for `gcpath` vs other GCP tools (and when *not* to — e.g., IAM, billing, compute)
 - all commands, flags, and output formats
 - common workflows (ancestry lookup, scoped listing, path ↔ name conversion)
-- gotchas (organizationless projects, caching behaviour, API modes)
+- gotchas (organizationless projects, caching behavior, API modes)
 
 See [`skills/gcpath/SKILL.md`](skills/gcpath/SKILL.md) for the full skill definition and [`skills/gcpath/references/commands.md`](skills/gcpath/references/commands.md) for the compact command reference.
 
