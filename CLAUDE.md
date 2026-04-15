@@ -4,14 +4,33 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**gcpath** is a CLI utility for querying Google Cloud Platform (GCP) resource hierarchy paths. It translates between GCP resource names (e.g., `folders/12345`) and human-readable paths (e.g., `//example.com/department/team`).
+**gcpath** is an AXI-compliant CLI utility for querying Google Cloud Platform (GCP) resource hierarchy paths. It translates between GCP resource names (e.g., `folders/12345`) and human-readable paths (e.g., `//example.com/department/team`).
 
 Key features:
 
+- AXI-compliant output: TOON format by default, with `--format toon|json|yaml|rich`
 - Dual API modes: Cloud Asset API (default, fast) and Resource Manager API (slower, different permissions)
-- Commands: `ls`, `tree`, `name` (path → resource name), `path` (resource name → path)
+- Commands: `ls`, `tree`, `name`, `path`, `find`, `ancestors`, `stats`, `diagram`
 - Scoped loading to improve performance for large hierarchies
 - Support for organizationless projects (`//_` prefix)
+- Ambient context hooks for Claude Code and Codex (`gcpath hook install`)
+
+## AXI Compliance
+
+gcpath follows the [AXI specification](https://axi.md/) for agent-friendly CLI tools:
+
+- **TOON default output**: All commands output TOON format by default (token-efficient, structured)
+- **`--format` flag**: `toon` (default), `json`, `yaml`, `rich` (human-friendly colored tables)
+- **Pre-computed aggregates**: `ls` shows `count: N of M total`, `find` shows match count
+- **Definitive empty states**: `0 resources found` with contextual help
+- **Structured errors**: Errors go to stdout in TOON format, not stderr Rich markup
+- **Content-first home**: Running `gcpath` with no args shows a live dashboard from cache
+- **Contextual help**: `help[]` sections appended after list outputs with relevant next-step commands
+- **`--fields` flag**: Control which columns appear in tabular output (`path,type,display_name,resource_name,project_id,labels,tags`)
+- **`--full` flag**: Expand truncated labels/tags without truncation
+- **No interactive prompts**: All confirm prompts removed; commands just proceed
+- **`tree` is human-oriented**: Classic unicode tree output, not TOON. Agents should use `ls -R` instead. No `help[]` suggestions for `tree` in agent followups.
+- **`diagram` is raw output**: Mermaid/D2 text output as-is, no TOON wrapping
 
 ## Setup and Build
 
@@ -59,7 +78,17 @@ The codebase is organized into focused, single-responsibility modules:
 
 - **`formatters.py`**: Display formatting logic for paths, trees, and resource filtering.
 
+- **`serializers.py`**: Output serialization — TOON, JSON, YAML serializers for all commands.
+
+- **`toon.py`**: Thin wrapper around `toon_format.encode()` plus gcpath-specific AXI helpers (error formatting, empty states, help sections, dashboards).
+
+- **`hooks.py`**: Agent session hook management (install/uninstall/status for Claude Code and Codex).
+
 - **`cli.py`**: CLI commands and entry points using Typer framework.
+
+- **`cache.py`**: Cache management for hierarchy data.
+
+- **`config.py`**: Configuration management (entrypoint settings).
 
 ### Data Flow
 
@@ -78,10 +107,12 @@ The codebase is organized into focused, single-responsibility modules:
    - Loaders use filters to only fetch descendants of that resource
    - Significantly reduces API calls and latency for large hierarchies
 
-4. **Display**: CLI uses formatters to present data:
-   - Direct children filtering for `ls` (non-recursive mode)
-   - Tree recursion with depth limiting
-   - Path display with URL encoding via `path_escape()`
+4. **Output**: CLI dispatches to serializers based on `--format`:
+   - `toon` (default): TOON tabular arrays, objects, help sections
+   - `json`/`yaml`: Structured dicts via `dump_json`/`dump_yaml`
+   - `rich`: Rich-colored tables and tree widgets
+   - `tree` command always uses Rich tree output (not TOON)
+   - `diagram` command always outputs raw Mermaid/D2 text
 
 ### Key Design Patterns
 
@@ -89,6 +120,7 @@ The codebase is organized into focused, single-responsibility modules:
 - **Protobuf Objects**: Use actual `google.cloud.resourcemanager_v3` protobuf objects (not mocks) throughout the data layer
 - **Optional Organization**: Projects can be organizationless (no parent organization)
 - **Lightweight Path Resolution**: `Hierarchy.resolve_ancestry()` traverses up the hierarchy without loading full state
+- **Content-first home**: `gcpath` with no args reads cache and shows dashboard, never shows help text
 
 ## Important Implementation Details
 
@@ -113,6 +145,15 @@ The Asset API returns STRUCT fields as `MapComposite` objects. Key handling:
 - `ancestors_filter`: Returns all descendants including in ancestors list (recursive)
 - Default (no filter): Returns org-level or root-level resources
 
+### TOON Output Conventions
+
+- Default `ls` schema: `{path,type,display_name}` (3 fields); adds `project_id` for projects
+- `--fields` overrides: any subset of `path,type,display_name,resource_name,project_id,labels,tags`
+- Labels/tags truncated to 5 entries by default; `--full` shows all
+- `count: N of M total` header on list outputs
+- `help[]` sections with next-step suggestions (omitted for single-result commands like `name`, `path`)
+- Errors to stdout as `error: <message>` with optional `help[]`
+
 ## Testing
 
 Test files mirror source organization:
@@ -121,6 +162,7 @@ Test files mirror source organization:
 - `test_loaders.py`: GCP API loading functions
 - `test_parsers.py`: Asset API response parsing
 - `test_formatters.py`: Display formatting
+- `test_serializers.py`: Output serialization (TOON, JSON, YAML)
 - `test_cli.py`: CLI command integration
 
 Run specific test:
@@ -181,3 +223,5 @@ The project uses **semantic versioning** with automated release workflow via Git
 - All exceptions inherit from `GCPathError` base class
 - CLI commands should wrap GCP API calls with error handling
 - Follow conventional commits for automatic version bumping
+- TOON encoding uses `toon_format` library (imported as `toon_format`)
+- `toon.py` is a thin wrapper that adds gcpath-specific AXI conventions on top of `toon_format.encode()`

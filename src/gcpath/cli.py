@@ -1,15 +1,14 @@
 import fnmatch
+import shutil
 import typer
 import logging
+from pathlib import Path
 from dataclasses import dataclass
 from typing import Optional, List, Dict, Union
 from urllib.parse import unquote
 from typing_extensions import Annotated
-from rich.console import Console
 from rich import print as rprint
-from rich.markup import escape
 from google.api_core import exceptions as gcp_exceptions
-
 
 from gcpath.core import (
     Hierarchy,
@@ -36,13 +35,32 @@ from gcpath.serializers import (
     serialize_ancestors,
     dump_json,
     dump_yaml,
+    toon_ls,
+    toon_name,
+    toon_path,
+    toon_ancestors,
+    toon_find,
+    toon_stats,
+    toon_cache_status,
+    toon_config,
+    toon_confirmed,
+    toon_encode,
+    _ALL_LS_FIELDS,
 )
-from typing import Any, Callable
+from gcpath.toon import format_age, toon_error
+from gcpath.hooks import (
+    install_hooks,
+    uninstall_hooks,
+    get_hook_status,
+    run_session_start,
+)
+from typing import Any, Callable, Tuple
 from gcpath.cache import (
     read_cache,
     write_cache,
     clear_cache,
     get_cache_info,
+    read_cache_raw,
     CACHE_FILE,
 )
 from gcpath.config import (
@@ -52,9 +70,7 @@ from gcpath.config import (
     read_config,
     CONFIG_FILE,
 )
-from rich.table import Table
 
-# Resource name prefixes
 _RESOURCE_PREFIX_PROJECTS = "projects/"
 _RESOURCE_PREFIX_FOLDERS = "folders/"
 _RESOURCE_PREFIX_ORGS = "organizations/"
@@ -65,29 +81,31 @@ _RESOURCE_PREFIXES = (
 )
 _REFRESH_HELP = "Force a refresh of the cache from the GCP API"
 _VALID_TYPE_FILTERS = ("folder", "project", "organization")
+_VALID_FORMATS = ("toon", "json", "yaml", "rich")
 
 logger = logging.getLogger(__name__)
 
 
+def _display_bin_path(path: str) -> str:
+    home = str(Path.home())
+    if path.startswith(home):
+        return "~" + path[len(home):]
+    return path
+
+
 def _validate_type_filter(resource_type: Optional[str]) -> None:
-    """Validate --type filter value."""
     if resource_type is not None and resource_type not in _VALID_TYPE_FILTERS:
-        error_console.print(
-            f"[red]Error:[/red] Invalid type '{resource_type}'. "
-            f"Must be one of: {', '.join(_VALID_TYPE_FILTERS)}"
-        )
+        print(toon_error(f"Invalid type '{resource_type}'. Must be one of: {', '.join(_VALID_TYPE_FILTERS)}"))
         raise typer.Exit(code=1)
 
 
 def _matches_type(
     obj: Union[OrganizationNode, Folder, Project], type_filter: str
 ) -> bool:
-    """Check if a resource matches the given type filter."""
     return get_resource_type(obj) == type_filter
 
 
 def _parse_label_filter(label_str: str) -> tuple:
-    """Parse a label filter string 'key=value' into (key, value) tuple."""
     if "=" not in label_str:
         return (label_str, None)
     key, _, value = label_str.partition("=")
@@ -99,7 +117,6 @@ def _matches_metadata(
     filters: List[str],
     attr: str,
 ) -> bool:
-    """Check if a resource matches ALL filters (ANDed) for a given metadata attribute."""
     if not filters:
         return True
     metadata = getattr(obj, attr, {})
@@ -113,18 +130,8 @@ def _matches_metadata(
     return True
 
 
-def _format_metadata(obj: Union[OrganizationNode, Folder, Project], attr: str) -> str:
-    """Format a metadata dict attribute as comma-separated key=value string."""
-    metadata = getattr(obj, attr, {})
-    if not metadata:
-        return ""
-    return ", ".join(f"{k}={v}" for k, v in sorted(metadata.items()))
-
-
 @dataclass
 class _ScopeResult:
-    """Result of resolving a resource scope argument."""
-
     target_resource_name: Optional[str]
     target_org_name: Optional[str]
     filter_orgs: Optional[List[str]]
@@ -134,10 +141,6 @@ def _resolve_scope(
     resource: Optional[str],
     entrypoint: Optional[str],
 ) -> _ScopeResult:
-    """Resolve resource/entrypoint into scope parameters for hierarchy loading.
-
-    Returns target_resource_name, target_org_name, and filter_orgs.
-    """
     effective_resource = resource or entrypoint
     target_resource_name = None
     target_org_name = None
@@ -155,7 +158,6 @@ def _resolve_scope(
         except (gcp_exceptions.PermissionDenied, gcp_exceptions.NotFound, GCPathError):
             pass
 
-    # Skip org filtering when using entrypoint without explicit resource
     if not resource and entrypoint and target_org_name:
         filter_orgs = None
     else:
@@ -172,17 +174,16 @@ app = typer.Typer(
     name="gcpath",
     help="Google Cloud Platform resource hierarchy utility",
     add_completion=False,
+    invoke_without_command=True,
 )
 cache_app = typer.Typer(help="Manage the local resource cache.")
 app.add_typer(cache_app, name="cache")
 config_app = typer.Typer(help="Manage gcpath configuration.")
 app.add_typer(config_app, name="config")
-console = Console()
-error_console = Console(stderr=True)
-
+hook_app = typer.Typer(help="Manage agent session hooks.")
+app.add_typer(hook_app, name="hook")
 
 def _get_dumper(output_format: str) -> Optional[Callable[[Any], str]]:
-    """Return the appropriate dumper for the given output format, or None for text."""
     if output_format == "json":
         return dump_json
     if output_format == "yaml":
@@ -190,34 +191,27 @@ def _get_dumper(output_format: str) -> Optional[Callable[[Any], str]]:
     return None
 
 
+def _output_toon(data_or_str: Any) -> None:
+    if isinstance(data_or_str, str):
+        print(data_or_str)
+    else:
+        print(toon_encode(data_or_str))
+
+
 def handle_error(e: Exception) -> None:
-    """Central error handler for CLI."""
     if isinstance(e, GCPathError):
-        error_console.print(f"[red]Error:[/red] {e}")
+        print(toon_error(str(e)))
     elif isinstance(e, gcp_exceptions.PermissionDenied):
-        error_console.print(
-            "[red]Permission Denied:[/red] Ensure you have the required permissions and are authenticated."
-        )
-        error_console.print(
-            "[dim]Hint: Run 'gcloud auth application-default login'[/dim]"
-        )
+        print(toon_error(
+            "Permission Denied. Ensure you have the required permissions and are authenticated.",
+            ["Run 'gcloud auth application-default login'"],
+        ))
     elif isinstance(e, gcp_exceptions.ServiceUnavailable):
-        error_console.print(
-            "[red]Service Unavailable:[/red] The GCP API is currently unreachable."
-        )
+        print(toon_error("The GCP API is currently unreachable."))
     elif isinstance(e, Exception):
-        error_console.print(f"[red]Unexpected Error:[/red] {e}")
+        print(toon_error(f"Unexpected error: {e}"))
         logging.exception("Unexpected error occurred")
     raise typer.Exit(code=1)
-
-
-def _format_age(seconds: float) -> str:
-    """Format age in seconds to a human-readable string."""
-    hours = int(seconds // 3600)
-    minutes = int((seconds % 3600) // 60)
-    if hours > 0:
-        return f"{hours}h {minutes}m"
-    return f"{minutes}m"
 
 
 @app.callback()
@@ -236,99 +230,160 @@ def main(
         "-e",
         help="Default resource to scope commands to (e.g., folders/123). Overrides config.",
     ),
-    json_output: bool = typer.Option(
-        False,
-        "--json",
-        help="Output in JSON format",
-    ),
-    yaml_output: bool = typer.Option(
-        False,
-        "--yaml",
-        help="Output in YAML format",
+    output_format: str = typer.Option(
+        "toon",
+        "--format",
+        help=f"Output format: {', '.join(_VALID_FORMATS)}",
     ),
 ) -> None:
-    """
-    gcpath - Google Cloud Platform resource hierarchy utility
-    """
-    if json_output and yaml_output:
-        error_console.print(
-            "[red]Error:[/red] --json and --yaml are mutually exclusive."
-        )
+    """gcpath - Google Cloud Platform resource hierarchy utility"""
+    if output_format not in _VALID_FORMATS:
+        print(toon_error(f"Invalid format '{output_format}'. Must be one of: {', '.join(_VALID_FORMATS)}"))
         raise typer.Exit(code=1)
 
     ctx.ensure_object(dict)
     ctx.obj["use_asset_api"] = use_asset_api
     ctx.obj["entrypoint"] = entrypoint or get_entrypoint()
-
-    if json_output:
-        ctx.obj["output_format"] = "json"
-    elif yaml_output:
-        ctx.obj["output_format"] = "yaml"
-    else:
-        ctx.obj["output_format"] = "text"
+    ctx.obj["output_format"] = output_format
 
     if debug:
         logging.basicConfig(level=logging.DEBUG)
     else:
         logging.basicConfig(level=logging.ERROR)
 
-    # Always suppress urllib3 debug logs
     logging.getLogger("urllib3").setLevel(logging.WARNING)
+
+    if ctx.invoked_subcommand is None:
+        _show_home(ctx)
+
+
+def _show_home(ctx: typer.Context) -> None:
+    """Content-first home view (AXI Principle 8)."""
+    gcpath_bin = _display_bin_path(shutil.which("gcpath") or "gcpath")
+    info = get_cache_info()
+
+    if not info.exists or not info.fresh:
+        dashboard: Dict[str, Any] = {
+            "bin": gcpath_bin,
+            "description": "Query GCP resource hierarchy paths",
+            "cache": "empty",
+        }
+        help_lines = [
+            "Run `gcpath ls` to load and list resources",
+            "Run `gcpath hook install` to enable ambient context",
+        ]
+        print(toon_encode(dashboard))
+        print(toon_encode({"help": help_lines}))
+        raise typer.Exit()
+
+    age_str = format_age(info.age_seconds) if info.age_seconds else "unknown"
+
+    org_rows = []
+    raw_data = read_cache_raw()
+    if raw_data:
+        for org_data in raw_data.get("organizations", []):
+            org_info = org_data.get("organization", {})
+            name = org_info.get("display_name", "unknown")
+            folder_count = len(org_data.get("folders", {}))
+            project_count = len(org_data.get("projects", []))
+            org_rows.append({
+                "name": name,
+                "folders": folder_count,
+                "projects": project_count,
+            })
+
+    dashboard = {
+        "bin": gcpath_bin,
+        "description": "Query GCP resource hierarchy paths",
+        "cache": f"fresh ({age_str} ago)",
+    }
+    if org_rows:
+        dashboard["organizations"] = org_rows
+
+    help_lines = [
+        "Run `gcpath ls` to list root-level resources",
+        "Run `gcpath ls -R` for recursive listing",
+        "Run `gcpath find <pattern>` to search by name",
+    ]
+    print(toon_encode(dashboard))
+    print(toon_encode({"help": help_lines}))
+    raise typer.Exit()
 
 
 @cache_app.command("clear")
-def cache_clear() -> None:
+def cache_clear(ctx: typer.Context) -> None:
     """Clear the local resource cache."""
+    fmt = ctx.obj.get("output_format", "toon")
     if clear_cache():
-        rprint(f"[green]Cache cleared successfully at {CACHE_FILE}[/green]")
+        msg = f"Cache cleared at {CACHE_FILE}"
+        if fmt == "rich":
+            rprint(f"[green]{msg}[/green]")
+        else:
+            print(toon_confirmed(msg))
     else:
-        rprint(f"[yellow]No cache file to clear at {CACHE_FILE}[/yellow]")
+        msg = f"No cache file to clear at {CACHE_FILE}"
+        if fmt == "rich":
+            rprint(f"[yellow]{msg}[/yellow]")
+        else:
+            print(toon_confirmed(msg))
 
 
 @cache_app.command("status")
-def cache_status() -> None:
+def cache_status(ctx: typer.Context) -> None:
     """Show cache status information."""
+    fmt = ctx.obj.get("output_format", "toon")
     info = get_cache_info()
 
-    if not info.exists:
-        rprint(f"[yellow]No cache file found at {CACHE_FILE}[/yellow]")
+    if fmt == "rich":
+        from rich.table import Table
+        from rich.console import Console
+        console = Console()
+        if not info.exists:
+            rprint(f"[yellow]No cache file found at {CACHE_FILE}[/yellow]")
+            return
+        table = Table(show_header=False, box=None, padding=(0, 1))
+        table.add_column("Key", style="bold")
+        table.add_column("Value")
+        if info.fresh:
+            table.add_row("Status", "[green]Fresh[/green]")
+        else:
+            table.add_row("Status", "[yellow]Stale[/yellow]")
+        if info.age_seconds is not None:
+            table.add_row("Age", format_age(info.age_seconds))
+        if info.size_bytes is not None:
+            size_kb = info.size_bytes / 1024
+            if size_kb >= 1024:
+                table.add_row("Size", f"{size_kb / 1024:.1f} MB")
+            else:
+                table.add_row("Size", f"{size_kb:.1f} KB")
+        if info.version is not None:
+            table.add_row("Version", str(info.version))
+        if info.scope is not None:
+            table.add_row("Scope", info.scope)
+        table.add_row("Organizations", str(info.org_count))
+        table.add_row("Folders", str(info.folder_count))
+        table.add_row("Projects", str(info.project_count))
+        table.add_row("Location", str(CACHE_FILE))
+        console.print(table)
         return
 
-    table = Table(show_header=False, box=None, padding=(0, 1))
-    table.add_column("Key", style="bold")
-    table.add_column("Value")
-
-    if info.fresh:
-        table.add_row("Status", "[green]Fresh[/green]")
-    else:
-        table.add_row("Status", "[yellow]Stale[/yellow]")
-
-    if info.age_seconds is not None:
-        table.add_row("Age", _format_age(info.age_seconds))
-
-    if info.size_bytes is not None:
-        size_kb = info.size_bytes / 1024
-        if size_kb >= 1024:
-            table.add_row("Size", f"{size_kb / 1024:.1f} MB")
-        else:
-            table.add_row("Size", f"{size_kb:.1f} KB")
-
-    if info.version is not None:
-        table.add_row("Version", str(info.version))
-
-    if info.scope is not None:
-        table.add_row("Scope", info.scope)
-
-    table.add_row("Organizations", str(info.org_count))
-    table.add_row("Folders", str(info.folder_count))
-    table.add_row("Projects", str(info.project_count))
-    table.add_row("Location", str(CACHE_FILE))
-
-    console.print(table)
+    print(toon_cache_status(
+        exists=info.exists,
+        fresh=info.fresh,
+        age_seconds=info.age_seconds,
+        size_bytes=info.size_bytes,
+        version=info.version,
+        scope=info.scope,
+        org_count=info.org_count,
+        folder_count=info.folder_count,
+        project_count=info.project_count,
+        location=str(CACHE_FILE),
+    ))
 
 
 @config_app.command("set-entrypoint")
 def config_set_entrypoint(
+    ctx: typer.Context,
     resource: Annotated[
         str,
         typer.Argument(
@@ -337,54 +392,68 @@ def config_set_entrypoint(
     ],
 ) -> None:
     """Set the default entrypoint resource."""
+    fmt = ctx.obj.get("output_format", "toon")
     try:
         set_entrypoint(resource)
-        rprint(f"[green]Entrypoint set to {resource}[/green]")
+        msg = f"Entrypoint set to {resource}"
+        if fmt == "rich":
+            rprint(f"[green]{msg}[/green]")
+        else:
+            print(toon_confirmed(msg))
     except ValueError as e:
-        rprint(f"[red]Error:[/red] {e}")
+        if fmt == "rich":
+            rprint(f"[red]Error:[/red] {e}")
+        else:
+            print(toon_error(str(e)))
         raise typer.Exit(code=1)
 
 
 @config_app.command("show")
-def config_show() -> None:
+def config_show(ctx: typer.Context) -> None:
     """Show current configuration."""
+    fmt = ctx.obj.get("output_format", "toon")
     config = read_config()
-    if not config:
-        rprint("[yellow]No configuration set.[/yellow]")
-        rprint(f"[dim]Config file: {CONFIG_FILE}[/dim]")
+
+    if fmt == "rich":
+        from rich.table import Table
+        from rich.console import Console
+        console = Console()
+        if not config:
+            rprint("[yellow]No configuration set.[/yellow]")
+            rprint(f"[dim]Config file: {CONFIG_FILE}[/dim]")
+            return
+        table = Table(show_header=False, box=None, padding=(0, 1))
+        table.add_column("Key", style="bold")
+        table.add_column("Value")
+        for key, value in config.items():
+            table.add_row(key, str(value))
+        table.add_row("location", str(CONFIG_FILE))
+        console.print(table)
         return
 
-    table = Table(show_header=False, box=None, padding=(0, 1))
-    table.add_column("Key", style="bold")
-    table.add_column("Value")
-
-    for key, value in config.items():
-        table.add_row(key, str(value))
-
-    table.add_row("location", str(CONFIG_FILE))
-    console.print(table)
+    print(toon_config(config, str(CONFIG_FILE)))
 
 
 @config_app.command("clear-entrypoint")
-def config_clear_entrypoint() -> None:
+def config_clear_entrypoint(ctx: typer.Context) -> None:
     """Remove the default entrypoint."""
+    fmt = ctx.obj.get("output_format", "toon")
     clear_entrypoint()
-    rprint("[green]Entrypoint cleared.[/green]")
+    msg = "Entrypoint cleared"
+    if fmt == "rich":
+        rprint(f"[green]{msg}[/green]")
+    else:
+        print(toon_confirmed(msg))
 
 
 def _clean_resolve_path(path: str) -> str:
-    """Clean up a resolved path that may contain _unknown_org_ segments."""
     if "_unknown_org_" in path:
-        # Strip //_unknown_org_(organizations/ID) prefix, keep rest
-        # e.g., "//_unknown_org_(organizations/123)/Folder/Sub" -> "//Folder/Sub"
         parts = path.split("/")
-        # Find the _unknown_org_ segment and skip it
         cleaned = []
         for part in parts:
             if "_unknown_org_" in part:
                 continue
             cleaned.append(part)
-        # Rebuild: starts with // so cleaned[0] and [1] are empty strings
         result = "/".join(cleaned)
         if not result.startswith("//"):
             result = "//" + result.lstrip("/")
@@ -396,21 +465,10 @@ def _try_read_cache(
     cache_scope: Optional[str],
     filter_orgs: Optional[List[str]],
 ) -> Optional[Hierarchy]:
-    """Try to read hierarchy from cache, applying org filter if needed.
-
-    Returns None if cache is not available.
-    """
     cached_hierarchy = read_cache(scope=cache_scope)
     if cached_hierarchy is None:
         return None
 
-    info = get_cache_info()
-    age_str = _format_age(info.age_seconds) if info.age_seconds else "unknown"
-    error_console.print(
-        f"[dim]Using cached data ({age_str} ago). Use -F to refresh.[/dim]"
-    )
-
-    # Apply org filter to cached data
     if filter_orgs:
         cached_hierarchy.organizations = [
             o
@@ -429,15 +487,8 @@ def _load_hierarchy(
     include_labels: bool = False,
     include_tags: bool = False,
 ) -> Hierarchy:
-    """Helper to load hierarchy with cache orchestration.
-
-    Cache is used for unscoped loads and entrypoint-scoped loads.
-    One-off queries (scope_resource set but != entrypoint) are not cached.
-    Cacheable loads always use recursive=True so the cache contains complete data.
-    """
     entrypoint = ctx.obj.get("entrypoint")
 
-    # Cacheable: unscoped OR scope matches entrypoint
     is_cacheable = (scope_resource is None) or (
         entrypoint is not None and scope_resource == entrypoint
     )
@@ -446,9 +497,11 @@ def _load_hierarchy(
     if is_cacheable and not force_refresh:
         cached = _try_read_cache(cache_scope, filter_orgs)
         if cached is not None:
+            info = get_cache_info()
+            if info.age_seconds is not None:
+                logger.debug(f"Using cached data ({format_age(info.age_seconds)} ago). Use -F to refresh.")
             return cached
 
-    # Always recursive for cacheable loads (complete data for all commands)
     effective_recursive = True if is_cacheable else recursive
 
     hierarchy = Hierarchy.load(
@@ -468,8 +521,6 @@ def _load_hierarchy(
 
 @dataclass
 class _HierarchyCommandContext:
-    """Shared context produced by _prepare_hierarchy_command."""
-
     hierarchy: Hierarchy
     nodes_to_process: List[Union[OrganizationNode, Folder]]
     projects_by_parent: Dict[str, List[Project]]
@@ -479,23 +530,16 @@ class _HierarchyCommandContext:
 
 @dataclass
 class _ParsedResource:
-    """Result of parsing a resource argument for tree-like commands."""
-
     target_resource_name: Optional[str]
     target_org_name: Optional[str]
     target_path: Optional[str]
 
 
 def _parse_resource_arg(effective_resource: str, command_name: str) -> _ParsedResource:
-    """Parse a resource argument, resolving its path and org name.
-
-    Raises typer.Exit(code=1) if the resource is a project.
-    """
     if effective_resource.startswith(_RESOURCE_PREFIX_PROJECTS):
-        rprint(
-            f"[red]Error:[/red] '{command_name}' command does not support starting "
-            "from a project (projects are leaf nodes)."
-        )
+        print(toon_error(
+            f"'{command_name}' command does not support starting from a project (projects are leaf nodes)."
+        ))
         raise typer.Exit(code=1)
 
     target_org_name = None
@@ -529,23 +573,16 @@ def _find_target_nodes(
     target_resource_name: str,
     target_path: Optional[str],
 ) -> List[Union[OrganizationNode, Folder]]:
-    """Find nodes matching target_resource_name in the hierarchy.
-
-    Creates a synthetic folder if the target folder is not found but the
-    hierarchy has organizations.
-    """
     if target_resource_name.startswith(_RESOURCE_PREFIX_ORGS):
         for o in hierarchy.organizations:
             if o.organization.name == target_resource_name:
                 return [o]
         return []
 
-    # Folder lookup
     for o in hierarchy.organizations:
         if target_resource_name in o.folders:
             return [o.folders[target_resource_name]]
 
-    # Create synthetic folder from resolved path
     if not target_path or not hierarchy.organizations:
         return []
 
@@ -569,35 +606,17 @@ def _prepare_hierarchy_command(
     command_name: str,
     resource: Optional[str],
     level: Optional[int],
-    yes: bool,
     force_refresh: bool,
     include_labels: bool = False,
     include_tags: bool = False,
 ) -> Optional[_HierarchyCommandContext]:
-    """Shared setup for tree-like commands (tree, diagram).
-
-    Returns None if the user declines the confirmation prompt.
-    Raises typer.Exit(code=1) for invalid or not-found resources.
-    """
     ep = ctx.obj.get("entrypoint")
     effective_resource = resource or ep
 
-    # Prompt user for potentially long loads (only when truly unscoped)
-    if not yes and effective_resource is None:
-        cache_info = get_cache_info()
-        if not cache_info.fresh and (level is None or level >= 4):
-            if not typer.confirm(
-                "This will load all folders and projects in the hierarchy, "
-                "which may take a long time. Continue?"
-            ):
-                return None
-
-    # Parse resource argument
     parsed = _ParsedResource(None, None, None)
     if effective_resource:
         parsed = _parse_resource_arg(effective_resource, command_name)
 
-    # Skip org filtering when using entrypoint without explicit resource
     if not resource and ep and parsed.target_org_name:
         filter_orgs = None
     else:
@@ -613,7 +632,6 @@ def _prepare_hierarchy_command(
         include_tags=include_tags,
     )
 
-    # Build nodes_to_process
     if parsed.target_resource_name:
         nodes_to_process = _find_target_nodes(
             hierarchy,
@@ -621,14 +639,11 @@ def _prepare_hierarchy_command(
             parsed.target_path,
         )
         if not nodes_to_process:
-            rprint(
-                f"[red]Error:[/red] Target resource '{parsed.target_resource_name}' not found."
-            )
+            print(toon_error(f"Target resource '{parsed.target_resource_name}' not found."))
             raise typer.Exit(code=1)
     else:
         nodes_to_process = list(hierarchy.organizations)
 
-    # Build projects_by_parent mapping
     projects_by_parent: Dict[str, List[Project]] = {}
     for proj in hierarchy.projects:
         projects_by_parent.setdefault(proj.parent, []).append(proj)
@@ -642,35 +657,40 @@ def _prepare_hierarchy_command(
     )
 
 
-def _handle_empty_hierarchy(dumper) -> None:
-    """Display message when no organizations or projects are found."""
-    if dumper:
-        print(dumper([]))
+def _handle_empty_hierarchy(fmt: str) -> None:
+    if fmt in ("json", "yaml"):
+        dumper = _get_dumper(fmt)
+        if dumper:
+            print(dumper([]))
         return
 
-    import google.auth
-
-    account_msg = ""
-    try:
-        credentials, _ = google.auth.default()
-        if hasattr(credentials, "account") and credentials.account:
-            if credentials.account.endswith("@gmail.com"):
-                account_msg = f" (Account: {credentials.account})"
-    except Exception:
-        pass
-
-    rprint(
-        f"[yellow]No organizations or projects found accessible to your account{account_msg}.[/yellow]"
-    )
-    if not account_msg:
+    if fmt == "rich":
+        import google.auth
+        account_msg = ""
+        try:
+            credentials, _ = google.auth.default()
+            if hasattr(credentials, "account") and credentials.account:
+                if credentials.account.endswith("@gmail.com"):
+                    account_msg = f" (Account: {credentials.account})"
+        except Exception:
+            pass
         rprint(
-            "[dim]Hint: You might not have access to any organizations. "
-            "Projects without organizations are shown with //_ prefix.[/dim]"
+            f"[yellow]No organizations or projects found accessible to your account{account_msg}.[/yellow]"
         )
+        if not account_msg:
+            rprint(
+                "[dim]Hint: You might not have access to any organizations. "
+                "Projects without organizations are shown with //_ prefix.[/dim]"
+            )
+        return
+
+    print(toon_error(
+        "No organizations or projects found accessible to your account",
+        ["Projects without organizations are shown with //_ prefix"],
+    ))
 
 
 def _resolve_target_path_prefix(target_resource_name: Optional[str]) -> str:
-    """Resolve the display path prefix for a target resource."""
     if not target_resource_name:
         return ""
     try:
@@ -681,7 +701,6 @@ def _resolve_target_path_prefix(target_resource_name: Optional[str]) -> str:
 
 
 def _get_resource_name(obj: Union[OrganizationNode, Folder, Project]) -> str:
-    """Get the resource name string for any resource type."""
     if isinstance(obj, OrganizationNode):
         return obj.organization.name
     return obj.name
@@ -693,7 +712,6 @@ def _apply_ls_filters(
     label_filters: Optional[List[str]],
     tag_filters: Optional[List[str]],
 ) -> list:
-    """Apply type, label, and tag filters to items list."""
     if resource_type:
         items = [(p, obj) for p, obj in items if _matches_type(obj, resource_type)]
     if label_filters:
@@ -715,7 +733,6 @@ def _apply_depth_limit(
     recursive: bool,
     target_path_prefix: str,
 ) -> list:
-    """Apply depth limit for recursive listing."""
     if level is None or not recursive:
         return items
     base_segments = len(target_path_prefix.split("/")) - 3 if target_path_prefix else 0
@@ -733,8 +750,8 @@ def _build_ls_items(
     label_filters: Optional[List[str]],
     tag_filters: Optional[List[str]],
     level: Optional[int],
-) -> list:
-    """Build, filter, and sort the items list for ls output."""
+) -> Tuple[list, int]:
+    """Build ls items and return (filtered_items, total_before_filtering)."""
     current_folders, current_projects = filter_direct_children(
         hierarchy, target_resource_name
     )
@@ -747,27 +764,44 @@ def _build_ls_items(
         recursive,
     )
     items = sort_resources(items)
+    total_in_scope = len(items)
     items = _apply_ls_filters(items, resource_type, label_filters, tag_filters)
     items = _apply_depth_limit(items, level, recursive, target_path_prefix)
-    return items
+    return items, total_in_scope
 
 
-def _display_ls_items(
+def _ls_help_lines(recursive: bool, target_resource_name: Optional[str]) -> List[str]:
+    lines = []
+    if not recursive:
+        lines.append("Run `gcpath ls <resource> -R` for nested listing")
+    else:
+        lines.append("Run `gcpath ls <resource>` for direct children only")
+    lines.append("Run `gcpath find <pattern>` to search by name")
+    return lines
+
+
+def _format_metadata(obj: Union[OrganizationNode, Folder, Project], attr: str) -> str:
+    metadata = getattr(obj, attr, {})
+    if not metadata:
+        return ""
+    return ", ".join(f"{k}={v}" for k, v in sorted(metadata.items()))
+
+
+def _display_ls_rich(
     items: list,
-    long: bool,
     show_labels: bool,
     show_tags: bool,
 ) -> None:
-    """Display ls items in either long or short format."""
-    if not long:
-        for path, _ in items:
-            print(path)
-        return
+    from rich.table import Table
+    from rich.console import Console
+    console = Console()
 
     table = Table(
         show_header=True, header_style="bold magenta", box=None, padding=(0, 1)
     )
     table.add_column("Path", overflow="fold")
+    table.add_column("Type", overflow="fold")
+    table.add_column("Display Name", overflow="fold")
     table.add_column("Resource Name", overflow="fold")
     if show_labels:
         table.add_column("Labels", overflow="fold")
@@ -775,7 +809,12 @@ def _display_ls_items(
         table.add_column("Tags", overflow="fold")
 
     for path, obj in items:
-        row = [path, _get_resource_name(obj)]
+        row = [path, get_resource_type(obj)]
+        if isinstance(obj, OrganizationNode):
+            row.append(obj.organization.display_name)
+        else:
+            row.append(obj.display_name)
+        row.append(_get_resource_name(obj))
         if show_labels:
             row.append(_format_metadata(obj, "labels"))
         if show_tags:
@@ -783,6 +822,17 @@ def _display_ls_items(
         table.add_row(*row)
 
     console.print(table)
+
+
+def _parse_fields(fields_str: Optional[str]) -> Optional[Tuple[str, ...]]:
+    if not fields_str:
+        return None
+    fields = tuple(f.strip() for f in fields_str.split(","))
+    for f in fields:
+        if f not in _ALL_LS_FIELDS:
+            print(toon_error(f"Unknown field '{f}'. Available fields: {', '.join(_ALL_LS_FIELDS)}"))
+            raise typer.Exit(code=1)
+    return fields
 
 
 @app.command()
@@ -794,9 +844,6 @@ def ls(
             help="Resource name (e.g. folders/123) or path to list children from."
         ),
     ] = None,
-    long: bool = typer.Option(
-        False, "--long", "-l", help="Show resource IDs and numbers (for projects)"
-    ),
     recursive: bool = typer.Option(
         False, "--recursive", "-R", help="List resources recursively"
     ),
@@ -827,16 +874,22 @@ def ls(
     tag_filters: Optional[List[str]] = typer.Option(
         None, "--tag", help="Filter by tag (key=value). Repeatable, ANDed together"
     ),
+    fields: Optional[str] = typer.Option(
+        None, "--fields", help=f"Comma-separated fields to show: {', '.join(_ALL_LS_FIELDS)}"
+    ),
+    full: bool = typer.Option(
+        False, "--full", help="Show all labels/tags without truncation"
+    ),
 ) -> None:
-    """
-    List folders and projects. Defaults to the root organization.
-    """
+    """List folders and projects. Defaults to the root organization."""
     try:
         _validate_type_filter(resource_type)
 
-        # Implicitly enable label/tag fetching when filters are specified
-        include_labels = show_labels or bool(label_filters)
-        include_tags = show_tags or bool(tag_filters)
+        parsed_fields = _parse_fields(fields)
+        needs_labels = parsed_fields is not None and "labels" in parsed_fields
+        needs_tags = parsed_fields is not None and "tags" in parsed_fields
+        include_labels = show_labels or bool(label_filters) or needs_labels
+        include_tags = show_tags or bool(tag_filters) or needs_tags
 
         ep = ctx.obj.get("entrypoint")
         scope = _resolve_scope(resource, ep)
@@ -852,10 +905,10 @@ def ls(
             include_tags=include_tags,
         )
 
-        dumper = _get_dumper(ctx.obj.get("output_format", "text"))
+        fmt = ctx.obj.get("output_format", "toon")
 
         if not hierarchy.organizations and not hierarchy.projects:
-            _handle_empty_hierarchy(dumper)
+            _handle_empty_hierarchy(fmt)
             return
 
         if target_resource_name and target_resource_name.startswith(
@@ -865,7 +918,7 @@ def ls(
 
         target_path_prefix = _resolve_target_path_prefix(target_resource_name)
 
-        items = _build_ls_items(
+        items, total = _build_ls_items(
             hierarchy,
             target_resource_name,
             target_path_prefix,
@@ -876,18 +929,24 @@ def ls(
             level,
         )
 
-        if dumper:
-            print(dumper(serialize_ls(items)))
+        if fmt == "rich":
+            _display_ls_rich(items, show_labels, show_tags)
             return
 
-        _display_ls_items(items, long, show_labels, show_tags)
+        if fmt in ("json", "yaml"):
+            dumper = _get_dumper(fmt)
+            if dumper:
+                print(dumper(serialize_ls(items)))
+            return
+
+        help_lines = _ls_help_lines(recursive, target_resource_name)
+        print(toon_ls(items, total, fields=parsed_fields, full=full, help_lines=help_lines))
 
     except Exception as e:
         handle_error(e)
 
 
 def _get_orgless_projects(hctx: _HierarchyCommandContext) -> Optional[List[Project]]:
-    """Get organizationless projects if not targeting a specific resource."""
     if hctx.target_resource_name:
         return None
     orgless = [p for p in hctx.hierarchy.projects if not p.organization]
@@ -898,7 +957,6 @@ def _tree_root_label(
     node: Union[OrganizationNode, Folder],
     is_targeted: Optional[str],
 ) -> tuple[str, str]:
-    """Build root tree label and node_id for a tree node."""
     if isinstance(node, OrganizationNode):
         safe_path = f"//{path_escape(node.organization.display_name)}"
         color = "cyan" if is_targeted else "magenta"
@@ -915,7 +973,6 @@ def _add_orgless_tree_nodes(
     show_labels: bool,
     show_tags: bool,
 ) -> None:
-    """Add organizationless projects section to tree."""
     if not orgless_projects or resource_type == "folder":
         return
     orgless_node = root_tree.add("[bold yellow](organizationless)[/bold yellow]")
@@ -946,7 +1003,6 @@ def tree(
     resource_type: Optional[str] = typer.Option(
         None, "--type", "-t", help="Filter by resource type: folder, project"
     ),
-    yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompts"),
     force_refresh: bool = typer.Option(
         False,
         "--force-refresh",
@@ -966,8 +1022,9 @@ def tree(
         None, "--tag", help="Filter by tag (key=value). Repeatable, ANDed together"
     ),
 ) -> None:
-    """
-    Display the resource hierarchy in a tree format.
+    """Display the resource hierarchy in a tree format (human-oriented).
+
+    Agents: use `gcpath ls -R` for structured output instead.
     """
     from rich.tree import Tree
 
@@ -982,7 +1039,6 @@ def tree(
             "tree",
             resource,
             level,
-            yes,
             force_refresh,
             include_labels=include_labels,
             include_tags=include_tags,
@@ -991,17 +1047,19 @@ def tree(
             return
 
         orgless_projects = _get_orgless_projects(hctx)
+        fmt = ctx.obj.get("output_format", "toon")
 
-        dumper = _get_dumper(ctx.obj.get("output_format", "text"))
-        if dumper:
-            data = serialize_tree(
-                hctx.nodes_to_process,
-                hctx.projects_by_parent,
-                level,
-                orgless_projects,
-                type_filter=resource_type,
-            )
-            print(dumper(data))
+        if fmt in ("json", "yaml"):
+            dumper = _get_dumper(fmt)
+            if dumper:
+                data = serialize_tree(
+                    hctx.nodes_to_process,
+                    hctx.projects_by_parent,
+                    level,
+                    orgless_projects,
+                    type_filter=resource_type,
+                )
+                print(dumper(data))
             return
 
         root_tree = Tree(
@@ -1039,7 +1097,8 @@ def tree(
             show_tags,
         )
 
-        console.print(root_tree)
+        from rich.console import Console
+        Console().print(root_tree)
 
     except Exception as e:
         handle_error(e)
@@ -1054,10 +1113,10 @@ def diagram(
             help="Resource name (e.g. folders/123) or path to generate diagram from."
         ),
     ] = None,
-    fmt: str = typer.Option(
+    diagram_format: str = typer.Option(
         "mermaid",
-        "--format",
-        "-f",
+        "--diagram-format",
+        "-d",
         help="Diagram output format: mermaid or d2",
     ),
     level: int = typer.Option(
@@ -1072,7 +1131,6 @@ def diagram(
     output: Optional[str] = typer.Option(
         None, "--output", "-o", help="Write diagram to a file instead of stdout"
     ),
-    yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompts"),
     force_refresh: bool = typer.Option(
         False,
         "--force-refresh",
@@ -1080,23 +1138,18 @@ def diagram(
         help=_REFRESH_HELP,
     ),
 ) -> None:
-    """
-    Generate a Mermaid or D2 diagram of the resource hierarchy.
-    """
+    """Generate a Mermaid or D2 diagram of the resource hierarchy."""
     try:
-        if fmt not in ("mermaid", "d2"):
-            rprint(
-                f"[red]Error:[/red] Unsupported format '{fmt}'. Use 'mermaid' or 'd2'."
-            )
+        if diagram_format not in ("mermaid", "d2"):
+            print(toon_error(f"Unsupported diagram format '{diagram_format}'. Use 'mermaid' or 'd2'."))
             raise typer.Exit(code=1)
 
         hctx = _prepare_hierarchy_command(
-            ctx, "diagram", resource, level, yes, force_refresh
+            ctx, "diagram", resource, level, force_refresh
         )
         if hctx is None:
             return
 
-        # Collect organizationless projects
         orgless_projects = None
         if not hctx.target_resource_name:
             orgless = [p for p in hctx.hierarchy.projects if not p.organization]
@@ -1107,7 +1160,7 @@ def diagram(
             hctx.nodes_to_process,
             hctx.hierarchy,
             hctx.projects_by_parent,
-            fmt=fmt,
+            fmt=diagram_format,
             level=level,
             show_ids=show_ids,
             orgless_projects=orgless_projects,
@@ -1116,7 +1169,11 @@ def diagram(
         if output:
             with open(output, "w", encoding="utf-8") as f:
                 f.write(diagram_output + "\n")
-            rprint(f"[green]Diagram written to {output}[/green]")
+            output_fmt = ctx.obj.get("output_format", "toon")
+            if output_fmt == "rich":
+                rprint(f"[green]Diagram written to {output}[/green]")
+            else:
+                print(toon_confirmed(f"Diagram written to {output}"))
         else:
             print(diagram_output)
 
@@ -1137,12 +1194,10 @@ def stats(
         False,
         "--force-refresh",
         "-F",
-        help="Force a refresh of the cache from the GCP API",
+        help=_REFRESH_HELP,
     ),
 ) -> None:
-    """
-    Show statistics about folders and projects in a scope.
-    """
+    """Show statistics about folders and projects in a scope."""
     try:
         ep = ctx.obj.get("entrypoint")
         effective_resource = resource or ep
@@ -1150,9 +1205,7 @@ def stats(
         target_resource_name = None
         if effective_resource:
             if effective_resource.startswith("projects/"):
-                rprint(
-                    "[red]Error:[/red] 'stats' command does not support starting from a project."
-                )
+                print(toon_error("'stats' command does not support starting from a project."))
                 raise typer.Exit(code=1)
             elif any(
                 effective_resource.startswith(p)
@@ -1160,10 +1213,9 @@ def stats(
             ):
                 target_resource_name = effective_resource
             else:
-                rprint(
-                    f"[red]Error:[/red] Invalid resource format '{escape(effective_resource)}'. "
-                    f"Expected 'organizations/...' or 'folders/...'."
-                )
+                print(toon_error(
+                    f"Invalid resource format '{effective_resource}'. Expected 'organizations/...' or 'folders/...'."
+                ))
                 raise typer.Exit(code=1)
 
         hierarchy = _load_hierarchy(
@@ -1175,22 +1227,50 @@ def stats(
 
         folder_count = len(hierarchy.folders)
         project_count = len(hierarchy.projects)
-
         scope_label = target_resource_name or "all organizations"
-        rprint(f"[bold]Scope:[/bold] {escape(scope_label)}")
 
-        table = Table(show_header=False, box=None, padding=(0, 1))
-        table.add_column("Resource", style="bold")
-        table.add_column("Count", justify="right")
+        fmt = ctx.obj.get("output_format", "toon")
 
-        if not target_resource_name or target_resource_name.startswith(
-            _RESOURCE_PREFIX_ORGS
-        ):
-            table.add_row("Organizations", str(len(hierarchy.organizations)))
-        table.add_row("Folders", str(folder_count))
-        table.add_row("Projects", str(project_count))
+        if fmt == "rich":
+            from rich.table import Table
+            from rich.console import Console
+            from rich.markup import escape
+            console = Console()
+            rprint(f"[bold]Scope:[/bold] {escape(scope_label)}")
+            table = Table(show_header=False, box=None, padding=(0, 1))
+            table.add_column("Resource", style="bold")
+            table.add_column("Count", justify="right")
+            if not target_resource_name or target_resource_name.startswith(
+                _RESOURCE_PREFIX_ORGS
+            ):
+                table.add_row("Organizations", str(len(hierarchy.organizations)))
+            table.add_row("Folders", str(folder_count))
+            table.add_row("Projects", str(project_count))
+            console.print(table)
+            return
 
-        console.print(table)
+        if fmt in ("json", "yaml"):
+            dumper = _get_dumper(fmt)
+            data = {
+                "scope": scope_label,
+                "organizations": len(hierarchy.organizations),
+                "folders": folder_count,
+                "projects": project_count,
+            }
+            if dumper:
+                print(dumper(data))
+            return
+
+        help_lines = []
+        if target_resource_name:
+            help_lines.append("Run `gcpath stats` for all-organization statistics")
+        print(toon_stats(
+            scope=scope_label,
+            organizations=len(hierarchy.organizations),
+            folders=folder_count,
+            projects=project_count,
+            help_lines=help_lines if help_lines else None,
+        ))
 
     except Exception as e:
         handle_error(e)
@@ -1212,9 +1292,7 @@ def get_resource_name(
         help=_REFRESH_HELP,
     ),
 ) -> None:
-    """
-    Get Google Cloud Platform resource name by path.
-    """
+    """Get Google Cloud Platform resource name by path."""
     try:
         ep = ctx.obj.get("entrypoint")
         scope = ep if ep else None
@@ -1228,7 +1306,7 @@ def get_resource_name(
 
         logger.debug("name: hierarchy loaded successfully")
 
-        dumper = _get_dumper(ctx.obj.get("output_format", "text"))
+        fmt = ctx.obj.get("output_format", "toon")
         results: List[tuple[str, str]] = []
         for path in paths:
             logger.debug(f"name command: resolving path {path}")
@@ -1236,13 +1314,20 @@ def get_resource_name(
             logger.debug(f"name command: resolved {path} to {res_name}")
             results.append((path, res_name))
 
-        if dumper:
-            print(dumper(serialize_name_results(results, id_only)))
-        else:
+        if fmt in ("json", "yaml"):
+            dumper = _get_dumper(fmt)
+            if dumper:
+                print(dumper(serialize_name_results(results, id_only)))
+            return
+
+        if fmt == "rich":
             for _path, res_name in results:
                 if id_only:
                     res_name = res_name.split("/")[-1]
                 print(res_name)
+            return
+
+        print(toon_name(results, id_only))
 
     except Exception as e:
         handle_error(e)
@@ -1255,31 +1340,35 @@ def get_path_command(
         List[str], typer.Argument(help="Resource names to resolve, e.g. folders/123")
     ],
 ) -> None:
-    """
-    Get path of a resource name.
-    """
+    """Get path of a resource name."""
     try:
         logger.debug(f"path: resolving resource_names={resource_names}")
-        dumper = _get_dumper(ctx.obj.get("output_format", "text"))
+        fmt = ctx.obj.get("output_format", "toon")
         results: List[tuple[str, str]] = []
 
         for name in resource_names:
             try:
-                # Use optimized recursive lookup instead of full hierarchy load
                 p = Hierarchy.resolve_ancestry(name)
                 logger.debug(f"path: resolved {name} to {p}")
                 results.append((name, p))
             except Exception as e:
                 if len(resource_names) > 1:
-                    error_console.print(f"[red]Error resolving {name}: {e}[/red]")
+                    print(toon_error(f"Error resolving {name}: {e}"))
                 else:
-                    raise e
+                    raise
 
-        if dumper:
-            print(dumper(serialize_path_results(results)))
-        else:
+        if fmt in ("json", "yaml"):
+            dumper = _get_dumper(fmt)
+            if dumper:
+                print(dumper(serialize_path_results(results)))
+            return
+
+        if fmt == "rich":
             for _name, resolved_path in results:
                 print(resolved_path)
+            return
+
+        print(toon_path(results))
 
     except Exception as e:
         handle_error(e)
@@ -1288,14 +1377,12 @@ def get_path_command(
 def _get_resource_display_name(
     item: Union[OrganizationNode, Folder, Project],
 ) -> str:
-    """Get display name for any resource type."""
     if isinstance(item, OrganizationNode):
         return item.organization.display_name
     return item.display_name
 
 
 def _get_resource_path(item: Union[OrganizationNode, Folder, Project]) -> str:
-    """Get display path for any resource type."""
     if isinstance(item, OrganizationNode):
         return f"//{path_escape(item.organization.display_name)}"
     return item.path
@@ -1306,10 +1393,8 @@ def _search_hierarchy(
     pattern: str,
     type_filter: Optional[str],
 ) -> List[tuple[str, Union[OrganizationNode, Folder, Project]]]:
-    """Search hierarchy resources by display name pattern and optional type filter."""
     lower_pattern = pattern.lower()
 
-    # Build flat list of (resource, type_name) to search
     candidates: List[Union[OrganizationNode, Folder, Project]] = []
     if not type_filter or type_filter == "organization":
         candidates.extend(hierarchy.organizations)
@@ -1350,15 +1435,22 @@ def find(
     tag_filters: Optional[List[str]] = typer.Option(
         None, "--tag", help="Filter by tag (key=value). Repeatable, ANDed together"
     ),
+    fields: Optional[str] = typer.Option(
+        None, "--fields", help=f"Comma-separated fields to show: {', '.join(_ALL_LS_FIELDS)}"
+    ),
+    full: bool = typer.Option(
+        False, "--full", help="Show all labels/tags without truncation"
+    ),
 ) -> None:
-    """
-    Search for resources by display name pattern (glob syntax).
-    """
+    """Search for resources by display name pattern (glob syntax)."""
     try:
         _validate_type_filter(resource_type)
 
-        include_labels = bool(label_filters)
-        include_tags = bool(tag_filters)
+        parsed_fields = _parse_fields(fields)
+        needs_labels = parsed_fields is not None and "labels" in parsed_fields
+        needs_tags = parsed_fields is not None and "tags" in parsed_fields
+        include_labels = bool(label_filters) or needs_labels
+        include_tags = bool(tag_filters) or needs_tags
 
         ep = ctx.obj.get("entrypoint")
         scope = _resolve_scope(resource, ep)
@@ -1373,9 +1465,10 @@ def find(
             include_tags=include_tags,
         )
 
-        items = sort_resources(_search_hierarchy(hierarchy, pattern, resource_type))
+        all_matches = sort_resources(_search_hierarchy(hierarchy, pattern, resource_type))
+        total_searched = len(all_matches)
 
-        # Apply label/tag filters
+        items = all_matches
         if label_filters:
             items = [
                 (p, obj)
@@ -1389,17 +1482,27 @@ def find(
                 if _matches_metadata(obj, tag_filters, "tags")
             ]
 
-        dumper = _get_dumper(ctx.obj.get("output_format", "text"))
-        if dumper:
-            print(dumper(serialize_ls(items)))
+        fmt = ctx.obj.get("output_format", "toon")
+
+        if fmt in ("json", "yaml"):
+            dumper = _get_dumper(fmt)
+            if dumper:
+                print(dumper(serialize_ls(items)))
             return
 
-        if not items:
-            rprint(f"[yellow]No resources matching '{pattern}' found.[/yellow]")
+        if fmt == "rich":
+            if not items:
+                rprint(f"[yellow]No resources matching '{pattern}' found.[/yellow]")
+                return
+            _display_ls_rich(items, show_labels=False, show_tags=False)
             return
 
-        for path, _ in items:
-            print(path)
+        help_lines = (
+            ["Run `gcpath ls <path>` for details on a resource"]
+            if items
+            else None
+        )
+        print(toon_find(items, pattern, total_searched=total_searched, fields=parsed_fields, full=full, help_lines=help_lines))
 
     except Exception as e:
         handle_error(e)
@@ -1412,38 +1515,114 @@ def ancestors(
         str, typer.Argument(help="Resource name (e.g., folders/123, projects/my-proj)")
     ],
 ) -> None:
-    """
-    Show the full ancestry chain from a resource up to the org root.
-    """
+    """Show the full ancestry chain from a resource up to the org root."""
     try:
         if not any(resource_name.startswith(p) for p in _RESOURCE_PREFIXES):
-            error_console.print(
-                f"[red]Error:[/red] Invalid resource format '{resource_name}'. "
-                f"Expected 'organizations/...', 'folders/...', or 'projects/...'."
-            )
+            print(toon_error(
+                f"Invalid resource format '{resource_name}'. Expected 'organizations/...', 'folders/...', or 'projects/...'."
+            ))
             raise typer.Exit(code=1)
 
         chain = Hierarchy.resolve_ancestry_chain(resource_name)
 
-        dumper = _get_dumper(ctx.obj.get("output_format", "text"))
-        if dumper:
-            print(dumper(serialize_ancestors(chain)))
+        fmt = ctx.obj.get("output_format", "toon")
+
+        if fmt in ("json", "yaml"):
+            dumper = _get_dumper(fmt)
+            if dumper:
+                print(dumper(serialize_ancestors(chain)))
             return
 
-        table = Table(
-            show_header=True, header_style="bold magenta", box=None, padding=(0, 1)
-        )
-        table.add_column("Resource Name", overflow="fold")
-        table.add_column("Display Name", overflow="fold")
-        table.add_column("Type", overflow="fold")
+        if fmt == "rich":
+            from rich.table import Table
+            from rich.console import Console
+            console = Console()
+            table = Table(
+                show_header=True, header_style="bold magenta", box=None, padding=(0, 1)
+            )
+            table.add_column("Resource Name", overflow="fold")
+            table.add_column("Display Name", overflow="fold")
+            table.add_column("Type", overflow="fold")
+            for name, display_name, rtype in chain:
+                table.add_row(name, display_name, rtype)
+            console.print(table)
+            return
 
-        for name, display_name, rtype in chain:
-            table.add_row(name, display_name, rtype)
-
-        console.print(table)
+        print(toon_ancestors(
+            chain,
+            help_lines=["Run `gcpath ls <resource>` to list children"],
+        ))
 
     except Exception as e:
         handle_error(e)
+
+
+@hook_app.command("install")
+def hook_install(ctx: typer.Context) -> None:
+    """Self-install session hooks for Claude Code and Codex (idempotent)."""
+    fmt = ctx.obj.get("output_format", "toon")
+    results = install_hooks()
+
+    if fmt == "rich":
+        for target, changed in results.items():
+            if changed:
+                rprint(f"[green]Installed hook for {target}[/green]")
+            else:
+                rprint(f"[dim]Hook already installed for {target}[/dim]")
+        return
+
+    print(toon_confirmed(
+        "Hooks installed: "
+        + ", ".join(f"{t}={'updated' if c else 'already installed'}" for t, c in results.items())
+    ))
+
+
+@hook_app.command("uninstall")
+def hook_uninstall(ctx: typer.Context) -> None:
+    """Remove session hooks from Claude Code and Codex."""
+    fmt = ctx.obj.get("output_format", "toon")
+    results = uninstall_hooks()
+
+    if fmt == "rich":
+        for target, changed in results.items():
+            if changed:
+                rprint(f"[green]Removed hook from {target}[/green]")
+            else:
+                rprint(f"[dim]No hook found for {target}[/dim]")
+        return
+
+    print(toon_confirmed(
+        "Hooks uninstalled: "
+        + ", ".join(f"{t}={'removed' if c else 'not found'}" for t, c in results.items())
+    ))
+
+
+@hook_app.command("run")
+def hook_run() -> None:
+    """Output session-start dashboard (called by hooks)."""
+    print(run_session_start())
+
+
+@hook_app.command("status")
+def hook_status(ctx: typer.Context) -> None:
+    """Show hook installation status."""
+    fmt = ctx.obj.get("output_format", "toon")
+    status = get_hook_status()
+
+    if fmt == "rich":
+        for target, info in status.items():
+            installed = info["installed"]
+            path_ok = info["path_ok"]
+            loc = info["location"]
+            if installed and path_ok:
+                rprint(f"[green]{target}[/green]: installed ({loc})")
+            elif installed and not path_ok:
+                rprint(f"[yellow]{target}[/yellow]: installed (path needs repair) ({loc})")
+            else:
+                rprint(f"[dim]{target}[/dim]: not installed ({loc})")
+        return
+
+    print(toon_encode(status))
 
 
 def run() -> None:
