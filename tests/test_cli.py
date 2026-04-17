@@ -1056,3 +1056,198 @@ def test_toon_path_single(mock_resolve):
     assert result.exit_code == 0
     assert "path:" in result.stdout
     assert "//example.com/f1" in result.stdout
+
+
+# --- Coverage for new features ---
+
+
+def test_invalid_format_flag():
+    result = runner.invoke(app, ["--format", "invalid", "ls"])
+    assert result.exit_code == 1
+    assert "Invalid format" in result.stdout
+
+
+@patch("gcpath.cli.get_cache_info")
+@patch("gcpath.cli.read_cache_raw")
+def test_home_view_with_fresh_cache(mock_raw, mock_info):
+    mock_info.return_value = MagicMock(
+        exists=True, fresh=True, age_seconds=120.0,
+        size_bytes=1024, version=1, org_count=1, folder_count=5, project_count=10,
+    )
+    mock_raw.return_value = {
+        "organizations": [
+            {
+                "organization": {"display_name": "example.com"},
+                "folders": {"folders/1": {}, "folders/2": {}},
+                "projects": [{}],
+            }
+        ]
+    }
+    result = runner.invoke(app, [])
+    assert result.exit_code == 0
+    assert "description:" in result.stdout
+    assert "cache:" in result.stdout
+
+
+@patch("gcpath.cli.install_hooks", return_value={"claude": True, "codex": False})
+def test_hook_install(mock_install):
+    result = runner.invoke(app, ["hook", "install"])
+    assert result.exit_code == 0
+    mock_install.assert_called_once()
+    assert "installed" in result.stdout
+
+
+@patch("gcpath.cli.install_hooks", return_value={"claude": True})
+def test_hook_install_rich(mock_install):
+    result = runner.invoke(app, ["--format", "rich", "hook", "install"])
+    assert result.exit_code == 0
+    mock_install.assert_called_once()
+
+
+@patch("gcpath.cli.uninstall_hooks", return_value={"claude": True, "codex": False})
+def test_hook_uninstall(mock_uninstall):
+    result = runner.invoke(app, ["hook", "uninstall"])
+    assert result.exit_code == 0
+    mock_uninstall.assert_called_once()
+    assert "uninstalled" in result.stdout
+
+
+@patch("gcpath.cli.uninstall_hooks", return_value={"claude": False})
+def test_hook_uninstall_rich(mock_uninstall):
+    result = runner.invoke(app, ["--format", "rich", "hook", "uninstall"])
+    assert result.exit_code == 0
+    mock_uninstall.assert_called_once()
+
+
+@patch("gcpath.cli.run_session_start", return_value="session dashboard output")
+def test_hook_run(mock_run):
+    result = runner.invoke(app, ["hook", "run"])
+    assert result.exit_code == 0
+    mock_run.assert_called_once()
+    assert "session dashboard output" in result.stdout
+
+
+@patch("gcpath.cli.get_hook_status", return_value={
+    "claude": {"installed": True, "path_ok": True, "location": "/tmp/claude"},
+    "codex": {"installed": False, "path_ok": False, "location": "/tmp/codex"},
+})
+def test_hook_status_rich(mock_status):
+    result = runner.invoke(app, ["--format", "rich", "hook", "status"])
+    assert result.exit_code == 0
+    mock_status.assert_called_once()
+
+
+@patch("gcpath.cli.get_hook_status", return_value={
+    "claude": {"installed": True, "path_ok": False, "location": "/tmp/claude"},
+})
+def test_hook_status_path_not_ok(mock_status):
+    result = runner.invoke(app, ["--format", "rich", "hook", "status"])
+    assert result.exit_code == 0
+
+
+@patch("gcpath.cli.clear_cache", return_value=True)
+def test_cache_clear_rich(mock_clear):
+    result = runner.invoke(app, ["--format", "rich", "cache", "clear"])
+    assert result.exit_code == 0
+    mock_clear.assert_called_once()
+
+
+@patch("gcpath.cli.clear_cache", return_value=False)
+def test_cache_clear_no_file(mock_clear):
+    result = runner.invoke(app, ["cache", "clear"])
+    assert result.exit_code == 0
+
+
+@patch("gcpath.cli.clear_cache", return_value=False)
+def test_cache_clear_no_file_rich(mock_clear):
+    result = runner.invoke(app, ["--format", "rich", "cache", "clear"])
+    assert result.exit_code == 0
+
+
+@patch("gcpath.cli.get_cache_info")
+def test_cache_status_rich(mock_info):
+    mock_info.return_value = CacheInfo(
+        exists=True, fresh=True, age_seconds=60.0, size_bytes=4096,
+        version=1, org_count=1, folder_count=3, project_count=5,
+    )
+    result = runner.invoke(app, ["--format", "rich", "cache", "status"])
+    assert result.exit_code == 0
+
+
+@patch("gcpath.cli.get_cache_info")
+def test_cache_status_rich_no_cache(mock_info):
+    mock_info.return_value = CacheInfo(
+        exists=False, fresh=False, age_seconds=None, size_bytes=None,
+        version=None, org_count=0, folder_count=0, project_count=0,
+    )
+    result = runner.invoke(app, ["--format", "rich", "cache", "status"])
+    assert result.exit_code == 0
+
+
+@patch("gcpath.cli.read_config", return_value={"entrypoint": "folders/123"})
+def test_config_show_rich(mock_read):
+    result = runner.invoke(app, ["--format", "rich", "config", "show"])
+    assert result.exit_code == 0
+    mock_read.assert_called_once()
+
+
+@patch("gcpath.cli.read_config", return_value={})
+def test_config_show_empty_rich(mock_read):
+    result = runner.invoke(app, ["--format", "rich", "config", "show"])
+    assert result.exit_code == 0
+
+
+@patch("gcpath.cli.clear_entrypoint")
+def test_config_clear_entrypoint_rich(mock_clear):
+    result = runner.invoke(app, ["--format", "rich", "config", "clear-entrypoint"])
+    assert result.exit_code == 0
+    mock_clear.assert_called_once()
+
+
+@patch("gcpath.cli.set_entrypoint")
+def test_config_set_entrypoint_rich(mock_set):
+    result = runner.invoke(app, ["--format", "rich", "config", "set-entrypoint", "folders/123"])
+    assert result.exit_code == 0
+    mock_set.assert_called_once_with("folders/123")
+
+
+@patch("gcpath.cli.set_entrypoint", side_effect=ValueError("bad"))
+def test_config_set_entrypoint_invalid_rich(mock_set):
+    result = runner.invoke(app, ["--format", "rich", "config", "set-entrypoint", "invalid"])
+    assert result.exit_code == 1
+
+
+@patch("gcpath.core.Hierarchy.resolve_ancestry_chain")
+def test_ancestors_rich(mock_chain):
+    mock_chain.return_value = [
+        ("organizations/123", "example.com", "organization"),
+        ("folders/456", "eng", "folder"),
+    ]
+    result = runner.invoke(app, ["--format", "rich", "ancestors", "folders/456"])
+    assert result.exit_code == 0
+    mock_chain.assert_called_once()
+
+
+@patch("gcpath.core.Hierarchy.resolve_ancestry_chain")
+def test_ancestors_yaml(mock_chain):
+    mock_chain.return_value = [
+        ("organizations/123", "example.com", "organization"),
+    ]
+    result = runner.invoke(app, ["--format", "yaml", "ancestors", "organizations/123"])
+    assert result.exit_code == 0
+    data = yaml.safe_load(result.stdout)
+    assert data[0]["resource_name"] == "organizations/123"
+
+
+@patch("gcpath.core.Hierarchy.load")
+def test_ls_rich_format(mock_load, mock_hierarchy):
+    mock_load.return_value = mock_hierarchy
+    result = runner.invoke(app, ["--format", "rich", "ls"])
+    assert result.exit_code == 0
+
+
+@patch("gcpath.core.Hierarchy.load")
+def test_find_rich_format(mock_load, mock_hierarchy):
+    mock_load.return_value = mock_hierarchy
+    result = runner.invoke(app, ["--format", "rich", "find", "f*"])
+    assert result.exit_code == 0
