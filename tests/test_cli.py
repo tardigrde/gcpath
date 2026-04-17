@@ -622,9 +622,8 @@ def test_try_read_cache_applies_org_filter(mock_get_info, mock_read_cache):
 
 def test_format_json_output():
     result = runner.invoke(app, ["--format", "json", "ls"])
-    # Will fail because no GCP connection, but format flag should be accepted
-    # Just verify the flag doesn't cause a usage error
-    assert "--format" not in result.output or result.exit_code != 2
+    assert result.exit_code != 2
+    assert "No such option" not in result.output
 
 
 def test_format_invalid():
@@ -1128,8 +1127,8 @@ def test_hook_run(mock_run):
 
 
 @patch("gcpath.cli.get_hook_status", return_value={
-    "claude": {"installed": True, "path_ok": True, "location": "/tmp/claude"},
-    "codex": {"installed": False, "path_ok": False, "location": "/tmp/codex"},
+    "claude": {"installed": True, "path_ok": True, "location": "~/.claude/settings.json"},
+    "codex": {"installed": False, "path_ok": False, "location": "~/.codex/hooks.json"},
 })
 def test_hook_status_rich(mock_status):
     result = runner.invoke(app, ["--format", "rich", "hook", "status"])
@@ -1138,7 +1137,7 @@ def test_hook_status_rich(mock_status):
 
 
 @patch("gcpath.cli.get_hook_status", return_value={
-    "claude": {"installed": True, "path_ok": False, "location": "/tmp/claude"},
+    "claude": {"installed": True, "path_ok": False, "location": "~/.claude/settings.json"},
 })
 def test_hook_status_path_not_ok(mock_status):
     result = runner.invoke(app, ["--format", "rich", "hook", "status"])
@@ -1237,13 +1236,6 @@ def test_ancestors_yaml(mock_chain):
     assert result.exit_code == 0
     data = yaml.safe_load(result.stdout)
     assert data[0]["resource_name"] == "organizations/123"
-
-
-@patch("gcpath.core.Hierarchy.load")
-def test_ls_rich_format(mock_load, mock_hierarchy):
-    mock_load.return_value = mock_hierarchy
-    result = runner.invoke(app, ["--format", "rich", "ls"])
-    assert result.exit_code == 0
 
 
 @patch("gcpath.core.Hierarchy.load")

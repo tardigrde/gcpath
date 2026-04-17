@@ -6,6 +6,7 @@ session-start hooks into Claude Code and Codex configurations.
 
 import json
 import logging
+import os
 import shutil
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -27,21 +28,33 @@ def _get_hook_command() -> str:
     return f"{bin_path} hook run"
 
 
+def _is_managed_hook(command: str) -> bool:
+    return command.strip().endswith(_GCPATH_HOOK_COMMAND)
+
+
 def _read_json(path: Path) -> Optional[Dict[str, Any]]:
     if not path.exists():
         return None
     try:
         with open(path, "r") as f:
-            return json.load(f)
+            loaded = json.load(f)
     except (json.JSONDecodeError, OSError) as e:
         logger.warning(f"Could not read {path}: {e}")
         return None
+    if not isinstance(loaded, dict):
+        logger.warning(f"Unexpected JSON shape in {path}: {type(loaded).__name__}")
+        return None
+    return loaded
 
 
 def _write_json(path: Path, data: Dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w") as f:
+    tmp_path = path.with_suffix(f"{path.suffix}.tmp")
+    with open(tmp_path, "w") as f:
         json.dump(data, f, indent=2)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp_path, path)
 
 
 def _install_claude_code(command: str) -> bool:
@@ -56,7 +69,7 @@ def _install_claude_code(command: str) -> bool:
         hooks["SessionStart"] = []
 
     for entry in hooks["SessionStart"]:
-        if isinstance(entry, dict) and entry.get("command", "").endswith(_GCPATH_HOOK_COMMAND):
+        if isinstance(entry, dict) and _is_managed_hook(entry.get("command", "")):
             if entry.get("command") == command:
                 return False
             entry["command"] = command
@@ -84,7 +97,7 @@ def _uninstall_claude_code() -> bool:
     original_len = len(hooks["SessionStart"])
     hooks["SessionStart"] = [
         entry for entry in hooks["SessionStart"]
-        if not (isinstance(entry, dict) and _GCPATH_HOOK_COMMAND in entry.get("command", ""))
+        if not (isinstance(entry, dict) and _is_managed_hook(entry.get("command", "")))
     ]
 
     if len(hooks["SessionStart"]) == original_len:
@@ -107,7 +120,7 @@ def _install_codex(command: str) -> bool:
         data["SessionStart"] = []
 
     for entry in data["SessionStart"]:
-        if isinstance(entry, dict) and entry.get("command", "").endswith(_GCPATH_HOOK_COMMAND):
+        if isinstance(entry, dict) and _is_managed_hook(entry.get("command", "")):
             if entry.get("command") == command:
                 return False
             entry["command"] = command
@@ -128,7 +141,7 @@ def _uninstall_codex() -> bool:
     original_len = len(data["SessionStart"])
     data["SessionStart"] = [
         entry for entry in data["SessionStart"]
-        if not (isinstance(entry, dict) and _GCPATH_HOOK_COMMAND in entry.get("command", ""))
+        if not (isinstance(entry, dict) and _is_managed_hook(entry.get("command", "")))
     ]
 
     if len(data["SessionStart"]) == original_len:
@@ -182,7 +195,7 @@ def repair_hooks() -> Dict[str, bool]:
 def _check_hook_entries(entries: list, command: str) -> tuple:
     """Check if gcpath hook is installed in a list of hook entries."""
     for entry in entries:
-        if isinstance(entry, dict) and _GCPATH_HOOK_COMMAND in entry.get("command", ""):
+        if isinstance(entry, dict) and _is_managed_hook(entry.get("command", "")):
             return True, entry.get("command") == command
     return False, False
 
@@ -232,7 +245,7 @@ def run_session_start() -> str:
             ],
         })
 
-    age_str = format_age(info.age_seconds) if info.age_seconds else "unknown"
+    age_str = format_age(info.age_seconds) if info.age_seconds is not None else "unknown"
 
     org_rows = []
     raw_data = read_cache_raw()

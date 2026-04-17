@@ -123,7 +123,11 @@ def toon_ls(
     help_lines: Optional[List[str]] = None,
 ) -> str:
     if not items:
-        return toon_empty("resources", "", help_lines)
+        empty_data: Dict[str, Any] = {
+            "count": f"0 of {total_in_scope} total",
+            "resources": [],
+        }
+        return with_help(toon_encode(empty_data), help_lines)
 
     effective_fields = tuple(fields) if fields else _default_fields_for_items(items)
     rows = [

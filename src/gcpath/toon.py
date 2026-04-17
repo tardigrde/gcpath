@@ -6,12 +6,16 @@ Thin wrapper around toon_format.encode() plus gcpath-specific AXI conventions:
 - Structured errors and definitive empty states
 """
 
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Callable, Dict, List, Optional, Sequence
 
-from toon_format import encode as _toon_encode
+import toon_format
 
-# Ensure toon_format provides the expected API
-assert callable(_toon_encode), "toon_format missing encode — check dependency version"
+from gcpath.core import GCPathError
+
+_maybe_encode = getattr(toon_format, "encode", None)
+if not callable(_maybe_encode):
+    raise GCPathError("toon_format is missing encode(); check the pinned dependency")
+_toon_encode: Callable[[Any], str] = _maybe_encode
 
 
 def toon_encode(data: Any) -> str:

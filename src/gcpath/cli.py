@@ -563,7 +563,7 @@ def _parse_resource_arg(effective_resource: str, command_name: str) -> _ParsedRe
             (_RESOURCE_PREFIX_FOLDERS, _RESOURCE_PREFIX_ORGS)
         ):
             target_resource_name = effective_resource
-    except Exception:
+    except (gcp_exceptions.PermissionDenied, gcp_exceptions.NotFound, GCPathError):
         if effective_resource.startswith("//"):
             target_path = effective_resource
         else:

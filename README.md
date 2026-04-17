@@ -103,8 +103,8 @@ gcpath diagram
 gcpath diagram folders/123456789 --format d2
 
 # Machine-readable output
-gcpath --json ls -R
-gcpath --yaml tree -L 2
+gcpath --format json ls -R
+gcpath --format yaml tree -L 2
 ```
 
 ## Usage
@@ -260,7 +260,7 @@ gcpath ancestors projects/my-project
 gcpath ancestors folders/123456789
 
 # JSON output for scripting
-gcpath --json ancestors projects/my-project
+gcpath --format json ancestors projects/my-project
 ```
 
 ### Output Formats (`--format`)
@@ -287,8 +287,6 @@ gcpath --format rich ls -R
 # YAML output
 gcpath --format yaml ancestors projects/my-project
 ```
-
-The `--json` and `--yaml` flags are shorthand for `--format json` and `--format yaml`.
 
 ## API Modes
 
