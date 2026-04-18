@@ -698,7 +698,7 @@ def _resolve_target_path_prefix(target_resource_name: Optional[str]) -> str:
         return ""
     try:
         return _clean_resolve_path(Hierarchy.resolve_ancestry(target_resource_name))
-    except Exception as e:
+    except (GCPathError, gcp_exceptions.GoogleAPICallError) as e:
         logger.warning(f"Could not resolve target path: {e}")
         return ""
 
