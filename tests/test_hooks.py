@@ -227,5 +227,5 @@ class TestRunSessionStart:
         ):
             output = run_session_start()
             assert "fresh" in output
-            assert "example.com" in output
+            assert "example.com" in output  # lgtm[py/incomplete-url-substring-sanitization]
             assert "help" in output
