@@ -1,5 +1,5 @@
 import json
-from urllib.parse import urlparse
+
 
 import pytest
 import yaml
@@ -752,11 +752,7 @@ def test_ls_type_organization(mock_load, mock_hierarchy):
     mock_load.return_value = mock_hierarchy
     result = runner.invoke(app, ["ls", "--type", "organization"])
     assert result.exit_code == 0
-    assert any(
-        urlparse(line.strip()).hostname == "example.com"
-        for line in result.stdout.splitlines()
-        if line.strip()
-    )
+    assert "//example.com" in result.stdout
 
 
 def test_ls_type_invalid():
