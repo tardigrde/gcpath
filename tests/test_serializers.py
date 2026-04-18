@@ -365,7 +365,7 @@ class TestToonAncestors:
         ]
         output = toon_ancestors(chain)
         assert "organizations/123" in output
-        assert "example.com" in output  # lgtm[py/incomplete-url-substring-sanitization]
+        assert "example.com" in output
         assert "folder" in output
 
 

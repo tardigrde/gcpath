@@ -751,7 +751,7 @@ def test_ls_type_organization(mock_load, mock_hierarchy):
     mock_load.return_value = mock_hierarchy
     result = runner.invoke(app, ["ls", "--type", "organization"])
     assert result.exit_code == 0
-    assert "//example.com" in result.stdout  # lgtm[py/incomplete-url-substring-sanitization]
+    assert "//example.com" in result.stdout
 
 
 def test_ls_type_invalid():
@@ -873,7 +873,7 @@ def test_ancestors_command(mock_chain):
     result = runner.invoke(app, ["ancestors", "projects/p1"])
     assert result.exit_code == 0
     assert "organizations/123" in result.stdout
-    assert "example.com" in result.stdout  # lgtm[py/incomplete-url-substring-sanitization]
+    assert "example.com" in result.stdout
     assert "folders/456" in result.stdout
 
 
