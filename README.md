@@ -1,5 +1,12 @@
 # gcpath
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Python](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/)
+[![AXI Compliant](https://img.shields.io/badge/AXI-compliant-green.svg)](https://axi.md/)
+[![PyPI](https://img.shields.io/pypi/v/gcpath.svg)](https://pypi.org/project/gcpath/)
+[![CI](https://github.com/tardigrde/gcpath/actions/workflows/ci.yml/badge.svg)](https://github.com/tardigrde/gcpath/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/tardigrde/gcpath/branch/main/graph/badge.svg)](https://codecov.io/gh/tardigrde/gcpath)
+
 `gcpath` is an agent-native, read-only CLI for querying Google Cloud Platform resource hierarchy paths. It translates between GCP resource names (e.g., `folders/12345`) and human-readable paths (e.g., `//example.com/department/team`).
 
 ## Why gcpath?

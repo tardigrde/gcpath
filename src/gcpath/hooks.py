@@ -32,6 +32,16 @@ def _is_managed_hook(command: str) -> bool:
     return command.strip().endswith(_GCPATH_HOOK_COMMAND)
 
 
+def _get_claude_entry_command(entry: Dict[str, Any]) -> str:
+    """Extract command from a Claude Code SessionStart hook entry (new or legacy format)."""
+    # New format: {"matcher": ..., "hooks": [{"type": "command", "command": ...}]}
+    nested = entry.get("hooks")
+    if isinstance(nested, list) and nested:
+        return nested[0].get("command", "")
+    # Legacy flat format: {"command": ...}
+    return entry.get("command", "")
+
+
 def _read_json(path: Path) -> Optional[Dict[str, Any]]:
     if not path.exists():
         return None
@@ -69,16 +79,23 @@ def _install_claude_code(command: str) -> bool:
         hooks["SessionStart"] = []
 
     for entry in hooks["SessionStart"]:
-        if isinstance(entry, dict) and _is_managed_hook(entry.get("command", "")):
-            if entry.get("command") == command:
+        if isinstance(entry, dict) and _is_managed_hook(_get_claude_entry_command(entry)):
+            if _get_claude_entry_command(entry) == command:
                 return False
-            entry["command"] = command
+            # Update command in-place (new format preferred)
+            nested = entry.get("hooks")
+            if isinstance(nested, list) and nested:
+                nested[0]["command"] = command
+            else:
+                entry["hooks"] = [{"type": "command", "command": command, "timeout": 10000}]
+                entry.pop("command", None)
+                entry.setdefault("matcher", "")
             _write_json(_CLAUDE_SETTINGS_PATH, data)
             return True
 
     hooks["SessionStart"].append({
-        "command": command,
-        "timeout": 10000,
+        "matcher": "",
+        "hooks": [{"type": "command", "command": command, "timeout": 10000}],
     })
     _write_json(_CLAUDE_SETTINGS_PATH, data)
     return True
@@ -97,7 +114,7 @@ def _uninstall_claude_code() -> bool:
     original_len = len(hooks["SessionStart"])
     hooks["SessionStart"] = [
         entry for entry in hooks["SessionStart"]
-        if not (isinstance(entry, dict) and _is_managed_hook(entry.get("command", "")))
+        if not (isinstance(entry, dict) and _is_managed_hook(_get_claude_entry_command(entry)))
     ]
 
     if len(hooks["SessionStart"]) == original_len:
@@ -195,8 +212,8 @@ def repair_hooks() -> Dict[str, bool]:
 def _check_hook_entries(entries: list, command: str) -> tuple:
     """Check if gcpath hook is installed in a list of hook entries."""
     for entry in entries:
-        if isinstance(entry, dict) and _is_managed_hook(entry.get("command", "")):
-            return True, entry.get("command") == command
+        if isinstance(entry, dict) and _is_managed_hook(_get_claude_entry_command(entry)):
+            return True, _get_claude_entry_command(entry) == command
     return False, False
 
 
