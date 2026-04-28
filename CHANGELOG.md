@@ -1,6 +1,179 @@
 # CHANGELOG
 
 
+## v0.11.0 (2026-04-28)
+
+### Bug Fixes
+
+- Address PR review comments and CI failures
+  ([`1d733c9`](https://github.com/tardigrde/gcpath/commit/1d733c93c16e562d7cbbd381d0f4cc2e5c6bed20))
+
+- Remove duplicate test_ls_rich_format (ruff F811 CI blocker) - Tighten test_format_json_output
+  assertion to check exit_code and option parsing - Replace import-time assert in toon.py with
+  GCPathError for deterministic check - Keep count header in empty toon_ls output for schema
+  consistency - Make _write_json atomic via tmp-file + os.replace - Validate JSON root type is dict
+  in _read_json - Centralize managed hook matching with _is_managed_hook helper - Handle 0.0 cache
+  age as fresh data (is not None check) - Narrow broad Exception catch in _parse_resource_arg to
+  GCP/GCPath errors - Replace /tmp paths in hook status mock data with user config paths - Update
+  README to drop non-existent --json/--yaml shorthand docs - Add minimal contents:read permission to
+  CI workflow
+
+Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
+
+- Address PR review comments and SonarCloud hotspots
+  ([`070529c`](https://github.com/tardigrde/gcpath/commit/070529c847b19aacd95f543498ea77b50783c8e4))
+
+- Restore docstring on _resolve_scope in cli.py - Narrow except Exception to specific GCP/gcpath
+  exceptions in path command - Fix return type hint on _truncate_metadata (Any -> Dict[str, str]) -
+  Add docstring on serialize_resource - Replace /tmp paths in test_serializers.py to resolve
+  SonarCloud S5443
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+
+- Narrow broad exception catch and remove conflicting CodeQL workflow
+  ([`aae603b`](https://github.com/tardigrde/gcpath/commit/aae603b1c169031e23dc942d0e7db36485510c87))
+
+- Replace bare `except Exception` in `_resolve_target_path_prefix` with specific `(GCPathError,
+  gcp_exceptions.GoogleAPICallError)` as suggested in review - Remove custom CodeQL workflow files
+  that conflict with the repository's default CodeQL setup, causing SARIF upload failures
+
+Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+
+- Remove unused Path import in test_hooks
+  ([`8226380`](https://github.com/tardigrde/gcpath/commit/82263803827659955eb9e78e976cb3b8f5d48d54))
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+
+- Resolve CodeQL false positives and improve test coverage
+  ([`509df66`](https://github.com/tardigrde/gcpath/commit/509df665fc8992f14c0766064aa23919ec3c4357))
+
+- Add custom CodeQL workflow with config that excludes test paths from URL sanitization checks
+  (fixes 5 false-positive high severity alerts) - Add 23 targeted tests for hook commands, rich
+  format outputs, fresh cache home view, and format validation (cli.py coverage 73% → 87%) - Add
+  codecov.yml with appropriate thresholds (patch ≥80%, project ±2%)
+
+Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+
+- Resolve SonarCloud issues across cli, hooks, and tests
+  ([`5414569`](https://github.com/tardigrde/gcpath/commit/5414569d2d68fc2991ed2f7f7f44df1ac2992589))
+
+- Extract _cache_status_rich and _stats_rich to reduce cognitive complexity (S3776) - Extract
+  _validate_stats_resource helper for stats command - Remove unused params: ctx in _show_home, level
+  in _prepare_hierarchy_command, target_resource_name in _ls_help_lines (S1172) - Replace duplicated
+  "gcpath hook run" literal with _GCPATH_HOOK_COMMAND constant (S1192) - Extract _check_hook_entries
+  to reduce get_hook_status complexity (S3776) - Fix unused variables in test_serializers.py (S1481)
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+
+- Suppress CodeQL false positives in test assertions
+  ([`8720d2c`](https://github.com/tardigrde/gcpath/commit/8720d2cb9bc293a1f63d6020b8720eae1771ce22))
+
+The `in` operator on strings like "example.com" triggers CodeQL rule
+  py/incomplete-url-substring-sanitization. These are test output assertions, not URL sanitization
+  code — suppress with lgtm comments.
+
+Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+
+- Test_ls_type_organization assertion for TOON output format
+  ([`2872c99`](https://github.com/tardigrde/gcpath/commit/2872c993f67fc519349cdd652a6959936f360154))
+
+- Use simple substring check instead of urlparse which fails on TOON comma-separated rows - Remove
+  unused urlparse import to silence CodeQL false positive
+
+### Chores
+
+- **deps**: Bump requests in the uv group across 1 directory
+  ([`29b2d81`](https://github.com/tardigrde/gcpath/commit/29b2d816cb43c0dacc07d223bf94dc4eb79f639f))
+
+Bumps the uv group with 1 update in the / directory: [requests](https://github.com/psf/requests).
+
+Updates `requests` from 2.32.5 to 2.33.0 - [Release notes](https://github.com/psf/requests/releases)
+  - [Changelog](https://github.com/psf/requests/blob/main/HISTORY.md) -
+  [Commits](https://github.com/psf/requests/compare/v2.32.5...v2.33.0)
+
+--- updated-dependencies: - dependency-name: requests dependency-version: 2.33.0
+
+dependency-type: indirect
+
+dependency-group: uv ...
+
+Signed-off-by: dependabot[bot] <support@github.com>
+
+### Documentation
+
+- Add Agent Skill section to README
+  ([`be96998`](https://github.com/tardigrde/gcpath/commit/be96998baaf6167b996fc25ed4d36bde10c9054c))
+
+Adds a dedicated section explaining the bundled agent skill and how to install it via bunx/npx, plus
+  a one-liner callout in the "Why use gcpath" bullet list.
+
+Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+
+- Add gcpath agent skill for AI agent consumption
+  ([`30bd24f`](https://github.com/tardigrde/gcpath/commit/30bd24f41a001e8b167c7a1dab5925ef259b9933))
+
+Adds a skills/gcpath/ directory following the Agent Skills spec (agentskills.io), enabling agents to
+  install and use gcpath via:
+
+bunx skills add github:tardigrde/gcpath --skill gcpath
+
+Includes SKILL.md (when-to-use guidance, all commands with examples, common workflows, gotchas) and
+  references/commands.md (compact flag reference per command).
+
+Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+
+- Rewrite README to highlight agent-native design
+  ([`32e4bd3`](https://github.com/tardigrde/gcpath/commit/32e4bd337c3fbcea6c828acddd3aee704d930897))
+
+Restructure the README to lead with gcpath's agent-native qualities: read-only safety, AXI-compliant
+  TOON output, ambient context hooks, and Agent Skill integration. Add output format comparison
+  table and dedicated Agent Integration section with hook setup instructions.
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+
+- **skill**: Enrich frontmatter and trim body per Agent Skills spec
+  ([`531d4d5`](https://github.com/tardigrde/gcpath/commit/531d4d535edff873ec9cd517cd37d4ddd1a61435))
+
+- Add allowed-tools: Bash(gcpath:*) Bash(uvx gcpath:*) - Add compatibility, license, and metadata
+  fields - Trim SKILL.md from 258 to 143 lines: collapse verbose commands section into common
+  workflows + key flags table, move full flag reference to references/commands.md with explicit load
+  trigger - Keep gotchas inline per best-practices guidance
+
+Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+
+### Features
+
+- Add AXI-compliant output with TOON format, hooks, and content-first home
+  ([`1e10e8d`](https://github.com/tardigrde/gcpath/commit/1e10e8d8aa5906ab5a4094bb640ecb2de7f387cc))
+
+Refactor gcpath from Rich-table-first output to AXI-compliant TOON-first output following the AXI
+  specification (https://axi.md/).
+
+New capabilities: - TOON format as default output (token-efficient, structured for AI agents) -
+  `--format toon|json|yaml|rich` flag replaces old `--json`/`--yaml` flags - `--fields` flag for
+  controlling output columns (replaces `--long`) - `--full` flag to expand truncated labels/tags -
+  Content-first home view: `gcpath` with no args shows live dashboard - Pre-computed aggregates:
+  `count: N of M total` on list outputs - Contextual `help[]` sections with next-step suggestions -
+  Structured errors to stdout in TOON format (no more Rich stderr markup) - Ambient context hooks:
+  `gcpath hook install` for Claude Code and Codex - `gcpath hook run` outputs compact session-start
+  dashboard - Definitive empty states: `0 resources found` not empty output - All interactive
+  prompts removed (no more `typer.confirm`)
+
+New files: - `src/gcpath/toon.py` — TOON encoder wrapper + AXI helpers - `src/gcpath/hooks.py` —
+  Claude Code / Codex session hook management - `tests/test_hooks.py` — Hook management tests
+
+Design decisions: - `tree` keeps classic unicode tree output (not TOON) — agents use `ls -R` -
+  `diagram` keeps raw Mermaid/D2 output with `--diagram-format` flag - `toon-format` library (git
+  dep) handles TOON encoding
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+
+- Add new Claude Code hook format support and README badges
+  ([`cbfa81f`](https://github.com/tardigrde/gcpath/commit/cbfa81f1286570736dea649d91779c60a9e5eec0))
+
+Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+
+
 ## v0.10.0 (2026-03-29)
 
 ### Bug Fixes
