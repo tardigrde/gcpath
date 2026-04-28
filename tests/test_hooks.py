@@ -40,7 +40,10 @@ class TestInstallClaudeCode:
             assert changed is True
             data = json.loads(settings_path.read_text())
             assert len(data["hooks"]["SessionStart"]) == 1
-            assert data["hooks"]["SessionStart"][0]["command"] == "/usr/bin/gcpath hook run"
+            entry = data["hooks"]["SessionStart"][0]
+            assert entry["matcher"] == ""
+            assert entry["hooks"][0]["command"] == "/usr/bin/gcpath hook run"
+            assert entry["hooks"][0]["type"] == "command"
 
     def test_idempotent(self, tmp_path):
         settings_path = tmp_path / "settings.json"
@@ -56,7 +59,7 @@ class TestInstallClaudeCode:
             changed = _install_claude_code("/new/path/gcpath hook run")
             assert changed is True
             data = json.loads(settings_path.read_text())
-            assert data["hooks"]["SessionStart"][0]["command"] == "/new/path/gcpath hook run"
+            assert data["hooks"]["SessionStart"][0]["hooks"][0]["command"] == "/new/path/gcpath hook run"
 
     def test_preserves_other_hooks(self, tmp_path):
         settings_path = tmp_path / "settings.json"
