@@ -1,7 +1,8 @@
 import logging
 import urllib.parse
+from collections import Counter
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from google.cloud import resourcemanager_v3  # type: ignore
 from google.api_core import exceptions
@@ -792,6 +793,82 @@ class Hierarchy:
                 raise ResourceNotFoundError(f"Resource not found: {name}")
 
         raise ResourceNotFoundError(f"Unknown resource type: {name}")
+
+    def summary(self, top_n: int = 5, deepest_n: int = 3) -> Dict[str, Any]:
+        """Build an agent-friendly snapshot of the loaded hierarchy.
+
+        Returns counts, depth, top label/tag keys, per-org project counts, and
+        a few of the deepest paths. All values are JSON-serializable.
+        """
+        real_orgs = [
+            o for o in self.organizations
+            if o.organization.name != SYNTHETIC_ORG_NAME
+        ]
+
+        max_depth = 0
+        for f in self.folders:
+            depth = max(0, len(f.ancestors) - 1)
+            if depth > max_depth:
+                max_depth = depth
+
+        label_counter: Counter = Counter()
+        tag_counter: Counter = Counter()
+        for resource in list(self.folders) + list(self.projects):
+            for k in (getattr(resource, "labels", None) or {}).keys():
+                label_counter[k] += 1
+            for k in (getattr(resource, "tags", None) or {}).keys():
+                tag_counter[k] += 1
+
+        top_label_keys = [
+            {"key": k, "count": c} for k, c in label_counter.most_common(top_n)
+        ]
+        top_tag_keys = [
+            {"key": k, "count": c} for k, c in tag_counter.most_common(top_n)
+        ]
+
+        org_rows: List[Dict[str, Any]] = []
+        for org in real_orgs:
+            project_count = sum(
+                1 for p in self.projects if p.organization is org
+            )
+            org_rows.append({
+                "display_name": org.organization.display_name,
+                "resource_name": org.organization.name,
+                "folders": len(org.folders),
+                "projects": project_count,
+            })
+
+        candidate_paths: List[tuple[int, str]] = []
+        for f in self.folders:
+            candidate_paths.append((len(f.ancestors), f.path))
+        for p in self.projects:
+            depth = 0
+            if p.folder:
+                depth = len(p.folder.ancestors) + 1
+            elif p.organization:
+                depth = 1
+            candidate_paths.append((depth, p.path))
+        candidate_paths.sort(key=lambda t: (-t[0], t[1]))
+        seen: set = set()
+        deepest_paths: List[str] = []
+        for _depth, path in candidate_paths:
+            if path in seen:
+                continue
+            seen.add(path)
+            deepest_paths.append(path)
+            if len(deepest_paths) >= deepest_n:
+                break
+
+        return {
+            "org_count": len(real_orgs),
+            "folder_count": len(self.folders),
+            "project_count": len(self.projects),
+            "max_depth": max_depth,
+            "top_label_keys": top_label_keys,
+            "top_tag_keys": top_tag_keys,
+            "orgs": org_rows,
+            "deepest_paths": deepest_paths,
+        }
 
     @staticmethod
     def resolve_ancestry_chain(resource_name: str) -> List[tuple[str, str, str]]:

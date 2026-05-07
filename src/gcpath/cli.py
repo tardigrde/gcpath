@@ -25,6 +25,7 @@ from gcpath.formatters import (
     format_tree_label,
     build_tree_view,
     build_diagram,
+    console_url,
 )
 from gcpath.serializers import (
     resource_type as get_resource_type,
@@ -33,6 +34,7 @@ from gcpath.serializers import (
     serialize_name_results,
     serialize_path_results,
     serialize_ancestors,
+    serialize_open_results,
     dump_json,
     dump_yaml,
     toon_ls,
@@ -45,8 +47,14 @@ from gcpath.serializers import (
     toon_config,
     toon_confirmed,
     toon_encode,
+    toon_open,
+    toon_labels,
+    toon_tags,
+    toon_summary,
+    toon_audit,
     _ALL_LS_FIELDS,
 )
+from gcpath.audit import run_audit, summarize_severities
 from gcpath.toon import format_age, toon_error
 from gcpath.hooks import (
     install_hooks,
@@ -128,6 +136,43 @@ def _matches_metadata(
         elif metadata.get(key) != value:
             return False
     return True
+
+
+def _aggregate_metadata(
+    items: List[Union[Folder, Project]],
+    attr: str,
+    *,
+    key_filter: Optional[str] = None,
+) -> Tuple[List[Dict[str, Any]], int]:
+    """Aggregate label/tag occurrences. Returns (rows, total_resources_scanned)."""
+    counts: Dict[Tuple[str, str], int] = {}
+    examples: Dict[Tuple[str, str], List[str]] = {}
+
+    for obj in items:
+        metadata: Dict[str, str] = getattr(obj, attr, {}) or {}
+        for k, v in metadata.items():
+            if key_filter is not None and k != key_filter:
+                continue
+            kv = (k, v)
+            counts[kv] = counts.get(kv, 0) + 1
+            ex_list = examples.setdefault(kv, [])
+            if len(ex_list) < 3:
+                ex_list.append(getattr(obj, "path", "") or obj.name)
+
+    rows: List[Dict[str, Any]] = []
+    for (k, v), c in counts.items():
+        ex = examples.get((k, v), [])
+        suffix = ""
+        if c > len(ex):
+            suffix = f" (+{c - len(ex)} more)"
+        rows.append({
+            "key": k,
+            "value": v,
+            "count": c,
+            "examples": ", ".join(ex) + suffix,
+        })
+    rows.sort(key=lambda r: (-r["count"], r["key"], r["value"]))
+    return rows, len(items)
 
 
 @dataclass
@@ -1276,6 +1321,228 @@ def stats(
         handle_error(e)
 
 
+@app.command(name="summary")
+def summary_command(
+    ctx: typer.Context,
+    resource: Annotated[
+        Optional[str],
+        typer.Argument(
+            help="Resource to scope the summary to (e.g. organizations/123 or folders/456)."
+        ),
+    ] = None,
+    top: int = typer.Option(
+        5, "--top", help="How many top label/tag keys to include"
+    ),
+    force_refresh: bool = typer.Option(
+        False, "--force-refresh", "-F", help=_REFRESH_HELP
+    ),
+) -> None:
+    """One-shot snapshot of the hierarchy: counts, depth, top labels/tags."""
+    try:
+        ep = ctx.obj.get("entrypoint")
+        scope = _resolve_scope(resource, ep)
+
+        hierarchy = _load_hierarchy(
+            ctx,
+            scope_resource=scope.target_resource_name,
+            recursive=True,
+            force_refresh=force_refresh,
+            filter_orgs=scope.filter_orgs,
+            include_labels=True,
+            include_tags=True,
+        )
+
+        data = hierarchy.summary(top_n=top)
+        data["scope"] = scope.target_resource_name or "all organizations"
+
+        fmt = ctx.obj.get("output_format", "toon")
+        if fmt in ("json", "yaml"):
+            dumper = _get_dumper(fmt)
+            if dumper:
+                print(dumper(data))
+            return
+
+        if fmt == "rich":
+            from rich.table import Table
+            from rich.console import Console
+
+            console = Console()
+            rprint(f"[bold]Scope:[/bold] {data['scope']}")
+            counts = Table(show_header=False, box=None, padding=(0, 1))
+            counts.add_column("Key", style="bold")
+            counts.add_column("Value", justify="right")
+            counts.add_row("Organizations", str(data["org_count"]))
+            counts.add_row("Folders", str(data["folder_count"]))
+            counts.add_row("Projects", str(data["project_count"]))
+            counts.add_row("Max depth", str(data["max_depth"]))
+            console.print(counts)
+            if data["top_label_keys"]:
+                rprint("[bold]Top label keys:[/bold]")
+                for row in data["top_label_keys"]:
+                    rprint(f"  {row['key']}: {row['count']}")
+            if data["top_tag_keys"]:
+                rprint("[bold]Top tag keys:[/bold]")
+                for row in data["top_tag_keys"]:
+                    rprint(f"  {row['key']}: {row['count']}")
+            return
+
+        help_lines = [
+            "Run `gcpath stats <scope>` for raw counts",
+            "Run `gcpath labels --top 10` for full label breakdown",
+        ]
+        print(toon_summary(data, help_lines=help_lines))
+
+    except Exception as e:
+        handle_error(e)
+
+
+_VALID_AUDIT_SEVERITIES = ("info", "warn", "error")
+_VALID_AUDIT_CHECKS = (
+    "orphan_project",
+    "synthetic_org",
+    "missing_required_label",
+    "duplicate_display_name",
+    "name_pattern_violation",
+)
+
+
+@app.command(name="audit")
+def audit_command(
+    ctx: typer.Context,
+    resource: Annotated[
+        Optional[str],
+        typer.Argument(help="Resource to scope the audit (e.g. folders/123)"),
+    ] = None,
+    require_labels: Optional[str] = typer.Option(
+        None,
+        "--require-labels",
+        help="Comma-separated list of label keys that every folder/project must have",
+    ),
+    name_pattern: Optional[str] = typer.Option(
+        None,
+        "--name-pattern",
+        help="Regex that every display_name must fullmatch",
+    ),
+    severity: str = typer.Option(
+        "info",
+        "--severity",
+        help=f"Minimum severity to report: {', '.join(_VALID_AUDIT_SEVERITIES)}",
+    ),
+    checks: Optional[str] = typer.Option(
+        None,
+        "--check",
+        help=f"Comma-separated subset of checks: {', '.join(_VALID_AUDIT_CHECKS)}",
+    ),
+    exit_zero: bool = typer.Option(
+        False,
+        "--exit-zero",
+        help="Always exit 0 (default: exit 1 on warn/error)",
+    ),
+    force_refresh: bool = typer.Option(
+        False, "--force-refresh", "-F", help=_REFRESH_HELP
+    ),
+) -> None:
+    """Run governance checks against the loaded hierarchy."""
+    try:
+        if severity not in _VALID_AUDIT_SEVERITIES:
+            print(toon_error(
+                f"Invalid severity '{severity}'. Must be one of: "
+                + ", ".join(_VALID_AUDIT_SEVERITIES)
+            ))
+            raise typer.Exit(code=1)
+
+        required_label_keys = (
+            [k.strip() for k in require_labels.split(",") if k.strip()]
+            if require_labels
+            else None
+        )
+        check_subset: Optional[List[str]] = None
+        if checks:
+            check_subset = [c.strip() for c in checks.split(",") if c.strip()]
+            for c in check_subset:
+                if c not in _VALID_AUDIT_CHECKS:
+                    print(toon_error(
+                        f"Unknown check '{c}'. Available: "
+                        + ", ".join(_VALID_AUDIT_CHECKS)
+                    ))
+                    raise typer.Exit(code=1)
+
+        ep = ctx.obj.get("entrypoint")
+        scope = _resolve_scope(resource, ep)
+
+        hierarchy = _load_hierarchy(
+            ctx,
+            scope_resource=scope.target_resource_name,
+            recursive=True,
+            force_refresh=force_refresh,
+            filter_orgs=scope.filter_orgs,
+            include_labels=bool(required_label_keys),
+        )
+
+        issues = run_audit(
+            hierarchy,
+            require_labels=required_label_keys,
+            name_pattern=name_pattern,
+            checks=check_subset,
+            severity=severity,
+        )
+        sev_counts = summarize_severities(issues)
+
+        fmt = ctx.obj.get("output_format", "toon")
+        if fmt in ("json", "yaml"):
+            dumper = _get_dumper(fmt)
+            if dumper:
+                print(dumper({
+                    "scope": scope.target_resource_name or "all organizations",
+                    "severity_counts": sev_counts,
+                    "issues": issues,
+                }))
+        elif fmt == "rich":
+            from rich.table import Table
+            from rich.console import Console
+
+            console = Console()
+            if not issues:
+                rprint("[green]No audit issues found.[/green]")
+            else:
+                table = Table(
+                    show_header=True,
+                    header_style="bold magenta",
+                    box=None,
+                    padding=(0, 1),
+                )
+                table.add_column("Severity")
+                table.add_column("Check")
+                table.add_column("Path", overflow="fold")
+                table.add_column("Type")
+                table.add_column("Details", overflow="fold")
+                color_map = {"error": "red", "warn": "yellow", "info": "cyan"}
+                for issue in issues:
+                    color = color_map.get(issue["severity"], "white")
+                    table.add_row(
+                        f"[{color}]{issue['severity']}[/{color}]",
+                        issue["check"],
+                        issue["path"],
+                        issue["type"],
+                        issue["details"],
+                    )
+                console.print(table)
+        else:
+            help_lines = [
+                "Run `gcpath ls --label <K>=<V>` to inspect resources by label",
+                "Run `gcpath open <path>` to jump to an offending resource",
+            ]
+            print(toon_audit(issues, sev_counts, help_lines=help_lines))
+
+        if not exit_zero and (sev_counts.get("error", 0) or sev_counts.get("warn", 0)):
+            raise typer.Exit(code=1)
+
+    except typer.Exit:
+        raise
+    except Exception as e:
+        handle_error(e)
+
+
 @app.command(name="name")
 def get_resource_name(
     ctx: typer.Context,
@@ -1328,6 +1595,121 @@ def get_resource_name(
             return
 
         print(toon_name(results, id_only))
+
+    except Exception as e:
+        handle_error(e)
+
+
+def _resolve_path_to_object(
+    hierarchy: Hierarchy, path: str
+) -> Union[OrganizationNode, Folder, Project]:
+    """Resolve a gcpath path to the underlying resource object."""
+    res_name = hierarchy.get_resource_name(path)
+    if res_name.startswith(_RESOURCE_PREFIX_ORGS):
+        for org in hierarchy.organizations:
+            if org.organization.name == res_name:
+                return org
+        raise GCPathError(f"Organization '{res_name}' not found in loaded hierarchy")
+    if res_name.startswith(_RESOURCE_PREFIX_FOLDERS):
+        for org in hierarchy.organizations:
+            if res_name in org.folders:
+                return org.folders[res_name]
+        raise GCPathError(f"Folder '{res_name}' not found in loaded hierarchy")
+    if res_name.startswith(_RESOURCE_PREFIX_PROJECTS):
+        for proj in hierarchy.projects:
+            if proj.name == res_name:
+                return proj
+        raise GCPathError(f"Project '{res_name}' not found in loaded hierarchy")
+    raise GCPathError(f"Unsupported resource name '{res_name}'")
+
+
+@app.command(name="open")
+def open_resource(
+    ctx: typer.Context,
+    paths: Annotated[
+        List[str],
+        typer.Argument(help="Paths to open in the GCP Console, e.g. //example.com/folder"),
+    ],
+    browser: bool = typer.Option(
+        False,
+        "--browser/--print",
+        help="Open the URL in a browser instead of printing it",
+    ),
+    force_refresh: bool = typer.Option(
+        False, "--force-refresh", "-F", help=_REFRESH_HELP
+    ),
+) -> None:
+    """Print or open the GCP Cloud Console URL for one or more paths."""
+    import webbrowser
+
+    try:
+        ep = ctx.obj.get("entrypoint")
+        scope = ep if ep else None
+        hierarchy = _load_hierarchy(
+            ctx,
+            scope_resource=scope,
+            recursive=True,
+            force_refresh=force_refresh,
+        )
+
+        results: List[Dict[str, str]] = []
+        for path in paths:
+            try:
+                item = _resolve_path_to_object(hierarchy, path)
+                url = console_url(item)
+                resource_name = (
+                    item.organization.name
+                    if isinstance(item, OrganizationNode)
+                    else item.name
+                )
+                results.append({"path": path, "resource_name": resource_name, "url": url})
+            except GCPathError as e:
+                if len(paths) > 1:
+                    results.append({"path": path, "resource_name": "", "url": "", "error": str(e)})
+                else:
+                    raise
+
+        if browser:
+            opened = 0
+            for row in results:
+                url = row.get("url") or ""
+                if not url:
+                    continue
+                try:
+                    if webbrowser.open(url):
+                        opened += 1
+                except webbrowser.Error as e:
+                    logger.warning(f"webbrowser.open failed for {url}: {e}")
+            if opened == 0 and results:
+                help_lines = [
+                    "No browser available; URL printed below.",
+                    "Re-run without --browser to print only.",
+                ]
+                fmt = ctx.obj.get("output_format", "toon")
+                if fmt in ("json", "yaml"):
+                    dumper = _get_dumper(fmt)
+                    if dumper:
+                        print(dumper(serialize_open_results(results)))
+                    return
+                print(toon_open(results, help_lines=help_lines))
+            return
+
+        fmt = ctx.obj.get("output_format", "toon")
+        if fmt in ("json", "yaml"):
+            dumper = _get_dumper(fmt)
+            if dumper:
+                print(dumper(serialize_open_results(results)))
+            return
+        if fmt == "rich":
+            for row in results:
+                if row.get("url"):
+                    print(row["url"])
+                elif row.get("error"):
+                    rprint(f"[red]{row['path']}: {row['error']}[/red]")
+            return
+
+        help_lines = ["Run `gcpath open <path> --browser` to open in your default browser"]
+        print(toon_open(results, help_lines=help_lines))
 
     except Exception as e:
         handle_error(e)
@@ -1508,6 +1890,140 @@ def find(
         handle_error(e)
 
 
+def _run_metadata_aggregation(
+    ctx: typer.Context,
+    *,
+    resource: Optional[str],
+    attr: str,
+    key_filter: Optional[str],
+    top: Optional[int],
+    force_refresh: bool,
+) -> None:
+    """Shared implementation for `gcpath labels` and `gcpath tags`."""
+    ep = ctx.obj.get("entrypoint")
+    scope = _resolve_scope(resource, ep)
+    include_labels = attr == "labels"
+    include_tags = attr == "tags"
+
+    hierarchy = _load_hierarchy(
+        ctx,
+        scope_resource=scope.target_resource_name,
+        recursive=True,
+        force_refresh=force_refresh,
+        filter_orgs=scope.filter_orgs,
+        include_labels=include_labels,
+        include_tags=include_tags,
+    )
+
+    items: List[Union[Folder, Project]] = list(hierarchy.folders) + list(
+        hierarchy.projects
+    )
+    rows, total = _aggregate_metadata(items, attr, key_filter=key_filter)
+
+    if top is not None and top > 0:
+        rows = rows[:top]
+
+    fmt = ctx.obj.get("output_format", "toon")
+    if fmt in ("json", "yaml"):
+        dumper = _get_dumper(fmt)
+        if dumper:
+            print(dumper({"count": len(rows), "scanned": total, attr: rows}))
+        return
+
+    if fmt == "rich":
+        from rich.table import Table
+        from rich.console import Console
+
+        console = Console()
+        if not rows:
+            rprint(f"[yellow]No {attr} found in scope.[/yellow]")
+            return
+        table = Table(
+            show_header=True, header_style="bold magenta", box=None, padding=(0, 1)
+        )
+        table.add_column("Key")
+        table.add_column("Value")
+        table.add_column("Count", justify="right")
+        table.add_column("Examples", overflow="fold")
+        for row in rows:
+            table.add_row(
+                row["key"], row["value"], str(row["count"]), row["examples"]
+            )
+        console.print(table)
+        return
+
+    help_lines = [
+        f"Run `gcpath ls --{attr[:-1]} <key>=<value>` to filter resources",
+        f"Run `gcpath {attr} --top 10` to limit results",
+    ]
+    if attr == "labels":
+        print(toon_labels(rows, total_resources=total, help_lines=help_lines))
+    else:
+        print(toon_tags(rows, total_resources=total, help_lines=help_lines))
+
+
+@app.command(name="labels")
+def labels_command(
+    ctx: typer.Context,
+    resource: Annotated[
+        Optional[str],
+        typer.Argument(help="Resource to scope aggregation within (e.g. folders/123)"),
+    ] = None,
+    key: Optional[str] = typer.Option(
+        None, "--key", help="Show only entries with this label key"
+    ),
+    top: Optional[int] = typer.Option(
+        None, "--top", help="Limit to the top N most frequent entries"
+    ),
+    force_refresh: bool = typer.Option(
+        False, "--force-refresh", "-F", help=_REFRESH_HELP
+    ),
+) -> None:
+    """Aggregate GCP labels across folders and projects with counts."""
+    try:
+        _run_metadata_aggregation(
+            ctx,
+            resource=resource,
+            attr="labels",
+            key_filter=key,
+            top=top,
+            force_refresh=force_refresh,
+        )
+    except Exception as e:
+        handle_error(e)
+
+
+@app.command(name="tags")
+def tags_command(
+    ctx: typer.Context,
+    resource: Annotated[
+        Optional[str],
+        typer.Argument(help="Resource to scope aggregation within (e.g. folders/123)"),
+    ] = None,
+    key: Optional[str] = typer.Option(
+        None, "--key", help="Show only entries with this tag key"
+    ),
+    top: Optional[int] = typer.Option(
+        None, "--top", help="Limit to the top N most frequent entries"
+    ),
+    force_refresh: bool = typer.Option(
+        False, "--force-refresh", "-F", help=_REFRESH_HELP
+    ),
+) -> None:
+    """Aggregate GCP resource tags across folders and projects with counts."""
+    try:
+        _run_metadata_aggregation(
+            ctx,
+            resource=resource,
+            attr="tags",
+            key_filter=key,
+            top=top,
+            force_refresh=force_refresh,
+        )
+    except Exception as e:
+        handle_error(e)
+
+
 @app.command()
 def ancestors(
     ctx: typer.Context,
@@ -1553,6 +2069,64 @@ def ancestors(
             help_lines=["Run `gcpath ls <resource>` to list children"],
         ))
 
+    except Exception as e:
+        handle_error(e)
+
+
+_VALID_MCP_TRANSPORTS = ("stdio", "sse")
+
+
+@app.command(name="mcp")
+def mcp_command(
+    ctx: typer.Context,
+    transport: str = typer.Option(
+        "stdio",
+        "--transport",
+        help=f"MCP transport: {', '.join(_VALID_MCP_TRANSPORTS)}",
+    ),
+    host: str = typer.Option("127.0.0.1", "--host", help="Host for SSE transport"),
+    port: int = typer.Option(8765, "--port", help="Port for SSE transport"),
+    scope: Optional[str] = typer.Option(
+        None,
+        "--scope",
+        help="Optional resource scope to load on first call (e.g. folders/123)",
+    ),
+) -> None:
+    """Run gcpath as an MCP server so AI agents can query the hierarchy.
+
+    Install the optional dependency first: pip install gcpath\\[mcp].
+    Default transport is stdio (used by Claude Desktop/Code).
+    """
+    try:
+        if transport not in _VALID_MCP_TRANSPORTS:
+            print(toon_error(
+                f"Invalid transport '{transport}'. Use one of: "
+                + ", ".join(_VALID_MCP_TRANSPORTS)
+            ))
+            raise typer.Exit(code=1)
+
+        try:
+            from gcpath.mcp_server import run_server
+        except ImportError as e:
+            print(toon_error(
+                f"MCP support not installed: {e}",
+                ["Install with: pip install 'gcpath[mcp]' or uv sync --extra mcp"],
+            ))
+            raise typer.Exit(code=1)
+
+        use_asset_api = ctx.obj.get("use_asset_api", True)
+        effective_scope = scope or ctx.obj.get("entrypoint")
+
+        run_server(
+            transport=transport,
+            host=host,
+            port=port,
+            use_asset_api=use_asset_api,
+            scope=effective_scope,
+        )
+
+    except typer.Exit:
+        raise
     except Exception as e:
         handle_error(e)
 

@@ -618,3 +618,98 @@ def test_resolve_ancestry_chain_permission_denied(mock_rm):
     chain = Hierarchy.resolve_ancestry_chain("projects/restricted")
     assert len(chain) == 1
     assert chain[0] == ("projects/restricted", "projects/restricted", "project")
+
+
+def _build_summary_hierarchy():
+    org_proto = resourcemanager_v3.Organization(
+        name="organizations/77", display_name="acme.example"
+    )
+    org_node = OrganizationNode(organization=org_proto)
+
+    f1 = Folder(
+        name="folders/100",
+        display_name="eng",
+        ancestors=["folders/100", "organizations/77"],
+        organization=org_node,
+        parent="organizations/77",
+        labels={"team": "eng", "tier": "prod"},
+    )
+    f2 = Folder(
+        name="folders/200",
+        display_name="ops",
+        ancestors=["folders/200", "organizations/77"],
+        organization=org_node,
+        parent="organizations/77",
+        labels={"team": "ops"},
+    )
+    f3 = Folder(
+        name="folders/300",
+        display_name="backend",
+        ancestors=["folders/300", "folders/100", "organizations/77"],
+        organization=org_node,
+        parent="folders/100",
+        labels={"team": "eng"},
+    )
+    org_node.folders["folders/100"] = f1
+    org_node.folders["folders/200"] = f2
+    org_node.folders["folders/300"] = f3
+
+    p1 = Project(
+        name="projects/p1",
+        project_id="p1",
+        display_name="p1",
+        parent="folders/300",
+        organization=org_node,
+        folder=f3,
+        labels={"team": "eng"},
+        tags={"env": "prod"},
+    )
+
+    return Hierarchy([org_node], [p1])
+
+
+def test_summary_basic_counts():
+    h = _build_summary_hierarchy()
+    summary = h.summary()
+    assert summary["org_count"] == 1
+    assert summary["folder_count"] == 3
+    assert summary["project_count"] == 1
+
+
+def test_summary_max_depth():
+    h = _build_summary_hierarchy()
+    summary = h.summary()
+    assert summary["max_depth"] == 2
+
+
+def test_summary_top_label_keys_ordering():
+    h = _build_summary_hierarchy()
+    summary = h.summary(top_n=5)
+    keys = [r["key"] for r in summary["top_label_keys"]]
+    assert keys[0] == "team"
+    counts = {r["key"]: r["count"] for r in summary["top_label_keys"]}
+    assert counts["team"] == 4
+
+
+def test_summary_excludes_synthetic_org():
+    from gcpath.core import SYNTHETIC_ORG_NAME
+
+    synth_proto = resourcemanager_v3.Organization(
+        name=SYNTHETIC_ORG_NAME, display_name="root_folder"
+    )
+    real_proto = resourcemanager_v3.Organization(
+        name="organizations/77", display_name="acme.example"
+    )
+    synth = OrganizationNode(organization=synth_proto)
+    real = OrganizationNode(organization=real_proto)
+    h = Hierarchy([synth, real], [])
+    summary = h.summary()
+    assert summary["org_count"] == 1
+    assert summary["orgs"][0]["display_name"] == "acme.example"
+
+
+def test_summary_deepest_paths_sorted():
+    h = _build_summary_hierarchy()
+    summary = h.summary(deepest_n=3)
+    assert summary["deepest_paths"]
+    assert summary["deepest_paths"][0].count("/") >= summary["deepest_paths"][-1].count("/")

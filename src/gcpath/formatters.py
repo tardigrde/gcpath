@@ -6,7 +6,52 @@ and diagram generation (Mermaid, D2).
 """
 
 from typing import List, Dict, Tuple, Union, Optional, Any
-from gcpath.core import OrganizationNode, Folder, Project, path_escape, Hierarchy
+from gcpath.core import (
+    OrganizationNode,
+    Folder,
+    Project,
+    SYNTHETIC_ORG_NAME,
+    path_escape,
+    Hierarchy,
+    GCPathError,
+)
+
+
+_CONSOLE_BASE = "https://console.cloud.google.com"
+
+
+def console_url(item: Union[OrganizationNode, Folder, Project]) -> str:
+    """Build a GCP Cloud Console URL for a hierarchy resource.
+
+    Raises GCPathError for organizationless projects or synthetic-org folders
+    (these have no stable console URL).
+    """
+    if isinstance(item, OrganizationNode):
+        org_name = item.organization.name
+        if org_name == SYNTHETIC_ORG_NAME:
+            raise GCPathError(
+                "Synthetic organization has no GCP Console URL"
+            )
+        org_id = org_name.split("/", 1)[-1]
+        return f"{_CONSOLE_BASE}/welcome?organizationId={org_id}"
+
+    if isinstance(item, Folder):
+        org_name = item.organization.organization.name
+        if org_name == SYNTHETIC_ORG_NAME:
+            raise GCPathError(
+                "Folder under synthetic organization has no GCP Console URL"
+            )
+        folder_id = item.name.split("/", 1)[-1]
+        return f"{_CONSOLE_BASE}/welcome?folder={folder_id}"
+
+    if isinstance(item, Project):
+        if item.organization is None and item.folder is None:
+            raise GCPathError(
+                f"Organizationless project '{item.project_id}' has no console URL via gcpath"
+            )
+        return f"{_CONSOLE_BASE}/welcome?project={item.project_id}"
+
+    raise GCPathError(f"Cannot build console URL for {type(item).__name__}")
 
 
 def _children_of_target(

@@ -632,3 +632,74 @@ def test_format_tree_label_empty_labels():
 
     label = format_tree_label(folder, show_labels=True)
     assert "labels:" not in label
+
+
+def test_console_url_organization():
+    from gcpath.formatters import console_url
+    org_proto = resourcemanager_v3.Organization(
+        name="organizations/42", display_name="acme.com"
+    )
+    org = OrganizationNode(organization=org_proto)
+    url = console_url(org)
+    assert url == "https://console.cloud.google.com/welcome?organizationId=42"
+
+
+def test_console_url_folder():
+    from gcpath.formatters import console_url
+    org_proto = resourcemanager_v3.Organization(
+        name="organizations/42", display_name="acme.com"
+    )
+    org = OrganizationNode(organization=org_proto)
+    f = Folder(
+        name="folders/9",
+        display_name="eng",
+        ancestors=["folders/9", "organizations/42"],
+        organization=org,
+        parent="organizations/42",
+    )
+    url = console_url(f)
+    assert url == "https://console.cloud.google.com/welcome?folder=9"
+
+
+def test_console_url_project_uses_project_id():
+    from gcpath.formatters import console_url
+    org_proto = resourcemanager_v3.Organization(
+        name="organizations/42", display_name="acme.com"
+    )
+    org = OrganizationNode(organization=org_proto)
+    p = Project(
+        name="projects/123456",
+        project_id="my-app",
+        display_name="My App",
+        parent="organizations/42",
+        organization=org,
+        folder=None,
+    )
+    url = console_url(p)
+    assert url == "https://console.cloud.google.com/welcome?project=my-app"
+
+
+def test_console_url_orgless_project_raises():
+    from gcpath.formatters import console_url
+    from gcpath.core import GCPathError
+    p = Project(
+        name="projects/9",
+        project_id="orphan",
+        display_name="Orphan",
+        parent="organizations/0",
+        organization=None,
+        folder=None,
+    )
+    with pytest.raises(GCPathError):
+        console_url(p)
+
+
+def test_console_url_synthetic_org_raises():
+    from gcpath.formatters import console_url
+    from gcpath.core import GCPathError, SYNTHETIC_ORG_NAME
+    org_proto = resourcemanager_v3.Organization(
+        name=SYNTHETIC_ORG_NAME, display_name="root"
+    )
+    org = OrganizationNode(organization=org_proto)
+    with pytest.raises(GCPathError):
+        console_url(org)
