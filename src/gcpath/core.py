@@ -854,23 +854,7 @@ class Hierarchy:
             if o.organization.name != SYNTHETIC_ORG_NAME
         ]
 
-        def _project_depth(p: Project) -> int:
-            if p.folder:
-                return len(p.folder.ancestors)
-            if p.organization:
-                return 1
-            return 0
-
-        max_depth = 0
-        for f in self.folders:
-            depth = max(0, len(f.ancestors) - 1)
-            if depth > max_depth:
-                max_depth = depth
-        for p in self.projects:
-            pd = _project_depth(p)
-            if pd > max_depth:
-                max_depth = pd
-
+        max_depth = self._summary_max_depth()
         label_counter, tag_counter = self._summary_metadata_counters()
         top_label_keys = [
             {"key": k, "count": c} for k, c in label_counter.most_common(top_n)
@@ -878,24 +862,8 @@ class Hierarchy:
         top_tag_keys = [
             {"key": k, "count": c} for k, c in tag_counter.most_common(top_n)
         ]
-
         org_rows = self._summary_org_rows(real_orgs)
-
-        candidate_paths: List[tuple[int, str]] = []
-        for f in self.folders:
-            candidate_paths.append((max(0, len(f.ancestors) - 1), f.path))
-        for p in self.projects:
-            candidate_paths.append((_project_depth(p), p.path))
-        candidate_paths.sort(key=lambda t: (-t[0], t[1]))
-        seen: set = set()
-        deepest_paths: List[str] = []
-        for _depth, path in candidate_paths:
-            if path in seen:
-                continue
-            seen.add(path)
-            deepest_paths.append(path)
-            if len(deepest_paths) >= deepest_n:
-                break
+        deepest_paths = self._summary_deepest_paths(deepest_n)
 
         return {
             "org_count": len(real_orgs),
@@ -907,6 +875,44 @@ class Hierarchy:
             "orgs": org_rows,
             "deepest_paths": deepest_paths,
         }
+
+    @staticmethod
+    def _project_depth(p: "Project") -> int:
+        if p.folder:
+            return len(p.folder.ancestors)
+        if p.organization:
+            return 1
+        return 0
+
+    def _summary_max_depth(self) -> int:
+        max_depth = 0
+        for f in self.folders:
+            depth = max(0, len(f.ancestors) - 1)
+            if depth > max_depth:
+                max_depth = depth
+        for p in self.projects:
+            pd = Hierarchy._project_depth(p)
+            if pd > max_depth:
+                max_depth = pd
+        return max_depth
+
+    def _summary_deepest_paths(self, deepest_n: int) -> List[str]:
+        candidate_paths: List[tuple[int, str]] = []
+        for f in self.folders:
+            candidate_paths.append((max(0, len(f.ancestors) - 1), f.path))
+        for p in self.projects:
+            candidate_paths.append((Hierarchy._project_depth(p), p.path))
+        candidate_paths.sort(key=lambda t: (-t[0], t[1]))
+        seen: set = set()
+        deepest: List[str] = []
+        for _depth, path in candidate_paths:
+            if path in seen:
+                continue
+            seen.add(path)
+            deepest.append(path)
+            if len(deepest) >= deepest_n:
+                break
+        return deepest
 
     def _summary_metadata_counters(self) -> tuple[Counter, Counter]:
         label_counter: Counter = Counter()

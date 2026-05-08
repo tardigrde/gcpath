@@ -49,10 +49,12 @@ def console_url(item: Union[OrganizationNode, Folder, Project]) -> str:
             raise GCPathError(
                 f"Organizationless project '{item.project_id}' has no console URL via gcpath"
             )
-        project_org_name: Optional[str] = None
+        # At this point at least one of folder/organization is set; prefer the
+        # folder's parent org so we don't double-resolve the org pointer.
         if item.folder is not None:
             project_org_name = item.folder.organization.organization.name
-        elif item.organization is not None:
+        else:
+            assert item.organization is not None
             project_org_name = item.organization.organization.name
         if project_org_name == SYNTHETIC_ORG_NAME:
             raise GCPathError(

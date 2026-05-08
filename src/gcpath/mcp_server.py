@@ -27,6 +27,10 @@ logger = logging.getLogger(__name__)
 
 _HIERARCHY_CACHE: Dict[str, Hierarchy] = {}
 
+_PREFIX_ORGS = "organizations/"
+_PREFIX_FOLDERS = "folders/"
+_PREFIX_PROJECTS = "projects/"
+
 # Caps caller-supplied regex length to bound worst-case backtracking time.
 _NAME_PATTERN_MAX_LEN = 200
 
@@ -89,11 +93,11 @@ def _find_project(hierarchy: Hierarchy, res_name: str) -> Optional[Project]:
 
 def _resolve_to_object(hierarchy: Hierarchy, path: str) -> Any:
     res_name = hierarchy.get_resource_name(path)
-    if res_name.startswith("organizations/"):
+    if res_name.startswith(_PREFIX_ORGS):
         obj: Any = _find_org(hierarchy, res_name)
-    elif res_name.startswith("folders/"):
+    elif res_name.startswith(_PREFIX_FOLDERS):
         obj = _find_folder(hierarchy, res_name)
-    elif res_name.startswith("projects/"):
+    elif res_name.startswith(_PREFIX_PROJECTS):
         obj = _find_project(hierarchy, res_name)
     else:
         obj = None
@@ -167,15 +171,15 @@ def _name_to_path_impl(
 
 
 def _name_from_loaded(hierarchy: Hierarchy, res_name: str) -> Optional[str]:
-    if res_name.startswith("organizations/"):
+    if res_name.startswith(_PREFIX_ORGS):
         org = _find_org(hierarchy, res_name)
         if org is not None:
             return f"//{org.organization.display_name}"
-    elif res_name.startswith("folders/"):
+    elif res_name.startswith(_PREFIX_FOLDERS):
         folder = _find_folder(hierarchy, res_name)
         if folder is not None:
             return folder.path
-    elif res_name.startswith("projects/"):
+    elif res_name.startswith(_PREFIX_PROJECTS):
         project = _find_project(hierarchy, res_name)
         if project is not None:
             return project.path
@@ -207,7 +211,7 @@ def _include_in_listing(
         return True
     if effective_scope:
         return parent == effective_scope
-    return parent.startswith("organizations/")
+    return parent.startswith(_PREFIX_ORGS)
 
 
 def _find_resources_impl(
