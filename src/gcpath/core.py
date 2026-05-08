@@ -853,9 +853,12 @@ class Hierarchy:
             o for o in self.organizations
             if o.organization.name != SYNTHETIC_ORG_NAME
         ]
+        real_folders, real_projects = self._real_org_descendants(real_orgs)
 
-        max_depth = self._summary_max_depth()
-        label_counter, tag_counter = self._summary_metadata_counters()
+        max_depth = self._summary_max_depth(real_folders, real_projects)
+        label_counter, tag_counter = self._summary_metadata_counters(
+            real_folders, real_projects
+        )
         top_label_keys = [
             {"key": k, "count": c} for k, c in label_counter.most_common(top_n)
         ]
@@ -863,18 +866,50 @@ class Hierarchy:
             {"key": k, "count": c} for k, c in tag_counter.most_common(top_n)
         ]
         org_rows = self._summary_org_rows(real_orgs)
-        deepest_paths = self._summary_deepest_paths(deepest_n)
+        deepest_paths = self._summary_deepest_paths(
+            real_folders, real_projects, deepest_n
+        )
 
         return {
             "org_count": len(real_orgs),
-            "folder_count": len(self.folders),
-            "project_count": len(self.projects),
+            "folder_count": len(real_folders),
+            "project_count": len(real_projects),
             "max_depth": max_depth,
             "top_label_keys": top_label_keys,
             "top_tag_keys": top_tag_keys,
             "orgs": org_rows,
             "deepest_paths": deepest_paths,
         }
+
+    def _real_org_descendants(
+        self, real_orgs: List["OrganizationNode"]
+    ) -> tuple[List["Folder"], List["Project"]]:
+        """Drop synthetic-org descendants from summary metrics.
+
+        Folders only exist under an org, so they're filtered to those whose
+        org isn't synthetic. Projects can also be fully orgless (no synthetic
+        bridge involved) — those are kept since they represent real GCP
+        resources, just outside any organization the user can see.
+        """
+        synthetic_orgs = [
+            o for o in self.organizations
+            if o.organization.name == SYNTHETIC_ORG_NAME
+        ]
+        synth_ids = {id(o) for o in synthetic_orgs}
+        real_folders = [
+            f for f in self.folders
+            if id(f.organization) not in synth_ids
+        ]
+
+        def project_under_synthetic(p: "Project") -> bool:
+            if p.organization is not None and id(p.organization) in synth_ids:
+                return True
+            if p.folder is not None and id(p.folder.organization) in synth_ids:
+                return True
+            return False
+
+        real_projects = [p for p in self.projects if not project_under_synthetic(p)]
+        return real_folders, real_projects
 
     @staticmethod
     def _project_depth(p: "Project") -> int:
@@ -884,23 +919,32 @@ class Hierarchy:
             return 1
         return 0
 
-    def _summary_max_depth(self) -> int:
+    def _summary_max_depth(
+        self,
+        folders: List["Folder"],
+        projects: List["Project"],
+    ) -> int:
         max_depth = 0
-        for f in self.folders:
+        for f in folders:
             depth = max(0, len(f.ancestors) - 1)
             if depth > max_depth:
                 max_depth = depth
-        for p in self.projects:
+        for p in projects:
             pd = Hierarchy._project_depth(p)
             if pd > max_depth:
                 max_depth = pd
         return max_depth
 
-    def _summary_deepest_paths(self, deepest_n: int) -> List[str]:
+    def _summary_deepest_paths(
+        self,
+        folders: List["Folder"],
+        projects: List["Project"],
+        deepest_n: int,
+    ) -> List[str]:
         candidate_paths: List[tuple[int, str]] = []
-        for f in self.folders:
+        for f in folders:
             candidate_paths.append((max(0, len(f.ancestors) - 1), f.path))
-        for p in self.projects:
+        for p in projects:
             candidate_paths.append((Hierarchy._project_depth(p), p.path))
         candidate_paths.sort(key=lambda t: (-t[0], t[1]))
         seen: set = set()
@@ -914,10 +958,14 @@ class Hierarchy:
                 break
         return deepest
 
-    def _summary_metadata_counters(self) -> tuple[Counter, Counter]:
+    def _summary_metadata_counters(
+        self,
+        folders: List["Folder"],
+        projects: List["Project"],
+    ) -> tuple[Counter, Counter]:
         label_counter: Counter = Counter()
         tag_counter: Counter = Counter()
-        for resource in list(self.folders) + list(self.projects):
+        for resource in list(folders) + list(projects):
             for k in (getattr(resource, "labels", None) or {}).keys():
                 label_counter[k] += 1
             for k in (getattr(resource, "tags", None) or {}).keys():
@@ -933,7 +981,9 @@ class Hierarchy:
                 "resource_name": org.organization.name,
                 "folders": len(org.folders),
                 "projects": sum(
-                    1 for p in self.projects if p.organization is org
+                    1
+                    for p in self.projects
+                    if p.organization is org or (p.folder and p.folder.organization is org)
                 ),
             }
             for org in real_orgs

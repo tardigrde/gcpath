@@ -220,6 +220,35 @@ def test_aggregate_impl_labels_key_filter_and_top():
     assert len(result["labels"]) <= 1
 
 
+def test_aggregate_impl_top_zero_returns_empty_list():
+    """`top=0` must mean "no rows" and not be silently treated as None."""
+    h = _hierarchy_with_metadata()
+    result = _aggregate_impl(h, "labels", key=None, top=0)
+    assert result["labels"] == []
+    # `scanned` should still reflect the number of items scanned, not the
+    # number of rows after slicing.
+    assert result["scanned"] == len(h.folders) + len(h.projects)
+
+
+def test_serialize_resource_org_path_is_url_escaped():
+    """OrganizationNode paths must be url-encoded for round-trip parity."""
+    org_proto = resourcemanager_v3.Organization(
+        name="organizations/9", display_name="acme corp"
+    )
+    out = _serialize_resource(OrganizationNode(organization=org_proto))
+    assert out["path"] == "//acme%20corp"
+
+
+def test_name_to_path_for_org_returns_escaped_path():
+    org_proto = resourcemanager_v3.Organization(
+        name="organizations/9", display_name="acme corp"
+    )
+    org = OrganizationNode(organization=org_proto)
+    h = Hierarchy([org], [])
+    out = _name_to_path_impl(h, ["organizations/9"])
+    assert out[0]["path"] == "//acme%20corp"
+
+
 # ---- _audit_impl ----
 
 

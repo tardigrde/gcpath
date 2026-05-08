@@ -710,6 +710,71 @@ def test_summary_excludes_synthetic_org():
     assert summary["orgs"][0]["display_name"] == "acme.example"
 
 
+def test_summary_excludes_synthetic_org_descendants_from_global_metrics():
+    """folder_count, project_count, max_depth, top keys, and deepest_paths
+    must ignore synthetic-org descendants — otherwise the snapshot is
+    skewed by data that isn't really "in" any user-visible org.
+    """
+    from gcpath.core import SYNTHETIC_ORG_NAME
+
+    synth_proto = resourcemanager_v3.Organization(
+        name=SYNTHETIC_ORG_NAME, display_name="root_folder"
+    )
+    real_proto = resourcemanager_v3.Organization(
+        name="organizations/77", display_name="acme"
+    )
+    synth = OrganizationNode(organization=synth_proto)
+    real = OrganizationNode(organization=real_proto)
+
+    real_folder = Folder(
+        name="folders/100",
+        display_name="real",
+        ancestors=["folders/100", "organizations/77"],
+        organization=real,
+        parent="organizations/77",
+        labels={"team": "real"},
+    )
+    real.folders["folders/100"] = real_folder
+
+    synth_folder = Folder(
+        name="folders/999",
+        display_name="under_synth",
+        ancestors=["folders/999"],
+        organization=synth,
+        parent=SYNTHETIC_ORG_NAME,
+        labels={"team": "synth"},
+    )
+    synth.folders["folders/999"] = synth_folder
+
+    real_project = Project(
+        name="projects/real-1",
+        project_id="real-1",
+        display_name="real-1",
+        parent="folders/100",
+        organization=real,
+        folder=real_folder,
+    )
+    synth_project = Project(
+        name="projects/synth-1",
+        project_id="synth-1",
+        display_name="synth-1",
+        parent="folders/999",
+        organization=synth,
+        folder=synth_folder,
+    )
+
+    h = Hierarchy([synth, real], [real_project, synth_project])
+    summary = h.summary()
+    assert summary["org_count"] == 1
+    assert summary["folder_count"] == 1
+    assert summary["project_count"] == 1
+    label_keys = [r["key"] for r in summary["top_label_keys"]]
+    # Both folders set "team" but only the real one should be counted.
+    assert label_keys.count("team") <= 1
+    # No synth-1 path should leak into deepest_paths.
+    assert all("synth-1" not in p for p in summary["deepest_paths"])
+
+
 def test_summary_deepest_paths_sorted():
     h = _build_summary_hierarchy()
     summary = h.summary(deepest_n=3)

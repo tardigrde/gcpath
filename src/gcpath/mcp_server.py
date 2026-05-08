@@ -9,7 +9,10 @@ from __future__ import annotations
 
 import fnmatch
 import logging
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
+
+if TYPE_CHECKING:
+    from mcp.server.fastmcp import FastMCP
 
 from gcpath.audit import run_audit, summarize_severities
 from gcpath.core import (
@@ -19,6 +22,7 @@ from gcpath.core import (
     OrganizationNode,
     Project,
     aggregate_metadata,
+    path_escape,
 )
 from gcpath.formatters import console_url
 
@@ -112,7 +116,7 @@ def _serialize_resource(item: Any) -> Dict[str, Any]:
             "type": "organization",
             "resource_name": item.organization.name,
             "display_name": item.organization.display_name,
-            "path": f"//{item.organization.display_name}",
+            "path": f"//{path_escape(item.organization.display_name)}",
         }
     if isinstance(item, Folder):
         return {
@@ -174,7 +178,7 @@ def _name_from_loaded(hierarchy: Hierarchy, res_name: str) -> Optional[str]:
     if res_name.startswith(_PREFIX_ORGS):
         org = _find_org(hierarchy, res_name)
         if org is not None:
-            return f"//{org.organization.display_name}"
+            return f"//{path_escape(org.organization.display_name)}"
     elif res_name.startswith(_PREFIX_FOLDERS):
         folder = _find_folder(hierarchy, res_name)
         if folder is not None:
@@ -245,7 +249,9 @@ def _aggregate_impl(
 ) -> Dict[str, Any]:
     items = list(hierarchy.folders) + list(hierarchy.projects)
     rows, total = aggregate_metadata(items, attr, key_filter=key)
-    if top:
+    # Distinguish "no limit" (None) from "top=0 → empty list" (truthy check
+    # would treat both as equivalent and ignore top=0).
+    if top is not None:
         rows = rows[:top]
     return {"count": len(rows), "scanned": total, attr: rows}
 
@@ -291,7 +297,7 @@ def build_server(
     *,
     use_asset_api: bool = True,
     scope: Optional[str] = None,
-):
+) -> "FastMCP":
     """Construct a FastMCP server with all gcpath tools registered.
 
     Imports `mcp` lazily so the rest of the package works without it installed.
