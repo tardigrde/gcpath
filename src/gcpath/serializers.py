@@ -241,14 +241,11 @@ def toon_metadata_aggregation(
             f"found across {total_resources} resources",
             help_lines,
         )
-    fields = ("key", "value", "count", "examples")
     data: Dict[str, Any] = {
-        "count": f"{len(rows)} of {total_resources} resources scanned"
+        "count": f"{len(rows)} of {total_resources} resources scanned",
+        metadata_kind: rows,
     }
-    table_text = toon_table(metadata_kind, rows, fields)
-    inner_data = data
-    output = toon_encode(inner_data) + "\n" + table_text
-    return with_help(output, help_lines)
+    return with_help(toon_encode(data), help_lines)
 
 
 def toon_labels(
@@ -314,15 +311,15 @@ def toon_audit(
             "Your hierarchy passes all enabled checks",
         ]
         return toon_empty("issues", "in scope", empty_help)
+    noun = "issue" if len(issues) == 1 else "issues"
     header = (
-        f"{len(issues)} issues "
+        f"{len(issues)} {noun} "
         f"({severity_counts.get('error', 0)} error, "
         f"{severity_counts.get('warn', 0)} warn, "
         f"{severity_counts.get('info', 0)} info)"
     )
-    fields = ("severity", "check", "path", "type", "details")
-    table_text = toon_table("issues", issues, fields)
-    return with_help(toon_encode({"count": header}) + "\n" + table_text, help_lines)
+    data: Dict[str, Any] = {"count": header, "issues": issues}
+    return with_help(toon_encode(data), help_lines)
 
 
 def toon_cache_status(

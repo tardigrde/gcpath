@@ -104,8 +104,16 @@ def test_name_pattern_violation():
 
 def test_audit_severity_filter():
     h = make_test_hierarchy()
-    issues = run_audit(h, severity="error")
-    assert all(i["severity"] == "error" for i in issues)
+    h.folders[0].labels = {}
+    # `require_labels` produces error-level issues that the filter must keep,
+    # so the assertion exercises real filtering rather than passing vacuously.
+    all_issues = run_audit(h, require_labels=["owner"])
+    error_issues = run_audit(h, require_labels=["owner"], severity="error")
+    assert error_issues, "expected at least one error-severity issue"
+    assert all(i["severity"] == "error" for i in error_issues)
+    assert len(error_issues) < len(all_issues), (
+        "severity filter should drop warn/info issues"
+    )
 
 
 def test_audit_check_subset():
@@ -133,6 +141,36 @@ def test_run_audit_sorts_by_severity():
     severity_order = {"error": 2, "warn": 1, "info": 0}
     for a, b in zip(severities, severities[1:]):
         assert severity_order[a] >= severity_order[b]
+
+
+def test_audit_invalid_name_pattern_returns_config_error():
+    h = make_test_hierarchy()
+    issues = run_audit(h, name_pattern="(unclosed")
+    config_issues = [i for i in issues if i["type"] == "config"]
+    assert config_issues
+    assert config_issues[0]["severity"] == "error"
+
+
+def test_audit_oversized_name_pattern_returns_config_error():
+    h = make_test_hierarchy()
+    issues = run_audit(h, name_pattern="a" * 500)
+    config_issues = [i for i in issues if i["type"] == "config"]
+    assert config_issues
+    assert "ReDoS" in config_issues[0]["details"]
+
+
+def test_resource_path_escapes_org_display_name():
+    """Audit paths must use the canonical url-escaped form for org names."""
+    from gcpath.audit import _resource_path
+    from gcpath.core import OrganizationNode
+    from google.cloud import resourcemanager_v3 as rm
+
+    org = OrganizationNode(
+        organization=rm.Organization(
+            name="organizations/9", display_name="acme corp"
+        )
+    )
+    assert _resource_path(org) == "//acme%20corp"
 
 
 def test_audit_clean_hierarchy_no_orphans():

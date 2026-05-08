@@ -16,7 +16,10 @@ from gcpath.core import (
     OrganizationNode,
     Project,
     SYNTHETIC_ORG_NAME,
+    path_escape,
 )
+
+_NAME_PATTERN_MAX_LEN = 200
 
 
 _SEVERITY_ORDER = {"info": 0, "warn": 1, "error": 2}
@@ -46,7 +49,7 @@ def _resource_type(item: Any) -> str:
 
 def _resource_path(item: Any) -> str:
     if isinstance(item, OrganizationNode):
-        return f"//{item.organization.display_name}"
+        return f"//{path_escape(item.organization.display_name)}"
     return getattr(item, "path", "") or getattr(item, "name", "")
 
 
@@ -66,15 +69,30 @@ def _check_orphan(hierarchy: Hierarchy) -> List[Dict[str, Any]]:
 
 def _check_synthetic_org(hierarchy: Hierarchy) -> List[Dict[str, Any]]:
     issues: List[Dict[str, Any]] = []
-    for org in hierarchy.organizations:
-        if org.organization.name != SYNTHETIC_ORG_NAME:
-            continue
+    synthetic_orgs = [
+        o for o in hierarchy.organizations
+        if o.organization.name == SYNTHETIC_ORG_NAME
+    ]
+    if not synthetic_orgs:
+        return issues
+    for org in synthetic_orgs:
         for f in org.folders.values():
             issues.append({
                 "severity": "info",
                 "check": "synthetic_org",
                 "path": f.path,
                 "type": "folder",
+                "details": "loaded under synthetic org (no real org access)",
+            })
+    for p in hierarchy.projects:
+        if p.organization is None:
+            continue
+        if any(p.organization is org for org in synthetic_orgs):
+            issues.append({
+                "severity": "info",
+                "check": "synthetic_org",
+                "path": p.path,
+                "type": "project",
                 "details": "loaded under synthetic org (no real org access)",
             })
     return issues
@@ -132,6 +150,18 @@ def _check_name_pattern(
 ) -> List[Dict[str, Any]]:
     if not pattern:
         return []
+    if len(pattern) > _NAME_PATTERN_MAX_LEN:
+        return [{
+            "severity": "error",
+            "check": "name_pattern_violation",
+            "path": "",
+            "type": "config",
+            "details": (
+                f"--name-pattern is too long "
+                f"({len(pattern)} chars, max {_NAME_PATTERN_MAX_LEN}); "
+                "rejected to limit ReDoS risk"
+            ),
+        }]
     try:
         regex = re.compile(pattern)
     except re.error as e:

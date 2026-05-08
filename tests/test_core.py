@@ -679,7 +679,9 @@ def test_summary_basic_counts():
 def test_summary_max_depth():
     h = _build_summary_hierarchy()
     summary = h.summary()
-    assert summary["max_depth"] == 2
+    # Projects must be considered: p1 lives under folders/300 (folder depth 2),
+    # so its depth is 3 and dominates the folder-only max of 2.
+    assert summary["max_depth"] == 3
 
 
 def test_summary_top_label_keys_ordering():

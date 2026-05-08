@@ -1254,8 +1254,9 @@ def test_open_single_folder(mock_load, mock_hierarchy):
     mock_load.return_value = mock_hierarchy
     result = runner.invoke(app, ["open", "//example.com/f1"])
     assert result.exit_code == 0
-    assert "console.cloud.google.com" in result.stdout
-    assert "folder=1" in result.stdout
+    # Match the fully-formed URL (path + query) rather than the bare host so
+    # CodeQL's URL-substring-sanitization rule doesn't flag the assertion.
+    assert "https://console.cloud.google.com/welcome?folder=1" in result.stdout
 
 
 @patch("gcpath.core.Hierarchy.load")
@@ -1459,10 +1460,167 @@ def test_mcp_invalid_transport():
 def test_mcp_missing_dependency_emits_help():
     import sys
 
-    # Ensure mcp_server module is reimported with the patched env
+    # Force `from mcp.server.fastmcp import FastMCP` (inside build_server) to
+    # raise ImportError so we always exercise the missing-extra branch.
     sys.modules.pop("gcpath.mcp_server", None)
     with patch.dict(sys.modules, {"mcp.server.fastmcp": None}):
         result = runner.invoke(app, ["mcp", "--transport", "stdio"])
-    # Should fail clean if mcp not installed; if it IS installed, this just exits via the server.
-    # We accept either exit code 1 (missing) or 0 (server returned cleanly).
-    assert result.exit_code in (0, 1)
+    assert result.exit_code == 1
+    assert "MCP support requires" in result.stdout
+
+
+# ---- New audit validation / render coverage ----
+
+
+@patch("gcpath.core.Hierarchy.load")
+def test_audit_missing_required_label_check_without_keys_errors(
+    mock_load, mock_hierarchy
+):
+    mock_load.return_value = mock_hierarchy
+    result = runner.invoke(
+        app, ["audit", "--check", "missing_required_label"]
+    )
+    assert result.exit_code == 1
+    assert "--require-labels is required" in result.stdout
+
+
+@patch("gcpath.core.Hierarchy.load")
+def test_audit_name_pattern_check_without_pattern_errors(
+    mock_load, mock_hierarchy
+):
+    mock_load.return_value = mock_hierarchy
+    result = runner.invoke(
+        app, ["audit", "--check", "name_pattern_violation"]
+    )
+    assert result.exit_code == 1
+    assert "--name-pattern is required" in result.stdout
+
+
+@patch("gcpath.core.Hierarchy.load")
+def test_audit_rejects_oversized_name_pattern(mock_load, mock_hierarchy):
+    mock_load.return_value = mock_hierarchy
+    huge = "a" * 500
+    result = runner.invoke(app, ["audit", "--name-pattern", huge])
+    assert result.exit_code == 1
+    assert "ReDoS" in result.stdout or "too long" in result.stdout
+
+
+@patch("gcpath.core.Hierarchy.load")
+def test_audit_rich_renders_table(mock_load, mock_hierarchy):
+    mock_load.return_value = mock_hierarchy
+    result = runner.invoke(
+        app, ["--format", "rich", "audit", "--exit-zero"]
+    )
+    assert result.exit_code == 0
+
+
+@patch("gcpath.core.Hierarchy.load")
+def test_audit_rich_clean_renders_no_issues(mock_load):
+    org_proto = resourcemanager_v3.Organization(
+        name="organizations/777", display_name="clean.example.com"
+    )
+    h = Hierarchy([OrganizationNode(organization=org_proto)], [])
+    mock_load.return_value = h
+    result = runner.invoke(app, ["--format", "rich", "audit"])
+    assert result.exit_code == 0
+
+
+@patch("gcpath.core.Hierarchy.load")
+def test_audit_yaml_format(mock_load, mock_hierarchy):
+    mock_load.return_value = mock_hierarchy
+    result = runner.invoke(
+        app, ["--format", "yaml", "audit", "--exit-zero"]
+    )
+    assert result.exit_code == 0
+    data = yaml.safe_load(result.stdout)
+    assert "severity_counts" in data
+    assert "issues" in data
+
+
+@patch("gcpath.core.Hierarchy.load")
+def test_summary_rich_renders(mock_load, mock_hierarchy):
+    mock_load.return_value = mock_hierarchy
+    result = runner.invoke(app, ["--format", "rich", "summary"])
+    assert result.exit_code == 0
+
+
+# ---- Open browser-mode error surfacing ----
+
+
+@patch("gcpath.core.Hierarchy.load")
+@patch("webbrowser.open", return_value=True)
+def test_open_browser_partial_success_surfaces_errors(
+    mock_open, mock_load, mock_hierarchy
+):
+    """When --browser succeeds for some paths and fails for others, the
+    failed rows must still be rendered to stdout instead of being swallowed.
+    """
+    mock_load.return_value = mock_hierarchy
+    result = runner.invoke(
+        app,
+        ["open", "--browser", "//example.com/f1", "//_/Standalone"],
+    )
+    assert result.exit_code == 0
+    mock_open.assert_called()
+    assert "Standalone" in result.stdout
+    assert "Some paths could not be resolved" in result.stdout
+
+
+@patch("gcpath.core.Hierarchy.load")
+@patch("webbrowser.open", return_value=False)
+def test_open_browser_zero_opened_falls_back_to_print(
+    mock_open, mock_load, mock_hierarchy
+):
+    mock_load.return_value = mock_hierarchy
+    result = runner.invoke(app, ["open", "--browser", "//example.com/f1"])
+    assert result.exit_code == 0
+    assert "https://console.cloud.google.com/welcome?folder=1" in result.stdout
+
+
+def test_console_url_rejects_synthetic_org_project():
+    """Direct unit test for the formatters.console_url synthetic-org guard.
+
+    The CLI path is harder to exercise because path resolution under the
+    synthetic org has its own quirks; the formatter contract is the
+    authoritative line of defense.
+    """
+    from gcpath.core import (
+        Folder,
+        OrganizationNode,
+        Project,
+        SYNTHETIC_ORG_NAME,
+    )
+    from gcpath.formatters import console_url
+
+    synth_proto = resourcemanager_v3.Organization(
+        name=SYNTHETIC_ORG_NAME, display_name="root"
+    )
+    synth = OrganizationNode(organization=synth_proto)
+    f = Folder(
+        name="folders/9",
+        display_name="under_synth",
+        ancestors=["folders/9"],
+        organization=synth,
+        parent=SYNTHETIC_ORG_NAME,
+    )
+    p = Project(
+        name="projects/syn",
+        project_id="syn",
+        display_name="syn",
+        parent="folders/9",
+        organization=synth,
+        folder=f,
+    )
+    with pytest.raises(GCPathError, match="synthetic"):
+        console_url(p)
+    # Project pointing at synth org directly (no folder) must also be rejected.
+    p_direct = Project(
+        name="projects/syn2",
+        project_id="syn2",
+        display_name="syn2",
+        parent=SYNTHETIC_ORG_NAME,
+        organization=synth,
+        folder=None,
+    )
+    with pytest.raises(GCPathError, match="synthetic"):
+        console_url(p_direct)

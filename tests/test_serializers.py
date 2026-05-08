@@ -546,7 +546,9 @@ class TestToonAudit:
         ]
         out = toon_audit(issues, {"error": 0, "warn": 1, "info": 0})
         assert "orphan_project" in out
-        assert "1 issues" in out
+        # Singular noun for a count of 1 (avoids "1 issues" UI defect).
+        assert "1 issue" in out
+        assert "1 issues" not in out
 
     def test_audit_empty(self):
         from gcpath.serializers import toon_audit

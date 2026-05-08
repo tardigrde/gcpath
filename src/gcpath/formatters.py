@@ -49,6 +49,16 @@ def console_url(item: Union[OrganizationNode, Folder, Project]) -> str:
             raise GCPathError(
                 f"Organizationless project '{item.project_id}' has no console URL via gcpath"
             )
+        project_org_name: Optional[str] = None
+        if item.folder is not None:
+            project_org_name = item.folder.organization.organization.name
+        elif item.organization is not None:
+            project_org_name = item.organization.organization.name
+        if project_org_name == SYNTHETIC_ORG_NAME:
+            raise GCPathError(
+                f"Project '{item.project_id}' under synthetic organization "
+                "has no GCP Console URL"
+            )
         return f"{_CONSOLE_BASE}/welcome?project={item.project_id}"
 
     raise GCPathError(f"Cannot build console URL for {type(item).__name__}")
