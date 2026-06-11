@@ -56,6 +56,7 @@ from gcpath.serializers import (
     _ALL_LS_FIELDS,
 )
 from gcpath.audit import run_audit, summarize_severities
+from gcpath.errors import describe_error, is_unexpected
 from gcpath.toon import format_age, toon_error
 from gcpath.hooks import (
     install_hooks,
@@ -215,17 +216,9 @@ def _output_toon(data_or_str: Any) -> None:
 
 
 def handle_error(e: Exception) -> None:
-    if isinstance(e, GCPathError):
-        print(toon_error(str(e)))
-    elif isinstance(e, gcp_exceptions.PermissionDenied):
-        print(toon_error(
-            "Permission Denied. Ensure you have the required permissions and are authenticated.",
-            ["Run 'gcloud auth application-default login'"],
-        ))
-    elif isinstance(e, gcp_exceptions.ServiceUnavailable):
-        print(toon_error("The GCP API is currently unreachable."))
-    elif isinstance(e, Exception):
-        print(toon_error(f"Unexpected error: {e}"))
+    message, help_lines = describe_error(e)
+    print(toon_error(message, help_lines or None))
+    if is_unexpected(e):
         logging.exception("Unexpected error occurred")
     raise typer.Exit(code=1)
 
@@ -279,15 +272,23 @@ def _show_home(_ctx: typer.Context) -> None:
     info = get_cache_info()
 
     if not info.exists or not info.fresh:
+        if info.exists and info.age_seconds is not None:
+            cache_state = f"stale ({format_age(info.age_seconds)} ago)"
+            help_lines = [
+                "Run `gcpath cache refresh` to reload from GCP",
+                "Run `gcpath ls` to load and list resources",
+            ]
+        else:
+            cache_state = "empty"
+            help_lines = [
+                "Run `gcpath ls` to load and list resources",
+                "Run `gcpath hook install` to enable ambient context",
+            ]
         dashboard: Dict[str, Any] = {
             "bin": gcpath_bin,
             "description": "Query GCP resource hierarchy paths",
-            "cache": "empty",
+            "cache": cache_state,
         }
-        help_lines = [
-            "Run `gcpath ls` to load and list resources",
-            "Run `gcpath hook install` to enable ambient context",
-        ]
         print(toon_encode(dashboard))
         print(toon_encode({"help": help_lines}))
         raise typer.Exit()
@@ -342,6 +343,31 @@ def cache_clear(ctx: typer.Context) -> None:
             rprint(f"[yellow]{msg}[/yellow]")
         else:
             print(toon_confirmed(msg))
+
+
+@cache_app.command("refresh")
+def cache_refresh(ctx: typer.Context) -> None:
+    """Re-load the hierarchy from GCP and rewrite the cache."""
+    fmt = ctx.obj.get("output_format", "toon")
+    try:
+        ep = ctx.obj.get("entrypoint")
+        _load_hierarchy(
+            ctx,
+            scope_resource=ep if ep else None,
+            recursive=True,
+            force_refresh=True,
+        )
+        info = get_cache_info()
+        msg = (
+            f"Cache refreshed: {info.org_count} organizations, "
+            f"{info.folder_count} folders, {info.project_count} projects"
+        )
+        if fmt == "rich":
+            rprint(f"[green]{msg}[/green]")
+        else:
+            print(toon_confirmed(msg))
+    except Exception as e:
+        handle_error(e)
 
 
 def _cache_status_rich(info: Any) -> None:

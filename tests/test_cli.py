@@ -235,6 +235,44 @@ def test_handle_error_service_unavailable():
         handle_error(gcp_exceptions.ServiceUnavailable("unavailable"))
 
 
+def test_handle_error_default_credentials(capsys):
+    from google.auth import exceptions as auth_exceptions
+    from gcpath.cli import handle_error
+    import typer
+
+    with pytest.raises(typer.Exit):
+        handle_error(auth_exceptions.DefaultCredentialsError("no adc"))
+    out = capsys.readouterr().out
+    assert "credentials" in out.lower()
+    assert "gcloud auth application-default login" in out
+
+
+def test_handle_error_refresh_error(capsys):
+    from google.auth import exceptions as auth_exceptions
+    from gcpath.cli import handle_error
+    import typer
+
+    with pytest.raises(typer.Exit):
+        handle_error(auth_exceptions.RefreshError("expired"))
+    out = capsys.readouterr().out
+    assert "expired" in out.lower()
+    assert "gcloud auth application-default login" in out
+
+
+def test_handle_error_asset_api_disabled(capsys):
+    from google.api_core import exceptions as gcp_exceptions
+    from gcpath.cli import handle_error
+    import typer
+
+    with pytest.raises(typer.Exit):
+        handle_error(gcp_exceptions.PermissionDenied(
+            "Cloud Asset API has not been used in project 123 before or it is disabled."
+        ))
+    out = capsys.readouterr().out
+    assert "Cloud Asset API is disabled" in out
+    assert "cloudasset.googleapis.com" in out
+
+
 @patch("gcpath.core.Hierarchy.load")
 def test_tree_with_ids(mock_load, mock_hierarchy):
     mock_load.return_value = mock_hierarchy
@@ -303,6 +341,44 @@ def test_cache_status(mock_get_cache_info):
     assert result.exit_code == 0
     assert "fresh" in result.stdout.lower()
     assert "2.0 KB" in result.stdout
+
+
+@patch("gcpath.cli.write_cache")
+@patch("gcpath.core.Hierarchy.load")
+def test_cache_refresh(mock_load, mock_write, mock_hierarchy, mock_get_cache_info_home):
+    mock_load.return_value = mock_hierarchy
+    mock_get_cache_info_home.return_value = CacheInfo(
+        exists=True, fresh=True, age_seconds=2.0, size_bytes=1024,
+        version=2, org_count=1, folder_count=2, project_count=2,
+    )
+    result = runner.invoke(app, ["cache", "refresh"])
+    assert result.exit_code == 0
+    assert "Cache refreshed" in result.stdout
+    assert "1 organizations" in result.stdout
+    mock_load.assert_called_once()
+    mock_write.assert_called_once()
+
+
+@patch("gcpath.cli.write_cache")
+@patch("gcpath.core.Hierarchy.load")
+def test_cache_refresh_skips_cache_read(
+    mock_load, mock_write, mock_hierarchy, mock_read_cache
+):
+    mock_load.return_value = mock_hierarchy
+    result = runner.invoke(app, ["cache", "refresh"])
+    assert result.exit_code == 0
+    mock_read_cache.assert_not_called()
+
+
+def test_home_stale_cache(mock_get_cache_info_home):
+    mock_get_cache_info_home.return_value = CacheInfo(
+        exists=True, fresh=False, age_seconds=100 * 3600, size_bytes=1024,
+        version=2, org_count=1, folder_count=2, project_count=2,
+    )
+    result = runner.invoke(app, [])
+    assert result.exit_code == 0
+    assert "stale" in result.stdout
+    assert "cache refresh" in result.stdout
 
 
 @patch("gcpath.cli.get_cache_info")

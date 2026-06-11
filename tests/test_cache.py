@@ -15,6 +15,7 @@ from gcpath.cache import (
     _dict_to_hierarchy,
     read_cache,
     read_cache_raw,
+    read_cache_unchecked,
     write_cache,
     clear_cache,
     is_cache_fresh,
@@ -172,6 +173,36 @@ def test_read_cache_success(mock_json_load, mock_open, mock_cache_file):
 
     hierarchy = read_cache()
     assert isinstance(hierarchy, Hierarchy)
+
+
+@patch("gcpath.cache.CACHE_FILE")
+@patch("builtins.open")
+@patch("json.load")
+def test_read_cache_unchecked_ignores_staleness(
+    mock_json_load, mock_open, mock_cache_file
+):
+    """read_cache_unchecked returns data even when the TTL has expired."""
+    mock_cache_file.exists.return_value = True
+    stale_time = datetime.now(timezone.utc) - timedelta(
+        hours=DEFAULT_CACHE_TTL_HOURS + 1
+    )
+    mock_json_load.return_value = {
+        "version": CACHE_VERSION,
+        "timestamp": stale_time.isoformat(),
+        "organizations": [],
+        "organizationless_projects": [],
+    }
+
+    assert read_cache() is None
+    hierarchy = read_cache_unchecked()
+    assert isinstance(hierarchy, Hierarchy)
+
+
+@patch("gcpath.cache.CACHE_FILE")
+def test_read_cache_unchecked_no_file(mock_cache_file):
+    """read_cache_unchecked returns None when no cache exists."""
+    mock_cache_file.exists.return_value = False
+    assert read_cache_unchecked() is None
 
 
 @patch("gcpath.cache.CACHE_DIR")
