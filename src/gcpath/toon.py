@@ -8,7 +8,7 @@ Thin wrapper around toon_format.encode() plus gcpath-specific AXI conventions:
 
 from typing import Any, Callable, Dict, List, Optional, Sequence
 
-import toon_format
+from gcpath._vendor import toon_format
 
 from gcpath.core import GCPathError
 
