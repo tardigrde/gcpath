@@ -1,6 +1,31 @@
 # CHANGELOG
 
 
+## v0.11.1 (2026-06-11)
+
+### Bug Fixes
+
+- Vendor toon-format to unblock PyPI publishing ([#36](https://github.com/tardigrde/gcpath/pull/36),
+  [`9173307`](https://github.com/tardigrde/gcpath/commit/9173307d538c9c93fe9ae22ffb0b64f76e8e4391))
+
+* fix: vendor toon-format to unblock PyPI publishing
+
+The latest toon-format PyPI release (0.9.0b1) predates fixes we depend on, so gcpath was pinned to a
+  git commit — which PyPI rejects as a direct dependency. Vendor toon_format at commit 9086144 (MIT)
+  under gcpath._vendor and drop the git dependency.
+
+Vendored code is excluded from ruff, mypy, and coverage. Remove the vendor copy once upstream cuts a
+  new release (toon-format/toon-python#58).
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* ci: exclude vendored code from SonarCloud analysis
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com>
+
+
 ## v0.11.0 (2026-04-28)
 
 ### Bug Fixes
