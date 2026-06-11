@@ -23,7 +23,6 @@ dependencies = [
     "google-cloud-resource-manager>=1.15.0",
     "pyyaml>=6.0",
     "rich>=14.2.0",
-    "toon-format @ git+https://github.com/toon-format/toon-python.git@90861444e5bf7d6408e91bd95e58dba41dd99be8",
     "typer>=0.20.1",
 ]
 
@@ -48,11 +47,21 @@ dev = [
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
-[tool.hatch.metadata]
-allow-direct-references = true
-
 [tool.hatch.build.targets.wheel]
 packages = ["src/gcpath"]
+
+[tool.ruff]
+extend-exclude = ["src/gcpath/_vendor"]
+
+[tool.mypy]
+exclude = ["src/gcpath/_vendor"]
+
+[[tool.mypy.overrides]]
+module = "gcpath._vendor.*"
+follow_imports = "skip"
+
+[tool.coverage.run]
+omit = ["src/gcpath/_vendor/*"]
 
 [tool.semantic_release]
 major_on_zero = false
