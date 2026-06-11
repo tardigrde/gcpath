@@ -28,6 +28,12 @@ def test_extract_query_none():
     assert _extract_query("something went wrong") is None
 
 
+def test_extract_query_suffix_strips_trailing_punctuation():
+    assert (
+        _extract_query("Resource not found: //example.com/f2.") == "//example.com/f2"
+    )
+
+
 def test_describe_default_credentials_error():
     message, help_lines = describe_error(
         auth_exceptions.DefaultCredentialsError("no creds")
@@ -59,6 +65,21 @@ def test_describe_permission_denied_service_disabled_reason_code():
     e = gcp_exceptions.PermissionDenied("Request denied. Reason: SERVICE_DISABLED")
     message, _ = describe_error(e)
     assert "Cloud Asset API is disabled" in message
+
+
+def test_describe_permission_denied_other_service_disabled():
+    e = gcp_exceptions.PermissionDenied(
+        "Cloud Resource Manager API has not been used in project 123 before or it"
+        " is disabled. Enable it by visiting https://console.developers.google.com"
+        "/apis/api/cloudresourcemanager.googleapis.com/overview?project=123"
+    )
+    message, help_lines = describe_error(e)
+    assert "cloudresourcemanager.googleapis.com is disabled" in message
+    assert (
+        "Run `gcloud services enable cloudresourcemanager.googleapis.com` to enable it"
+        in help_lines
+    )
+    assert not any("-U" in line for line in help_lines)
 
 
 def test_describe_permission_denied_generic():

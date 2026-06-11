@@ -25,6 +25,7 @@ _SERVICE_DISABLED_MARKERS = (
 )
 _QUOTED_TOKEN = re.compile(r"'([^']+)'")
 _NOT_FOUND_SUFFIX = re.compile(r"not found:\s*(\S+)", re.IGNORECASE)
+_SERVICE_NAME = re.compile(r"([a-z][a-z0-9-]+\.googleapis\.com)")
 
 
 def _extract_query(message: str) -> Optional[str]:
@@ -34,7 +35,7 @@ def _extract_query(message: str) -> Optional[str]:
         return match.group(1)
     match = _NOT_FOUND_SUFFIX.search(message)
     if match:
-        return match.group(1)
+        return match.group(1).rstrip(".,;:")
     return None
 
 
@@ -115,12 +116,21 @@ def describe_error(e: Exception) -> Tuple[str, List[str]]:
 
     if isinstance(e, gcp_exceptions.PermissionDenied):
         if _is_service_disabled(e):
+            # Attribute to the service named in the message; default to the
+            # Cloud Asset API since it is the default API mode.
+            match = _SERVICE_NAME.search(str(e))
+            service = match.group(1) if match else "cloudasset.googleapis.com"
+            if service == "cloudasset.googleapis.com":
+                return (
+                    "Cloud Asset API is disabled for your project.",
+                    [
+                        "Run `gcloud services enable cloudasset.googleapis.com` to enable it",
+                        "Or retry with `-U` to use the Resource Manager API instead",
+                    ],
+                )
             return (
-                "Cloud Asset API is disabled for your project.",
-                [
-                    "Run `gcloud services enable cloudasset.googleapis.com` to enable it",
-                    "Or retry with `-U` to use the Resource Manager API instead",
-                ],
+                f"{service} is disabled for your project.",
+                [f"Run `gcloud services enable {service}` to enable it"],
             )
         return (
             "Permission Denied. Ensure you have the required permissions and are authenticated.",

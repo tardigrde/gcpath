@@ -389,6 +389,7 @@ def test_cache_refresh_reports_write_failure(
     result = runner.invoke(app, ["cache", "refresh"])
     assert result.exit_code == 1
     assert "Cache refresh failed" in result.stdout
+    assert "Unexpected error" not in result.stdout
 
 
 def test_home_stale_cache(mock_get_cache_info_home):

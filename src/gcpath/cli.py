@@ -379,6 +379,8 @@ def cache_refresh(ctx: typer.Context) -> None:
             rprint(f"[green]{msg}[/green]")
         else:
             print(toon_confirmed(msg))
+    except typer.Exit:
+        raise
     except Exception as e:
         handle_error(e)
 
