@@ -118,7 +118,9 @@ _FULL_OPTION = typer.Option(
     False, "--full", help="Show all labels/tags without truncation"
 )
 _FIELDS_OPTION = typer.Option(
-    None, "--fields", help=f"Comma-separated fields to show: {', '.join(_ALL_LS_FIELDS)}"
+    None,
+    "--fields",
+    help=f"Comma-separated fields to show: {', '.join(_ALL_LS_FIELDS)}",
 )
 
 
@@ -135,6 +137,8 @@ def _metadata_inclusion(
     include_labels = show_labels or bool(label_filters) or needs_labels
     include_tags = show_tags or bool(tag_filters) or needs_tags
     return include_labels, include_tags
+
+
 _VALID_TYPE_FILTERS = ("folder", "project", "organization")
 _VALID_FORMATS = ("toon", "json", "yaml", "rich")
 _RICH_HEADER_STYLE = "bold magenta"
@@ -147,13 +151,17 @@ logger = logging.getLogger(__name__)
 def _display_bin_path(path: str) -> str:
     home = str(Path.home())
     if path.startswith(home):
-        return "~" + path[len(home):]
+        return "~" + path[len(home) :]
     return path
 
 
 def _validate_type_filter(resource_type: Optional[str]) -> None:
     if resource_type is not None and resource_type not in _VALID_TYPE_FILTERS:
-        print(toon_error(f"Invalid type '{resource_type}'. Must be one of: {', '.join(_VALID_TYPE_FILTERS)}"))
+        print(
+            toon_error(
+                f"Invalid type '{resource_type}'. Must be one of: {', '.join(_VALID_TYPE_FILTERS)}"
+            )
+        )
         raise typer.Exit(code=1)
 
 
@@ -220,6 +228,7 @@ app.add_typer(config_app, name="config")
 hook_app = typer.Typer(help="Manage agent session hooks.")
 app.add_typer(hook_app, name="hook")
 
+
 def _get_dumper(output_format: str) -> Optional[Callable[[Any], str]]:
     if output_format == "json":
         return dump_json
@@ -267,7 +276,11 @@ def main(
 ) -> None:
     """gcpath - Google Cloud Platform resource hierarchy utility"""
     if output_format not in _VALID_FORMATS:
-        print(toon_error(f"Invalid format '{output_format}'. Must be one of: {', '.join(_VALID_FORMATS)}"))
+        print(
+            toon_error(
+                f"Invalid format '{output_format}'. Must be one of: {', '.join(_VALID_FORMATS)}"
+            )
+        )
         raise typer.Exit(code=1)
 
     ctx.ensure_object(dict)
@@ -328,11 +341,13 @@ def _show_home(_ctx: typer.Context) -> None:
             name = org_info.get("display_name", "unknown")
             folder_count = len(org_data.get("folders", {}))
             project_count = len(org_data.get("projects", []))
-            org_rows.append({
-                "name": name,
-                "folders": folder_count,
-                "projects": project_count,
-            })
+            org_rows.append(
+                {
+                    "name": name,
+                    "folders": folder_count,
+                    "projects": project_count,
+                }
+            )
 
     dashboard = {
         "bin": gcpath_bin,
@@ -386,10 +401,12 @@ def cache_refresh(ctx: typer.Context) -> None:
         )
         info = get_cache_info()
         if not info.exists:
-            print(toon_error(
-                "Cache refresh failed: cache file was not written",
-                [f"Check write permissions for {CACHE_FILE}"],
-            ))
+            print(
+                toon_error(
+                    "Cache refresh failed: cache file was not written",
+                    [f"Check write permissions for {CACHE_FILE}"],
+                )
+            )
             raise typer.Exit(code=1)
         msg = (
             f"Cache refreshed: {info.org_count} organizations, "
@@ -409,6 +426,7 @@ def _cache_status_rich(info: Any) -> None:
     """Render cache status as a Rich table."""
     from rich.table import Table
     from rich.console import Console
+
     console = Console()
     if not info.exists:
         rprint(f"[yellow]No cache file found at {CACHE_FILE}[/yellow]")
@@ -416,12 +434,16 @@ def _cache_status_rich(info: Any) -> None:
     table = Table(show_header=False, box=None, padding=(0, 1))
     table.add_column("Key", style="bold")
     table.add_column("Value")
-    table.add_row("Status", "[green]Fresh[/green]" if info.fresh else "[yellow]Stale[/yellow]")
+    table.add_row(
+        "Status", "[green]Fresh[/green]" if info.fresh else "[yellow]Stale[/yellow]"
+    )
     if info.age_seconds is not None:
         table.add_row("Age", format_age(info.age_seconds))
     if info.size_bytes is not None:
         size_kb = info.size_bytes / 1024
-        size_str = f"{size_kb / 1024:.1f} MB" if size_kb >= 1024 else f"{size_kb:.1f} KB"
+        size_str = (
+            f"{size_kb / 1024:.1f} MB" if size_kb >= 1024 else f"{size_kb:.1f} KB"
+        )
         table.add_row("Size", size_str)
     if info.version is not None:
         table.add_row("Version", str(info.version))
@@ -444,18 +466,20 @@ def cache_status(ctx: typer.Context) -> None:
         _cache_status_rich(info)
         return
 
-    print(toon_cache_status(
-        exists=info.exists,
-        fresh=info.fresh,
-        age_seconds=info.age_seconds,
-        size_bytes=info.size_bytes,
-        version=info.version,
-        scope=info.scope,
-        org_count=info.org_count,
-        folder_count=info.folder_count,
-        project_count=info.project_count,
-        location=str(CACHE_FILE),
-    ))
+    print(
+        toon_cache_status(
+            exists=info.exists,
+            fresh=info.fresh,
+            age_seconds=info.age_seconds,
+            size_bytes=info.size_bytes,
+            version=info.version,
+            scope=info.scope,
+            org_count=info.org_count,
+            folder_count=info.folder_count,
+            project_count=info.project_count,
+            location=str(CACHE_FILE),
+        )
+    )
 
 
 @config_app.command("set-entrypoint")
@@ -494,6 +518,7 @@ def config_show(ctx: typer.Context) -> None:
     if fmt == "rich":
         from rich.table import Table
         from rich.console import Console
+
         console = Console()
         if not config:
             rprint("[yellow]No configuration set.[/yellow]")
@@ -576,7 +601,9 @@ def _load_hierarchy(
         if cached is not None:
             info = get_cache_info()
             if info.age_seconds is not None:
-                logger.debug(f"Using cached data ({format_age(info.age_seconds)} ago). Use -F to refresh.")
+                logger.debug(
+                    f"Using cached data ({format_age(info.age_seconds)} ago). Use -F to refresh."
+                )
             return cached
 
     effective_recursive = True if is_cacheable else recursive
@@ -614,9 +641,11 @@ class _ParsedResource:
 
 def _parse_resource_arg(effective_resource: str, command_name: str) -> _ParsedResource:
     if effective_resource.startswith(_RESOURCE_PREFIX_PROJECTS):
-        print(toon_error(
-            f"'{command_name}' command does not support starting from a project (projects are leaf nodes)."
-        ))
+        print(
+            toon_error(
+                f"'{command_name}' command does not support starting from a project (projects are leaf nodes)."
+            )
+        )
         raise typer.Exit(code=1)
 
     target_org_name = None
@@ -715,7 +744,11 @@ def _prepare_hierarchy_command(
             parsed.target_path,
         )
         if not nodes_to_process:
-            print(toon_error(f"Target resource '{parsed.target_resource_name}' not found."))
+            print(
+                toon_error(
+                    f"Target resource '{parsed.target_resource_name}' not found."
+                )
+            )
             raise typer.Exit(code=1)
     else:
         nodes_to_process = list(hierarchy.organizations)
@@ -742,6 +775,7 @@ def _handle_empty_hierarchy(fmt: str) -> None:
 
     if fmt == "rich":
         import google.auth
+
         account_msg = ""
         try:
             credentials, _ = google.auth.default()
@@ -760,10 +794,12 @@ def _handle_empty_hierarchy(fmt: str) -> None:
             )
         return
 
-    print(toon_error(
-        "No organizations or projects found accessible to your account",
-        ["Projects without organizations are shown with //_ prefix"],
-    ))
+    print(
+        toon_error(
+            "No organizations or projects found accessible to your account",
+            ["Projects without organizations are shown with //_ prefix"],
+        )
+    )
 
 
 def _resolve_target_path_prefix(target_resource_name: Optional[str]) -> str:
@@ -843,7 +879,9 @@ def _build_ls_items(
     )
     items = sort_resources(items)
     total_in_scope = len(items)
-    items = _apply_ls_filters(items, resource_type, label_filters, tag_filters, excludes)
+    items = _apply_ls_filters(
+        items, resource_type, label_filters, tag_filters, excludes
+    )
     items = _apply_depth_limit(items, level, recursive, target_path_prefix)
     return items, total_in_scope
 
@@ -872,6 +910,7 @@ def _display_ls_rich(
 ) -> None:
     from rich.table import Table
     from rich.console import Console
+
     console = Console()
 
     table = Table(
@@ -908,7 +947,11 @@ def _parse_fields(fields_str: Optional[str]) -> Optional[Tuple[str, ...]]:
     fields = tuple(f.strip() for f in fields_str.split(","))
     for f in fields:
         if f not in _ALL_LS_FIELDS:
-            print(toon_error(f"Unknown field '{f}'. Available fields: {', '.join(_ALL_LS_FIELDS)}"))
+            print(
+                toon_error(
+                    f"Unknown field '{f}'. Available fields: {', '.join(_ALL_LS_FIELDS)}"
+                )
+            )
             raise typer.Exit(code=1)
     return fields
 
@@ -1011,7 +1054,11 @@ def ls(
             return
 
         help_lines = _ls_help_lines(recursive)
-        print(toon_ls(items, total, fields=parsed_fields, full=full, help_lines=help_lines))
+        print(
+            toon_ls(
+                items, total, fields=parsed_fields, full=full, help_lines=help_lines
+            )
+        )
 
     except Exception as e:
         handle_error(e)
@@ -1168,6 +1215,7 @@ def tree(
         )
 
         from rich.console import Console
+
         Console().print(root_tree)
 
     except Exception as e:
@@ -1211,12 +1259,14 @@ def diagram(
     """Generate a Mermaid or D2 diagram of the resource hierarchy."""
     try:
         if diagram_format not in ("mermaid", "d2"):
-            print(toon_error(f"Unsupported diagram format '{diagram_format}'. Use 'mermaid' or 'd2'."))
+            print(
+                toon_error(
+                    f"Unsupported diagram format '{diagram_format}'. Use 'mermaid' or 'd2'."
+                )
+            )
             raise typer.Exit(code=1)
 
-        hctx = _prepare_hierarchy_command(
-            ctx, "diagram", resource, force_refresh
-        )
+        hctx = _prepare_hierarchy_command(ctx, "diagram", resource, force_refresh)
         if hctx is None:
             return
 
@@ -1258,28 +1308,39 @@ def _validate_stats_resource(effective_resource: Optional[str]) -> Optional[str]
     if effective_resource.startswith("projects/"):
         print(toon_error("'stats' command does not support starting from a project."))
         raise typer.Exit(code=1)
-    if any(effective_resource.startswith(p) for p in [_RESOURCE_PREFIX_ORGS, _RESOURCE_PREFIX_FOLDERS]):
+    if any(
+        effective_resource.startswith(p)
+        for p in [_RESOURCE_PREFIX_ORGS, _RESOURCE_PREFIX_FOLDERS]
+    ):
         return effective_resource
-    print(toon_error(
-        f"Invalid resource format '{effective_resource}'. Expected 'organizations/...' or 'folders/...'."
-    ))
+    print(
+        toon_error(
+            f"Invalid resource format '{effective_resource}'. Expected 'organizations/...' or 'folders/...'."
+        )
+    )
     raise typer.Exit(code=1)
 
 
 def _stats_rich(
-    scope_label: str, org_count: int, folder_count: int, project_count: int,
+    scope_label: str,
+    org_count: int,
+    folder_count: int,
+    project_count: int,
     target_resource_name: Optional[str],
 ) -> None:
     """Render stats as a Rich table."""
     from rich.table import Table
     from rich.console import Console
     from rich.markup import escape
+
     console = Console()
     rprint(f"[bold]Scope:[/bold] {escape(scope_label)}")
     table = Table(show_header=False, box=None, padding=(0, 1))
     table.add_column("Resource", style="bold")
     table.add_column("Count", justify="right")
-    if not target_resource_name or target_resource_name.startswith(_RESOURCE_PREFIX_ORGS):
+    if not target_resource_name or target_resource_name.startswith(
+        _RESOURCE_PREFIX_ORGS
+    ):
         table.add_row("Organizations", str(org_count))
     table.add_row("Folders", str(folder_count))
     table.add_row("Projects", str(project_count))
@@ -1322,23 +1383,44 @@ def stats(
         fmt = ctx.obj.get("output_format", "toon")
 
         if fmt == "rich":
-            _stats_rich(scope_label, org_count, folder_count, project_count, target_resource_name)
+            _stats_rich(
+                scope_label,
+                org_count,
+                folder_count,
+                project_count,
+                target_resource_name,
+            )
             return
 
         if fmt in ("json", "yaml"):
             dumper = _get_dumper(fmt)
             if dumper:
-                print(dumper({"scope": scope_label, "organizations": org_count, "folders": folder_count, "projects": project_count}))
+                print(
+                    dumper(
+                        {
+                            "scope": scope_label,
+                            "organizations": org_count,
+                            "folders": folder_count,
+                            "projects": project_count,
+                        }
+                    )
+                )
             return
 
-        help_lines = ["Run `gcpath stats` for all-organization statistics"] if target_resource_name else []
-        print(toon_stats(
-            scope=scope_label,
-            organizations=org_count,
-            folders=folder_count,
-            projects=project_count,
-            help_lines=help_lines or None,
-        ))
+        help_lines = (
+            ["Run `gcpath stats` for all-organization statistics"]
+            if target_resource_name
+            else []
+        )
+        print(
+            toon_stats(
+                scope=scope_label,
+                organizations=org_count,
+                folders=folder_count,
+                projects=project_count,
+                help_lines=help_lines or None,
+            )
+        )
 
     except Exception as e:
         handle_error(e)
@@ -1353,9 +1435,7 @@ def summary_command(
             help="Resource to scope the summary to (e.g. organizations/123 or folders/456)."
         ),
     ] = None,
-    top: int = typer.Option(
-        5, "--top", help="How many top label/tag keys to include"
-    ),
+    top: int = typer.Option(5, "--top", help="How many top label/tag keys to include"),
     force_refresh: bool = typer.Option(
         False, "--force-refresh", "-F", help=_REFRESH_HELP
     ),
@@ -1472,17 +1552,17 @@ def audit_command(
     """Run governance checks against the loaded hierarchy."""
     try:
         if severity not in _VALID_AUDIT_SEVERITIES:
-            print(toon_error(
-                f"Invalid severity '{severity}'. Must be one of: "
-                + ", ".join(_VALID_AUDIT_SEVERITIES)
-            ))
+            print(
+                toon_error(
+                    f"Invalid severity '{severity}'. Must be one of: "
+                    + ", ".join(_VALID_AUDIT_SEVERITIES)
+                )
+            )
             raise typer.Exit(code=1)
 
         required_label_keys = _parse_required_labels(require_labels)
         check_subset = _parse_audit_check_subset(checks)
-        _validate_audit_check_inputs(
-            check_subset, required_label_keys, name_pattern
-        )
+        _validate_audit_check_inputs(check_subset, required_label_keys, name_pattern)
 
         ep = ctx.obj.get("entrypoint")
         scope = _resolve_scope(resource, ep)
@@ -1529,10 +1609,11 @@ def _parse_audit_check_subset(checks: Optional[str]) -> Optional[List[str]]:
     subset = [c.strip() for c in checks.split(",") if c.strip()]
     for c in subset:
         if c not in _VALID_AUDIT_CHECKS:
-            print(toon_error(
-                f"Unknown check '{c}'. Available: "
-                + ", ".join(_VALID_AUDIT_CHECKS)
-            ))
+            print(
+                toon_error(
+                    f"Unknown check '{c}'. Available: " + ", ".join(_VALID_AUDIT_CHECKS)
+                )
+            )
             raise typer.Exit(code=1)
     return subset
 
@@ -1543,21 +1624,31 @@ def _validate_audit_check_inputs(
     name_pattern: Optional[str],
 ) -> None:
     """Reject combinations that would silently disable a requested check."""
-    if check_subset and "missing_required_label" in check_subset and not required_label_keys:
-        print(toon_error(
-            "--require-labels is required when running the missing_required_label check"
-        ))
+    if (
+        check_subset
+        and "missing_required_label" in check_subset
+        and not required_label_keys
+    ):
+        print(
+            toon_error(
+                "--require-labels is required when running the missing_required_label check"
+            )
+        )
         raise typer.Exit(code=1)
     if check_subset and "name_pattern_violation" in check_subset and not name_pattern:
-        print(toon_error(
-            "--name-pattern is required when running the name_pattern_violation check"
-        ))
+        print(
+            toon_error(
+                "--name-pattern is required when running the name_pattern_violation check"
+            )
+        )
         raise typer.Exit(code=1)
     if name_pattern is not None and len(name_pattern) > _NAME_PATTERN_MAX_LEN:
-        print(toon_error(
-            f"--name-pattern is too long ({len(name_pattern)} chars, "
-            f"max {_NAME_PATTERN_MAX_LEN}); rejected to limit ReDoS risk"
-        ))
+        print(
+            toon_error(
+                f"--name-pattern is too long ({len(name_pattern)} chars, "
+                f"max {_NAME_PATTERN_MAX_LEN}); rejected to limit ReDoS risk"
+            )
+        )
         raise typer.Exit(code=1)
 
 
@@ -1571,11 +1662,15 @@ def _render_audit(
     if fmt in ("json", "yaml"):
         dumper = _get_dumper(fmt)
         if dumper:
-            print(dumper({
-                "scope": scope_label,
-                "severity_counts": sev_counts,
-                "issues": issues,
-            }))
+            print(
+                dumper(
+                    {
+                        "scope": scope_label,
+                        "severity_counts": sev_counts,
+                        "issues": issues,
+                    }
+                )
+            )
         return
     if fmt == "rich":
         _render_audit_rich(issues)
@@ -1676,27 +1771,21 @@ def get_resource_name(
         handle_error(e)
 
 
-def _find_loaded_org(
-    hierarchy: Hierarchy, res_name: str
-) -> Optional[OrganizationNode]:
+def _find_loaded_org(hierarchy: Hierarchy, res_name: str) -> Optional[OrganizationNode]:
     for org in hierarchy.organizations:
         if org.organization.name == res_name:
             return org
     return None
 
 
-def _find_loaded_folder(
-    hierarchy: Hierarchy, res_name: str
-) -> Optional[Folder]:
+def _find_loaded_folder(hierarchy: Hierarchy, res_name: str) -> Optional[Folder]:
     for org in hierarchy.organizations:
         if res_name in org.folders:
             return org.folders[res_name]
     return None
 
 
-def _find_loaded_project(
-    hierarchy: Hierarchy, res_name: str
-) -> Optional[Project]:
+def _find_loaded_project(hierarchy: Hierarchy, res_name: str) -> Optional[Project]:
     for proj in hierarchy.projects:
         if proj.name == res_name:
             return proj
@@ -1731,7 +1820,9 @@ def open_resource(
     ctx: typer.Context,
     paths: Annotated[
         List[str],
-        typer.Argument(help="Paths to open in the GCP Console, e.g. //example.com/folder"),
+        typer.Argument(
+            help="Paths to open in the GCP Console, e.g. //example.com/folder"
+        ),
     ],
     browser: bool = typer.Option(
         False,
@@ -1765,9 +1856,7 @@ def open_resource(
         handle_error(e)
 
 
-def _resolve_open_paths(
-    hierarchy: Hierarchy, paths: List[str]
-) -> List[Dict[str, str]]:
+def _resolve_open_paths(hierarchy: Hierarchy, paths: List[str]) -> List[Dict[str, str]]:
     results: List[Dict[str, str]] = []
     for path in paths:
         try:
@@ -1781,15 +1870,15 @@ def _resolve_open_paths(
             results.append({"path": path, "resource_name": resource_name, "url": url})
         except GCPathError as e:
             if len(paths) > 1:
-                results.append({"path": path, "resource_name": "", "url": "", "error": str(e)})
+                results.append(
+                    {"path": path, "resource_name": "", "url": "", "error": str(e)}
+                )
             else:
                 raise
     return results
 
 
-def _handle_browser_open(
-    ctx: typer.Context, results: List[Dict[str, str]]
-) -> None:
+def _handle_browser_open(ctx: typer.Context, results: List[Dict[str, str]]) -> None:
     import webbrowser
 
     opened = 0
@@ -1814,14 +1903,10 @@ def _handle_browser_open(
     # Always surface error rows so partial-success doesn't swallow failures.
     error_rows = [r for r in results if r.get("error")]
     if error_rows:
-        _print_open_payload(
-            ctx, error_rows, ["Some paths could not be resolved"]
-        )
+        _print_open_payload(ctx, error_rows, ["Some paths could not be resolved"])
 
 
-def _render_open_results(
-    ctx: typer.Context, results: List[Dict[str, str]]
-) -> None:
+def _render_open_results(ctx: typer.Context, results: List[Dict[str, str]]) -> None:
     fmt = ctx.obj.get("output_format", "toon")
     if fmt in ("json", "yaml"):
         dumper = _get_dumper(fmt)
@@ -1871,7 +1956,11 @@ def get_path_command(
                 p = Hierarchy.resolve_ancestry(name)
                 logger.debug(f"path: resolved {name} to {p}")
                 results.append((name, p))
-            except (gcp_exceptions.NotFound, gcp_exceptions.PermissionDenied, GCPathError) as e:
+            except (
+                gcp_exceptions.NotFound,
+                gcp_exceptions.PermissionDenied,
+                GCPathError,
+            ) as e:
                 if len(resource_names) > 1:
                     print(toon_error(f"Error resolving {name}: {e}"))
                 else:
@@ -2012,11 +2101,18 @@ def find(
             return
 
         help_lines = (
-            ["Run `gcpath ls <path>` for details on a resource"]
-            if items
-            else None
+            ["Run `gcpath ls <path>` for details on a resource"] if items else None
         )
-        print(toon_find(items, pattern, total_searched=total_searched, fields=parsed_fields, full=full, help_lines=help_lines))
+        print(
+            toon_find(
+                items,
+                pattern,
+                total_searched=total_searched,
+                fields=parsed_fields,
+                full=full,
+                help_lines=help_lines,
+            )
+        )
 
     except Exception as e:
         handle_error(e)
@@ -2078,9 +2174,7 @@ def _run_metadata_aggregation(
         table.add_column("Count", justify="right")
         table.add_column("Examples", overflow="fold")
         for row in rows:
-            table.add_row(
-                row["key"], row["value"], str(row["count"]), row["examples"]
-            )
+            table.add_row(row["key"], row["value"], str(row["count"]), row["examples"])
         console.print(table)
         return
 
@@ -2166,9 +2260,11 @@ def ancestors(
     """Show the full ancestry chain from a resource up to the org root."""
     try:
         if not any(resource_name.startswith(p) for p in _RESOURCE_PREFIXES):
-            print(toon_error(
-                f"Invalid resource format '{resource_name}'. Expected 'organizations/...', 'folders/...', or 'projects/...'."
-            ))
+            print(
+                toon_error(
+                    f"Invalid resource format '{resource_name}'. Expected 'organizations/...', 'folders/...', or 'projects/...'."
+                )
+            )
             raise typer.Exit(code=1)
 
         chain = Hierarchy.resolve_ancestry_chain(resource_name)
@@ -2184,9 +2280,13 @@ def ancestors(
         if fmt == "rich":
             from rich.table import Table
             from rich.console import Console
+
             console = Console()
             table = Table(
-                show_header=True, header_style=_RICH_HEADER_STYLE, box=None, padding=(0, 1)
+                show_header=True,
+                header_style=_RICH_HEADER_STYLE,
+                box=None,
+                padding=(0, 1),
             )
             table.add_column("Resource Name", overflow="fold")
             table.add_column("Display Name", overflow="fold")
@@ -2196,10 +2296,12 @@ def ancestors(
             console.print(table)
             return
 
-        print(toon_ancestors(
-            chain,
-            help_lines=["Run `gcpath ls <resource>` to list children"],
-        ))
+        print(
+            toon_ancestors(
+                chain,
+                help_lines=["Run `gcpath ls <resource>` to list children"],
+            )
+        )
 
     except Exception as e:
         handle_error(e)
@@ -2231,10 +2333,12 @@ def mcp_command(
     """
     try:
         if transport not in _VALID_MCP_TRANSPORTS:
-            print(toon_error(
-                f"Invalid transport '{transport}'. Use one of: "
-                + ", ".join(_VALID_MCP_TRANSPORTS)
-            ))
+            print(
+                toon_error(
+                    f"Invalid transport '{transport}'. Use one of: "
+                    + ", ".join(_VALID_MCP_TRANSPORTS)
+                )
+            )
             raise typer.Exit(code=1)
 
         # `mcp_server` is import-safe; it only imports the optional `mcp`
@@ -2273,10 +2377,15 @@ def hook_install(ctx: typer.Context) -> None:
                 rprint(f"[dim]Hook already installed for {target}[/dim]")
         return
 
-    print(toon_confirmed(
-        "Hooks installed: "
-        + ", ".join(f"{t}={'updated' if c else 'already installed'}" for t, c in results.items())
-    ))
+    print(
+        toon_confirmed(
+            "Hooks installed: "
+            + ", ".join(
+                f"{t}={'updated' if c else 'already installed'}"
+                for t, c in results.items()
+            )
+        )
+    )
 
 
 @hook_app.command("uninstall")
@@ -2293,10 +2402,14 @@ def hook_uninstall(ctx: typer.Context) -> None:
                 rprint(f"[dim]No hook found for {target}[/dim]")
         return
 
-    print(toon_confirmed(
-        "Hooks uninstalled: "
-        + ", ".join(f"{t}={'removed' if c else 'not found'}" for t, c in results.items())
-    ))
+    print(
+        toon_confirmed(
+            "Hooks uninstalled: "
+            + ", ".join(
+                f"{t}={'removed' if c else 'not found'}" for t, c in results.items()
+            )
+        )
+    )
 
 
 @hook_app.command("run")
@@ -2319,7 +2432,9 @@ def hook_status(ctx: typer.Context) -> None:
             if installed and path_ok:
                 rprint(f"[green]{target}[/green]: installed ({loc})")
             elif installed and not path_ok:
-                rprint(f"[yellow]{target}[/yellow]: installed (path needs repair) ({loc})")
+                rprint(
+                    f"[yellow]{target}[/yellow]: installed (path needs repair) ({loc})"
+                )
             else:
                 rprint(f"[dim]{target}[/dim]: not installed ({loc})")
         return

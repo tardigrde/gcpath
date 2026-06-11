@@ -779,4 +779,6 @@ def test_summary_deepest_paths_sorted():
     h = _build_summary_hierarchy()
     summary = h.summary(deepest_n=3)
     assert summary["deepest_paths"]
-    assert summary["deepest_paths"][0].count("/") >= summary["deepest_paths"][-1].count("/")
+    assert summary["deepest_paths"][0].count("/") >= summary["deepest_paths"][-1].count(
+        "/"
+    )

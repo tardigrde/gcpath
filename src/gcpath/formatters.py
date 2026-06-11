@@ -29,9 +29,7 @@ def console_url(item: Union[OrganizationNode, Folder, Project]) -> str:
     if isinstance(item, OrganizationNode):
         org_name = item.organization.name
         if org_name == SYNTHETIC_ORG_NAME:
-            raise GCPathError(
-                "Synthetic organization has no GCP Console URL"
-            )
+            raise GCPathError("Synthetic organization has no GCP Console URL")
         org_id = org_name.split("/", 1)[-1]
         return f"{_CONSOLE_BASE}/welcome?organizationId={org_id}"
 

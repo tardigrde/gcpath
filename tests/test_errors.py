@@ -29,9 +29,7 @@ def test_extract_query_none():
 
 
 def test_extract_query_suffix_strips_trailing_punctuation():
-    assert (
-        _extract_query("Resource not found: //example.com/f2.") == "//example.com/f2"
-    )
+    assert _extract_query("Resource not found: //example.com/f2.") == "//example.com/f2"
 
 
 def test_describe_default_credentials_error():
@@ -108,9 +106,7 @@ def test_describe_unexpected_error():
 
 
 def test_suggest_similar_from_cache():
-    with patch(
-        "gcpath.cache.read_cache_unchecked", return_value=make_test_hierarchy()
-    ):
+    with patch("gcpath.cache.read_cache_unchecked", return_value=make_test_hierarchy()):
         suggestions = suggest_similar("//example.com/f2")
     assert "//example.com/f1" in suggestions
 
@@ -121,9 +117,7 @@ def test_suggest_similar_no_cache():
 
 
 def test_not_found_with_suggestions():
-    with patch(
-        "gcpath.cache.read_cache_unchecked", return_value=make_test_hierarchy()
-    ):
+    with patch("gcpath.cache.read_cache_unchecked", return_value=make_test_hierarchy()):
         message, help_lines = describe_error(
             ResourceNotFoundError("Resource not found: //example.com/f2")
         )

@@ -22,10 +22,19 @@ def mock_read_cache():
 
 @pytest.fixture(autouse=True)
 def mock_get_cache_info_home():
-    with patch("gcpath.cli.get_cache_info", return_value=CacheInfo(
-        exists=False, fresh=False, age_seconds=None, size_bytes=None,
-        version=None, org_count=0, folder_count=0, project_count=0,
-    )) as m:
+    with patch(
+        "gcpath.cli.get_cache_info",
+        return_value=CacheInfo(
+            exists=False,
+            fresh=False,
+            age_seconds=None,
+            size_bytes=None,
+            version=None,
+            org_count=0,
+            folder_count=0,
+            project_count=0,
+        ),
+    ) as m:
         yield m
 
 
@@ -265,9 +274,11 @@ def test_handle_error_asset_api_disabled(capsys):
     import typer
 
     with pytest.raises(typer.Exit):
-        handle_error(gcp_exceptions.PermissionDenied(
-            "Cloud Asset API has not been used in project 123 before or it is disabled."
-        ))
+        handle_error(
+            gcp_exceptions.PermissionDenied(
+                "Cloud Asset API has not been used in project 123 before or it is disabled."
+            )
+        )
     out = capsys.readouterr().out
     assert "Cloud Asset API is disabled" in out
     assert "gcloud services enable" in out
@@ -348,8 +359,14 @@ def test_cache_status(mock_get_cache_info):
 def test_cache_refresh(mock_load, mock_write, mock_hierarchy, mock_get_cache_info_home):
     mock_load.return_value = mock_hierarchy
     mock_get_cache_info_home.return_value = CacheInfo(
-        exists=True, fresh=True, age_seconds=2.0, size_bytes=1024,
-        version=2, org_count=1, folder_count=2, project_count=2,
+        exists=True,
+        fresh=True,
+        age_seconds=2.0,
+        size_bytes=1024,
+        version=2,
+        org_count=1,
+        folder_count=2,
+        project_count=2,
     )
     result = runner.invoke(app, ["cache", "refresh"])
     assert result.exit_code == 0
@@ -368,8 +385,14 @@ def test_cache_refresh_skips_cache_read(
 ):
     mock_load.return_value = mock_hierarchy
     mock_get_cache_info_home.return_value = CacheInfo(
-        exists=True, fresh=True, age_seconds=2.0, size_bytes=1024,
-        version=2, org_count=1, folder_count=2, project_count=2,
+        exists=True,
+        fresh=True,
+        age_seconds=2.0,
+        size_bytes=1024,
+        version=2,
+        org_count=1,
+        folder_count=2,
+        project_count=2,
     )
     result = runner.invoke(app, ["cache", "refresh"])
     assert result.exit_code == 0
@@ -383,8 +406,14 @@ def test_cache_refresh_reports_write_failure(
 ):
     mock_load.return_value = mock_hierarchy
     mock_get_cache_info_home.return_value = CacheInfo(
-        exists=False, fresh=False, age_seconds=None, size_bytes=None,
-        version=None, org_count=0, folder_count=0, project_count=0,
+        exists=False,
+        fresh=False,
+        age_seconds=None,
+        size_bytes=None,
+        version=None,
+        org_count=0,
+        folder_count=0,
+        project_count=0,
     )
     result = runner.invoke(app, ["cache", "refresh"])
     assert result.exit_code == 1
@@ -394,8 +423,14 @@ def test_cache_refresh_reports_write_failure(
 
 def test_home_stale_cache(mock_get_cache_info_home):
     mock_get_cache_info_home.return_value = CacheInfo(
-        exists=True, fresh=False, age_seconds=100 * 3600, size_bytes=1024,
-        version=2, org_count=1, folder_count=2, project_count=2,
+        exists=True,
+        fresh=False,
+        age_seconds=100 * 3600,
+        size_bytes=1024,
+        version=2,
+        org_count=1,
+        folder_count=2,
+        project_count=2,
     )
     result = runner.invoke(app, [])
     assert result.exit_code == 0
@@ -710,8 +745,14 @@ def test_try_read_cache_applies_org_filter(mock_get_info, mock_read_cache):
 
     mock_read_cache.return_value = mock_hierarchy
     mock_get_info.return_value = CacheInfo(
-        exists=True, fresh=True, age_seconds=60.0, size_bytes=100,
-        version=1, org_count=2, folder_count=0, project_count=0,
+        exists=True,
+        fresh=True,
+        age_seconds=60.0,
+        size_bytes=100,
+        version=1,
+        org_count=2,
+        folder_count=0,
+        project_count=0,
     )
 
     result = _try_read_cache(None, ["org1.com"])
@@ -801,7 +842,9 @@ def test_name_json_output(mock_load, mock_hierarchy):
 @patch("gcpath.core.Hierarchy.load")
 def test_name_json_id_only(mock_load, mock_hierarchy):
     mock_load.return_value = mock_hierarchy
-    result = runner.invoke(app, ["--format", "json", "name", "--id", "//example.com/f1"])
+    result = runner.invoke(
+        app, ["--format", "json", "name", "--id", "//example.com/f1"]
+    )
     assert result.exit_code == 0
     data = json.loads(result.stdout)
     assert "resource_id" in data[0]
@@ -1263,8 +1306,14 @@ def test_invalid_format_flag():
 @patch("gcpath.cli.read_cache_raw")
 def test_home_view_with_fresh_cache(mock_raw, mock_info):
     mock_info.return_value = MagicMock(
-        exists=True, fresh=True, age_seconds=120.0,
-        size_bytes=1024, version=1, org_count=1, folder_count=5, project_count=10,
+        exists=True,
+        fresh=True,
+        age_seconds=120.0,
+        size_bytes=1024,
+        version=1,
+        org_count=1,
+        folder_count=5,
+        project_count=10,
     )
     mock_raw.return_value = {
         "organizations": [
@@ -1319,19 +1368,37 @@ def test_hook_run(mock_run):
     assert "session dashboard output" in result.stdout
 
 
-@patch("gcpath.cli.get_hook_status", return_value={
-    "claude": {"installed": True, "path_ok": True, "location": "~/.claude/settings.json"},
-    "codex": {"installed": False, "path_ok": False, "location": "~/.codex/hooks.json"},
-})
+@patch(
+    "gcpath.cli.get_hook_status",
+    return_value={
+        "claude": {
+            "installed": True,
+            "path_ok": True,
+            "location": "~/.claude/settings.json",
+        },
+        "codex": {
+            "installed": False,
+            "path_ok": False,
+            "location": "~/.codex/hooks.json",
+        },
+    },
+)
 def test_hook_status_rich(mock_status):
     result = runner.invoke(app, ["--format", "rich", "hook", "status"])
     assert result.exit_code == 0
     mock_status.assert_called_once()
 
 
-@patch("gcpath.cli.get_hook_status", return_value={
-    "claude": {"installed": True, "path_ok": False, "location": "~/.claude/settings.json"},
-})
+@patch(
+    "gcpath.cli.get_hook_status",
+    return_value={
+        "claude": {
+            "installed": True,
+            "path_ok": False,
+            "location": "~/.claude/settings.json",
+        },
+    },
+)
 def test_hook_status_path_not_ok(mock_status):
     result = runner.invoke(app, ["--format", "rich", "hook", "status"])
     assert result.exit_code == 0
@@ -1359,8 +1426,14 @@ def test_cache_clear_no_file_rich(mock_clear):
 @patch("gcpath.cli.get_cache_info")
 def test_cache_status_rich(mock_info):
     mock_info.return_value = CacheInfo(
-        exists=True, fresh=True, age_seconds=60.0, size_bytes=4096,
-        version=1, org_count=1, folder_count=3, project_count=5,
+        exists=True,
+        fresh=True,
+        age_seconds=60.0,
+        size_bytes=4096,
+        version=1,
+        org_count=1,
+        folder_count=3,
+        project_count=5,
     )
     result = runner.invoke(app, ["--format", "rich", "cache", "status"])
     assert result.exit_code == 0
@@ -1369,8 +1442,14 @@ def test_cache_status_rich(mock_info):
 @patch("gcpath.cli.get_cache_info")
 def test_cache_status_rich_no_cache(mock_info):
     mock_info.return_value = CacheInfo(
-        exists=False, fresh=False, age_seconds=None, size_bytes=None,
-        version=None, org_count=0, folder_count=0, project_count=0,
+        exists=False,
+        fresh=False,
+        age_seconds=None,
+        size_bytes=None,
+        version=None,
+        org_count=0,
+        folder_count=0,
+        project_count=0,
     )
     result = runner.invoke(app, ["--format", "rich", "cache", "status"])
     assert result.exit_code == 0
@@ -1398,14 +1477,18 @@ def test_config_clear_entrypoint_rich(mock_clear):
 
 @patch("gcpath.cli.set_entrypoint")
 def test_config_set_entrypoint_rich(mock_set):
-    result = runner.invoke(app, ["--format", "rich", "config", "set-entrypoint", "folders/123"])
+    result = runner.invoke(
+        app, ["--format", "rich", "config", "set-entrypoint", "folders/123"]
+    )
     assert result.exit_code == 0
     mock_set.assert_called_once_with("folders/123")
 
 
 @patch("gcpath.cli.set_entrypoint", side_effect=ValueError("bad"))
 def test_config_set_entrypoint_invalid_rich(mock_set):
-    result = runner.invoke(app, ["--format", "rich", "config", "set-entrypoint", "invalid"])
+    result = runner.invoke(
+        app, ["--format", "rich", "config", "set-entrypoint", "invalid"]
+    )
     assert result.exit_code == 1
 
 
@@ -1606,7 +1689,9 @@ def test_audit_exit_zero_flag(mock_load, mock_hierarchy):
 @patch("gcpath.core.Hierarchy.load")
 def test_audit_missing_required_label(mock_load, mock_hierarchy):
     mock_load.return_value = mock_hierarchy
-    result = runner.invoke(app, ["audit", "--require-labels", "owner", "--severity", "error"])
+    result = runner.invoke(
+        app, ["audit", "--require-labels", "owner", "--severity", "error"]
+    )
     assert result.exit_code == 1
     assert "missing_required_label" in result.stdout
 
@@ -1669,21 +1754,15 @@ def test_audit_missing_required_label_check_without_keys_errors(
     mock_load, mock_hierarchy
 ):
     mock_load.return_value = mock_hierarchy
-    result = runner.invoke(
-        app, ["audit", "--check", "missing_required_label"]
-    )
+    result = runner.invoke(app, ["audit", "--check", "missing_required_label"])
     assert result.exit_code == 1
     assert "--require-labels is required" in result.stdout
 
 
 @patch("gcpath.core.Hierarchy.load")
-def test_audit_name_pattern_check_without_pattern_errors(
-    mock_load, mock_hierarchy
-):
+def test_audit_name_pattern_check_without_pattern_errors(mock_load, mock_hierarchy):
     mock_load.return_value = mock_hierarchy
-    result = runner.invoke(
-        app, ["audit", "--check", "name_pattern_violation"]
-    )
+    result = runner.invoke(app, ["audit", "--check", "name_pattern_violation"])
     assert result.exit_code == 1
     assert "--name-pattern is required" in result.stdout
 
@@ -1700,9 +1779,7 @@ def test_audit_rejects_oversized_name_pattern(mock_load, mock_hierarchy):
 @patch("gcpath.core.Hierarchy.load")
 def test_audit_rich_renders_table(mock_load, mock_hierarchy):
     mock_load.return_value = mock_hierarchy
-    result = runner.invoke(
-        app, ["--format", "rich", "audit", "--exit-zero"]
-    )
+    result = runner.invoke(app, ["--format", "rich", "audit", "--exit-zero"])
     assert result.exit_code == 0
 
 
@@ -1720,9 +1797,7 @@ def test_audit_rich_clean_renders_no_issues(mock_load):
 @patch("gcpath.core.Hierarchy.load")
 def test_audit_yaml_format(mock_load, mock_hierarchy):
     mock_load.return_value = mock_hierarchy
-    result = runner.invoke(
-        app, ["--format", "yaml", "audit", "--exit-zero"]
-    )
+    result = runner.invoke(app, ["--format", "yaml", "audit", "--exit-zero"])
     assert result.exit_code == 0
     data = yaml.safe_load(result.stdout)
     assert "severity_counts" in data

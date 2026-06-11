@@ -84,12 +84,14 @@ def aggregate_metadata(
         suffix = ""
         if c > len(ex):
             suffix = f" (+{c - len(ex)} more)"
-        rows.append({
-            "key": k,
-            "value": v,
-            "count": c,
-            "examples": ", ".join(ex) + suffix,
-        })
+        rows.append(
+            {
+                "key": k,
+                "value": v,
+                "count": c,
+                "examples": ", ".join(ex) + suffix,
+            }
+        )
     rows.sort(key=lambda r: (-r["count"], r["key"], r["value"]))
     return rows, len(items)
 
@@ -850,8 +852,7 @@ class Hierarchy:
         org has depth 1.
         """
         real_orgs = [
-            o for o in self.organizations
-            if o.organization.name != SYNTHETIC_ORG_NAME
+            o for o in self.organizations if o.organization.name != SYNTHETIC_ORG_NAME
         ]
         real_folders, real_projects = self._real_org_descendants(real_orgs)
 
@@ -892,14 +893,10 @@ class Hierarchy:
         resources, just outside any organization the user can see.
         """
         synthetic_orgs = [
-            o for o in self.organizations
-            if o.organization.name == SYNTHETIC_ORG_NAME
+            o for o in self.organizations if o.organization.name == SYNTHETIC_ORG_NAME
         ]
         synth_ids = {id(o) for o in synthetic_orgs}
-        real_folders = [
-            f for f in self.folders
-            if id(f.organization) not in synth_ids
-        ]
+        real_folders = [f for f in self.folders if id(f.organization) not in synth_ids]
 
         def project_under_synthetic(p: "Project") -> bool:
             if p.organization is not None and id(p.organization) in synth_ids:
@@ -983,7 +980,8 @@ class Hierarchy:
                 "projects": sum(
                     1
                     for p in self.projects
-                    if p.organization is org or (p.folder and p.folder.organization is org)
+                    if p.organization is org
+                    or (p.folder and p.folder.organization is org)
                 ),
             }
             for org in real_orgs

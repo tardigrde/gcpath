@@ -166,9 +166,7 @@ def test_resource_path_escapes_org_display_name():
     from google.cloud import resourcemanager_v3 as rm
 
     org = OrganizationNode(
-        organization=rm.Organization(
-            name="organizations/9", display_name="acme corp"
-        )
+        organization=rm.Organization(name="organizations/9", display_name="acme corp")
     )
     assert _resource_path(org) == "//acme%20corp"
 

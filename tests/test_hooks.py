@@ -59,15 +59,22 @@ class TestInstallClaudeCode:
             changed = _install_claude_code("/new/path/gcpath hook run")
             assert changed is True
             data = json.loads(settings_path.read_text())
-            assert data["hooks"]["SessionStart"][0]["hooks"][0]["command"] == "/new/path/gcpath hook run"
+            assert (
+                data["hooks"]["SessionStart"][0]["hooks"][0]["command"]
+                == "/new/path/gcpath hook run"
+            )
 
     def test_preserves_other_hooks(self, tmp_path):
         settings_path = tmp_path / "settings.json"
-        settings_path.write_text(json.dumps({
-            "hooks": {
-                "SessionStart": [{"command": "other-tool hook run"}],
-            }
-        }))
+        settings_path.write_text(
+            json.dumps(
+                {
+                    "hooks": {
+                        "SessionStart": [{"command": "other-tool hook run"}],
+                    }
+                }
+            )
+        )
         with patch("gcpath.hooks._CLAUDE_SETTINGS_PATH", settings_path):
             _install_claude_code("/usr/bin/gcpath hook run")
             data = json.loads(settings_path.read_text())
@@ -92,14 +99,18 @@ class TestUninstallClaudeCode:
 
     def test_preserves_other_hooks(self, tmp_path):
         settings_path = tmp_path / "settings.json"
-        settings_path.write_text(json.dumps({
-            "hooks": {
-                "SessionStart": [
-                    {"command": "/usr/bin/gcpath hook run"},
-                    {"command": "other-tool hook run"},
-                ],
-            }
-        }))
+        settings_path.write_text(
+            json.dumps(
+                {
+                    "hooks": {
+                        "SessionStart": [
+                            {"command": "/usr/bin/gcpath hook run"},
+                            {"command": "other-tool hook run"},
+                        ],
+                    }
+                }
+            )
+        )
         with patch("gcpath.hooks._CLAUDE_SETTINGS_PATH", settings_path):
             changed = _uninstall_claude_code()
             assert changed is True
@@ -204,10 +215,19 @@ class TestRunSessionStart:
     def test_no_cache(self):
         from gcpath.cache import CacheInfo
 
-        with patch("gcpath.cache.get_cache_info", return_value=CacheInfo(
-            exists=False, fresh=False, age_seconds=None, size_bytes=None,
-            version=None, org_count=0, folder_count=0, project_count=0,
-        )):
+        with patch(
+            "gcpath.cache.get_cache_info",
+            return_value=CacheInfo(
+                exists=False,
+                fresh=False,
+                age_seconds=None,
+                size_bytes=None,
+                version=None,
+                org_count=0,
+                folder_count=0,
+                project_count=0,
+            ),
+        ):
             output = run_session_start()
             assert "cache: empty" in output
             assert "help" in output
@@ -216,17 +236,31 @@ class TestRunSessionStart:
         from gcpath.cache import CacheInfo
 
         with (
-            patch("gcpath.cache.get_cache_info", return_value=CacheInfo(
-                exists=True, fresh=True, age_seconds=300.0, size_bytes=2048,
-                version=1, org_count=1, folder_count=5, project_count=10,
-            )),
-            patch("gcpath.cache.read_cache_raw", return_value={
-                "organizations": [{
-                    "organization": {"display_name": "example.com"},
-                    "folders": {"f1": {}, "f2": {}},
-                    "projects": [1, 2, 3],
-                }]
-            }),
+            patch(
+                "gcpath.cache.get_cache_info",
+                return_value=CacheInfo(
+                    exists=True,
+                    fresh=True,
+                    age_seconds=300.0,
+                    size_bytes=2048,
+                    version=1,
+                    org_count=1,
+                    folder_count=5,
+                    project_count=10,
+                ),
+            ),
+            patch(
+                "gcpath.cache.read_cache_raw",
+                return_value={
+                    "organizations": [
+                        {
+                            "organization": {"display_name": "example.com"},
+                            "folders": {"f1": {}, "f2": {}},
+                            "projects": [1, 2, 3],
+                        }
+                    ]
+                },
+            ),
         ):
             output = run_session_start()
             assert "fresh" in output

@@ -140,9 +140,7 @@ def toon_ls(
     return with_help(output, help_lines)
 
 
-def toon_name(
-    results: List[Tuple[str, str]], id_only: bool = False
-) -> str:
+def toon_name(results: List[Tuple[str, str]], id_only: bool = False) -> str:
     if len(results) == 1:
         path, res_name = results[0]
         if id_only:
@@ -155,7 +153,9 @@ def toon_name(
             rows.append({"path": path, "resource_id": res_name.split("/")[-1]})
         else:
             rows.append({"path": path, "resource_name": res_name})
-    return toon_table("results", rows, ("path", "resource_id" if id_only else "resource_name"))
+    return toon_table(
+        "results", rows, ("path", "resource_id" if id_only else "resource_name")
+    )
 
 
 def toon_path(
@@ -195,8 +195,7 @@ def toon_ancestors(
     help_lines: Optional[List[str]] = None,
 ) -> str:
     rows = [
-        {"resource_name": name, "display_name": dn, "type": t}
-        for name, dn, t in chain
+        {"resource_name": name, "display_name": dn, "type": t} for name, dn, t in chain
     ]
     output = toon_table("ancestors", rows, ("resource_name", "display_name", "type"))
     return with_help(output, help_lines)

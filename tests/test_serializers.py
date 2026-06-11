@@ -334,10 +334,12 @@ class TestToonName:
         assert "1" in output
 
     def test_multiple(self):
-        output = toon_name([
-            ("//example.com", "organizations/123"),
-            ("//example.com/f1", "folders/1"),
-        ])
+        output = toon_name(
+            [
+                ("//example.com", "organizations/123"),
+                ("//example.com/f1", "folders/1"),
+            ]
+        )
         assert "organizations/123" in output
         assert "folders/1" in output
 
@@ -349,10 +351,12 @@ class TestToonPath:
         assert "//example.com/f1" in output
 
     def test_multiple(self):
-        output = toon_path([
-            ("folders/1", "//example.com/f1"),
-            ("folders/2", "//example.com/f2"),
-        ])
+        output = toon_path(
+            [
+                ("folders/1", "//example.com/f1"),
+                ("folders/2", "//example.com/f2"),
+            ]
+        )
         assert "//example.com/f1" in output
         assert "//example.com/f2" in output
 
@@ -385,14 +389,18 @@ class TestToonFind:
 
 class TestToonStats:
     def test_basic(self):
-        output = toon_stats("all organizations", organizations=2, folders=10, projects=25)
+        output = toon_stats(
+            "all organizations", organizations=2, folders=10, projects=25
+        )
         assert "scope:" in output
         assert "2" in output
         assert "10" in output
         assert "25" in output
 
     def test_scoped(self):
-        output = toon_stats("folders/123", folders=5, projects=8, help_lines=["Run `gcpath stats`"])
+        output = toon_stats(
+            "folders/123", folders=5, projects=8, help_lines=["Run `gcpath stats`"]
+        )
         assert "folders/123" in output
         assert "help" in output
 
@@ -400,18 +408,32 @@ class TestToonStats:
 class TestToonCacheStatus:
     def test_fresh(self):
         output = toon_cache_status(
-            exists=True, fresh=True, age_seconds=300.0, org_count=1, folder_count=5, project_count=10, location="/var/cache/gcpath/test"
+            exists=True,
+            fresh=True,
+            age_seconds=300.0,
+            org_count=1,
+            folder_count=5,
+            project_count=10,
+            location="/var/cache/gcpath/test",
         )
         assert "fresh" in output
         assert "5m" in output
 
     def test_empty(self):
-        output = toon_cache_status(exists=False, fresh=False, location="/var/cache/gcpath/test")
+        output = toon_cache_status(
+            exists=False, fresh=False, location="/var/cache/gcpath/test"
+        )
         assert "empty" in output
 
     def test_stale(self):
         output = toon_cache_status(
-            exists=True, fresh=False, age_seconds=7200.0, org_count=0, folder_count=0, project_count=0, location="/var/cache/gcpath/test"
+            exists=True,
+            fresh=False,
+            age_seconds=7200.0,
+            org_count=0,
+            folder_count=0,
+            project_count=0,
+            location="/var/cache/gcpath/test",
         )
         assert "stale" in output
 
@@ -468,19 +490,21 @@ class TestToonOpen:
     def test_single_result_object_form(self):
         from gcpath.serializers import toon_open
 
-        out = toon_open([
-            {"path": "//e/f1", "resource_name": "folders/1", "url": "https://x"}
-        ])
+        out = toon_open(
+            [{"path": "//e/f1", "resource_name": "folders/1", "url": "https://x"}]
+        )
         assert "url" in out
         assert "https://x" in out
 
     def test_multiple_results_table_form(self):
         from gcpath.serializers import toon_open
 
-        out = toon_open([
-            {"path": "//e/f1", "resource_name": "folders/1", "url": "u1"},
-            {"path": "//e/f2", "resource_name": "folders/2", "url": "u2"},
-        ])
+        out = toon_open(
+            [
+                {"path": "//e/f1", "resource_name": "folders/1", "url": "u1"},
+                {"path": "//e/f2", "resource_name": "folders/2", "url": "u2"},
+            ]
+        )
         assert "results" in out
         assert "u1" in out and "u2" in out
 
