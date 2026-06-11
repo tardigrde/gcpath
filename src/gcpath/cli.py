@@ -97,6 +97,44 @@ _RESOURCE_PREFIXES = (
     _RESOURCE_PREFIX_PROJECTS,
 )
 _REFRESH_HELP = "Force a refresh of the cache from the GCP API"
+
+# Options shared between `ls` and `find`.
+_LABEL_FILTER_OPTION = typer.Option(
+    None,
+    "--label",
+    help="Filter by label (key, key=value, or key!=value). Repeatable, ANDed together",
+)
+_TAG_FILTER_OPTION = typer.Option(
+    None,
+    "--tag",
+    help="Filter by tag (key, key=value, or key!=value). Repeatable, ANDed together",
+)
+_EXCLUDE_OPTION = typer.Option(
+    None,
+    "--exclude",
+    help="Exclude resources matching glob (display name, or full path if it starts with //). Repeatable",
+)
+_FULL_OPTION = typer.Option(
+    False, "--full", help="Show all labels/tags without truncation"
+)
+_FIELDS_OPTION = typer.Option(
+    None, "--fields", help=f"Comma-separated fields to show: {', '.join(_ALL_LS_FIELDS)}"
+)
+
+
+def _metadata_inclusion(
+    parsed_fields: Optional[Tuple[str, ...]],
+    label_filters: Optional[List[str]],
+    tag_filters: Optional[List[str]],
+    show_labels: bool = False,
+    show_tags: bool = False,
+) -> Tuple[bool, bool]:
+    """Decide whether labels/tags must be loaded for a listing command."""
+    needs_labels = parsed_fields is not None and "labels" in parsed_fields
+    needs_tags = parsed_fields is not None and "tags" in parsed_fields
+    include_labels = show_labels or bool(label_filters) or needs_labels
+    include_tags = show_tags or bool(tag_filters) or needs_tags
+    return include_labels, include_tags
 _VALID_TYPE_FILTERS = ("folder", "project", "organization")
 _VALID_FORMATS = ("toon", "json", "yaml", "rich")
 _RICH_HEADER_STYLE = "bold magenta"
@@ -908,37 +946,20 @@ def ls(
     show_tags: bool = typer.Option(
         False, "--show-tags", help="Display GCP resource tags"
     ),
-    label_filters: Optional[List[str]] = typer.Option(
-        None,
-        "--label",
-        help="Filter by label (key, key=value, or key!=value). Repeatable, ANDed together",
-    ),
-    tag_filters: Optional[List[str]] = typer.Option(
-        None,
-        "--tag",
-        help="Filter by tag (key, key=value, or key!=value). Repeatable, ANDed together",
-    ),
-    excludes: Optional[List[str]] = typer.Option(
-        None,
-        "--exclude",
-        help="Exclude resources matching glob (display name, or full path if it starts with //). Repeatable",
-    ),
-    fields: Optional[str] = typer.Option(
-        None, "--fields", help=f"Comma-separated fields to show: {', '.join(_ALL_LS_FIELDS)}"
-    ),
-    full: bool = typer.Option(
-        False, "--full", help="Show all labels/tags without truncation"
-    ),
+    label_filters: Optional[List[str]] = _LABEL_FILTER_OPTION,
+    tag_filters: Optional[List[str]] = _TAG_FILTER_OPTION,
+    excludes: Optional[List[str]] = _EXCLUDE_OPTION,
+    fields: Optional[str] = _FIELDS_OPTION,
+    full: bool = _FULL_OPTION,
 ) -> None:
     """List folders and projects. Defaults to the root organization."""
     try:
         _validate_type_filter(resource_type)
 
         parsed_fields = _parse_fields(fields)
-        needs_labels = parsed_fields is not None and "labels" in parsed_fields
-        needs_tags = parsed_fields is not None and "tags" in parsed_fields
-        include_labels = show_labels or bool(label_filters) or needs_labels
-        include_tags = show_tags or bool(tag_filters) or needs_tags
+        include_labels, include_tags = _metadata_inclusion(
+            parsed_fields, label_filters, tag_filters, show_labels, show_tags
+        )
 
         ep = ctx.obj.get("entrypoint")
         scope = _resolve_scope(resource, ep)
@@ -1923,27 +1944,11 @@ def find(
     force_refresh: bool = typer.Option(
         False, "--force-refresh", "-F", help=_REFRESH_HELP
     ),
-    label_filters: Optional[List[str]] = typer.Option(
-        None,
-        "--label",
-        help="Filter by label (key, key=value, or key!=value). Repeatable, ANDed together",
-    ),
-    tag_filters: Optional[List[str]] = typer.Option(
-        None,
-        "--tag",
-        help="Filter by tag (key, key=value, or key!=value). Repeatable, ANDed together",
-    ),
-    excludes: Optional[List[str]] = typer.Option(
-        None,
-        "--exclude",
-        help="Exclude resources matching glob (display name, or full path if it starts with //). Repeatable",
-    ),
-    fields: Optional[str] = typer.Option(
-        None, "--fields", help=f"Comma-separated fields to show: {', '.join(_ALL_LS_FIELDS)}"
-    ),
-    full: bool = typer.Option(
-        False, "--full", help="Show all labels/tags without truncation"
-    ),
+    label_filters: Optional[List[str]] = _LABEL_FILTER_OPTION,
+    tag_filters: Optional[List[str]] = _TAG_FILTER_OPTION,
+    excludes: Optional[List[str]] = _EXCLUDE_OPTION,
+    fields: Optional[str] = _FIELDS_OPTION,
+    full: bool = _FULL_OPTION,
 ) -> None:
     """Search for resources by display name or path pattern (glob or regex)."""
     try:
@@ -1954,10 +1959,9 @@ def find(
         matcher = build_pattern_matcher(pattern, regex=regex)
 
         parsed_fields = _parse_fields(fields)
-        needs_labels = parsed_fields is not None and "labels" in parsed_fields
-        needs_tags = parsed_fields is not None and "tags" in parsed_fields
-        include_labels = bool(label_filters) or needs_labels
-        include_tags = bool(tag_filters) or needs_tags
+        include_labels, include_tags = _metadata_inclusion(
+            parsed_fields, label_filters, tag_filters
+        )
 
         ep = ctx.obj.get("entrypoint")
         scope = _resolve_scope(resource, ep)
