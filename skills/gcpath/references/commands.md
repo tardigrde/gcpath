@@ -200,6 +200,14 @@ No flags.
 
 ---
 
+## `cache refresh`
+
+Re-load the hierarchy from GCP and rewrite the cache. Respects the configured entrypoint. Useful for warming the cache out-of-band (e.g., cron) so session-start hooks serve fresh data.
+
+No flags.
+
+---
+
 ## `config set-entrypoint RESOURCE`
 
 Set a persistent default entrypoint. Subsequent commands will scope to this resource unless overridden with `-e`.

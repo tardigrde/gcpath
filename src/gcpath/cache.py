@@ -231,6 +231,18 @@ def read_cache(
     return _dict_to_hierarchy(data)
 
 
+def read_cache_unchecked() -> Optional[Hierarchy]:
+    """Reads the hierarchy from the cache ignoring TTL and scope.
+
+    For non-authoritative uses like did-you-mean suggestions, where stale
+    data is better than no data.
+    """
+    data = read_cache_raw()
+    if data is None:
+        return None
+    return _dict_to_hierarchy(data)
+
+
 def get_cache_info(
     ttl_hours: float = DEFAULT_CACHE_TTL_HOURS,
 ) -> CacheInfo:
