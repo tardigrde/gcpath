@@ -1,6 +1,106 @@
 # CHANGELOG
 
 
+## v0.12.0 (2026-06-11)
+
+### Features
+
+- Add open, labels/tags, summary, audit, and mcp commands
+  ([#34](https://github.com/tardigrde/gcpath/pull/34),
+  [`d52f9c8`](https://github.com/tardigrde/gcpath/commit/d52f9c8cc7e2535be73bc0a6ac51ace21409a55f))
+
+* feat: add open, labels/tags, summary, audit, and mcp commands
+
+Adds the top 5 features from the implementation plan to make gcpath stickier for daily human use and
+  richer for AI agents.
+
+- `open <path>` opens or prints the GCP Cloud Console URL for a resource. Multi-arg supported;
+  rejects orgless and synthetic-org resources with structured errors. - `labels` / `tags` aggregate
+  label/tag occurrences across the hierarchy with counts, examples, and `--key`/`--top` filters. -
+  `summary` prints a one-shot agent-friendly snapshot (counts, depth, top label/tag keys, deepest
+  paths) and excludes the synthetic org. - `audit` runs governance checks (orphan projects,
+  synthetic-org, required labels, duplicate display names, name-pattern violations) with severity
+  gating and a `--exit-zero` CI flag. - `mcp` runs gcpath as an MCP server (FastMCP, stdio/sse
+  transports) exposing path/name/list/find/ancestors/summary/labels/tags/console_url/ audit tools so
+  Claude Desktop, Claude Code, and other MCP clients can query the hierarchy directly. Optional
+  `[mcp]` extra in pyproject.toml.
+
+Test coverage: 420 tests passing, ruff and mypy clean.
+
+* fix: address PR #34 review, CodeQL, SonarCloud, and Codecov findings
+
+Reviews (high-severity correctness): - core.summary: include projects in max_depth and use the
+  correct project depth formula (folder.depth + 1 == len(folder.ancestors)) so deepest_paths and
+  max_depth no longer underreport hierarchy depth. - audit._check_synthetic_org: also flag projects
+  directly attached to the synthetic org instead of only its folders. - formatters.console_url:
+  reject projects that live under the synthetic org (directly or via folder), matching the
+  org/folder rejection. - mcp_server.list_resources: at root scope, only return org-level projects
+  (mirroring the folder filter) and merge identical branches.
+
+Reviews (mediums): - Move _aggregate_metadata into core.aggregate_metadata so cli.py and
+  mcp_server.py both consume it without an upward dependency. - mcp_server cache key now varies on
+  include_labels/include_tags so different metadata requirements don't reuse a labelless hierarchy.
+  - mcp_server.name_to_path serves resolutions from the cached hierarchy and only falls back to live
+  GCP calls for unknown resources. - Reject oversized name_pattern (>200 chars) in the audit CLI and
+  the audit_hierarchy MCP tool to bound ReDoS risk. - audit CLI: --check
+  missing_required_label/name_pattern_violation now errors out when --require-labels /
+  --name-pattern is missing instead of silently emitting `0 issues`. - open --browser: surface error
+  rows even when at least one URL opened successfully, so partial-success no longer swallows
+  failures. - audit._resource_path: url-escape org display names so paths stay canonical for orgs
+  containing spaces/specials. - toon_audit: pluralize correctly ("1 issue", "N issues") and emit the
+  count + table in a single TOON block (same fix for toon_metadata_aggregation). - cli.mcp_command:
+  drop the dead ImportError wrapper around `from gcpath.mcp_server import run_server` (mcp_server is
+  import-safe; the missing-extra signal already flows through GCPathError).
+
+SonarCloud: - Define _RICH_HEADER_STYLE / _SCOPE_ALL_ORGS constants for the duplicated "bold
+  magenta" / "all organizations" literals (S1192). - Refactor open_resource (CC=44 -> below
+  threshold) into resolve / browser-open / render helpers, and audit_command (CC=25) into validators
+  + render helpers; reduce summary_command, mcp build_server, _resolve_to_object,
+  _resolve_path_to_object cognitive complexity by extracting tool/render/finder helpers (S3776). -
+  Merge the duplicate `_serialize_resource(...)` branches in list_resources (S1871).
+
+CodeQL: - tests/test_open_single_folder: assert against the fully-formed URL rather than the host
+  substring so the URL-substring sanitization rule no longer flags the assertion. - Replace
+  tautology `assert result.exit_code in (0, 1)` with a precise assertion against the missing-extra
+  error path.
+
+Codecov: - New tests/test_mcp_server.py covers cache keying, list_resources scoping, find_resources,
+  name_to_path/path_to_name, console_url, aggregation, audit_hierarchy, ReDoS guard, synthetic-org
+  flagging, build_server import-error path, and a smoke roundtrip through every registered FastMCP
+  tool. - Additional tests for audit pattern errors, audit CLI validation, open --browser
+  partial-success, summary/audit rich rendering, and the formatters.console_url synthetic-org guard.
+
+Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
+
+* fix: address remaining SonarCloud nits on PR #34
+
+- formatters.console_url: replace `elif item.organization is not None` (always-true after the
+  early-return guard) with an `else` + assertion so S2589 stops firing. - mcp_server: introduce
+  `_PREFIX_ORGS/_FOLDERS/_PROJECTS` constants and reuse them in `_resolve_to_object` and
+  `_include_in_listing` to clear the S1192 duplicate-literal finding. - core.Hierarchy.summary:
+  extract `_summary_max_depth`, `_summary_deepest_paths`, and a `_project_depth` helper to drop the
+  function below the S3776 cognitive-complexity threshold.
+
+* fix: address CodeRabbit follow-up findings on PR #34
+
+- core.summary: filter folders/projects to drop synthetic-org descendants before computing
+  folder_count, project_count, max_depth, top label/tag keys, and deepest_paths so the snapshot
+  isn't skewed by the artificial folder-root org. Orgless projects (no org and no folder) remain in
+  the count — they're real GCP resources that just sit outside any visible organization. -
+  mcp_server: url-escape organization display names in _serialize_resource and _name_to_path so
+  paths emitted by MCP tools are canonical and round-trip cleanly through path_to_name. -
+  mcp_server._aggregate_impl: treat `top` with `is not None` so an explicit `top=0` returns an empty
+  list instead of being silently collapsed to "no limit". - mcp_server.build_server: add `->
+  "FastMCP"` return annotation (under TYPE_CHECKING import) for full mypy coverage.
+
+New tests cover: synthetic-org descendants excluded from summary metrics, MCP org-path escaping
+  (serialize_resource + name_to_path), and the `top=0` aggregation edge case.
+
+---------
+
+Co-authored-by: Claude <noreply@anthropic.com>
+
+
 ## v0.11.1 (2026-06-11)
 
 ### Bug Fixes
