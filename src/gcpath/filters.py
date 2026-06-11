@@ -7,10 +7,13 @@ all other patterns match against the display name.
 """
 
 import fnmatch
+import logging
 import re
 from typing import Callable, List, Optional, Tuple, Union
 
 from gcpath.core import Folder, GCPathError, OrganizationNode, Project, path_escape
+
+logger = logging.getLogger(__name__)
 
 Resource = Union[OrganizationNode, Folder, Project]
 
@@ -35,14 +38,16 @@ def parse_metadata_filter(filter_str: str) -> Tuple[str, Optional[str], bool]:
 
     Supported forms: `key` (presence), `key=value` (equality),
     `key!=value` (exclusion). `!=` is checked first since it contains `=`.
+    Whitespace around keys and values is stripped — GCP label keys and
+    values cannot contain spaces, so it can only be accidental.
     """
     if "!=" in filter_str:
         key, _, value = filter_str.partition("!=")
-        return key, value, True
+        return key.strip(), value.strip(), True
     if "=" in filter_str:
         key, _, value = filter_str.partition("=")
-        return key, value, False
-    return filter_str, None, False
+        return key.strip(), value.strip(), False
+    return filter_str.strip(), None, False
 
 
 def matches_metadata(
@@ -74,12 +79,15 @@ def build_pattern_matcher(pattern: str, regex: bool = False) -> PatternMatcher:
     """Build a matcher(path, display_name) for a glob or regex pattern.
 
     Patterns starting with `//` are matched against the full path,
-    otherwise against the display name. Globs must match the whole
-    target (case-insensitive); regexes use search semantics.
+    otherwise against the display name. Anchored regexes (`^//`, `\\A//`)
+    also count as path patterns. Globs must match the whole target
+    (case-insensitive); regexes use search semantics.
 
     Raises GCPathError for an invalid regex.
     """
-    against_path = pattern.startswith("//")
+    against_path = pattern.startswith("//") or (
+        regex and (pattern.startswith("^//") or pattern.startswith(r"\A//"))
+    )
     if regex:
         try:
             compiled = re.compile(pattern, re.IGNORECASE)

@@ -1,3 +1,5 @@
+from typing import Any, Dict, List, Tuple
+
 import pytest
 from conftest import make_test_hierarchy
 
@@ -37,11 +39,17 @@ def test_parse_empty_value():
     assert parse_metadata_filter("env=") == ("env", "", False)
 
 
+def test_parse_strips_whitespace():
+    assert parse_metadata_filter("env = prod") == ("env", "prod", False)
+    assert parse_metadata_filter("env != prod") == ("env", "prod", True)
+    assert parse_metadata_filter(" env ") == ("env", None, False)
+
+
 # ---- matches_metadata ----
 
 
 class _Obj:
-    def __init__(self, labels):
+    def __init__(self, labels: Dict[str, str]) -> None:
         self.labels = labels
 
 
@@ -133,6 +141,20 @@ def test_regex_with_path_prefix_matches_full_path():
     assert m("//other.org/f1", "f1") is False
 
 
+def test_regex_anchored_path_matches_full_path():
+    m = build_pattern_matcher(r"^//example\.com/", regex=True)
+    assert m("//example.com/f1", "f1") is True
+    assert m("//other.org/f1", "f1") is False
+    m = build_pattern_matcher(r"\A//example\.com/", regex=True)
+    assert m("//example.com/f1", "f1") is True
+
+
+def test_glob_anchored_prefix_is_not_path_pattern():
+    # "^//" only signals a path pattern for regexes; globs match names
+    m = build_pattern_matcher("^//*")
+    assert m("//example.com/f1", "f1") is False
+
+
 def test_regex_invalid_raises_gcpath_error():
     with pytest.raises(GCPathError, match="Invalid regex"):
         build_pattern_matcher("[unclosed", regex=True)
@@ -141,9 +163,10 @@ def test_regex_invalid_raises_gcpath_error():
 # ---- apply_exclusions ----
 
 
-def _items():
+def _items() -> List[Tuple[str, Any]]:
     h = make_test_hierarchy()
-    return [(get_resource_path(obj), obj) for obj in [*h.folders, *h.projects]]
+    resources: List[Any] = [*h.folders, *h.projects]
+    return [(get_resource_path(obj), obj) for obj in resources]
 
 
 def test_apply_exclusions_none():
