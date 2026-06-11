@@ -78,6 +78,8 @@ The codebase is organized into focused, single-responsibility modules:
 
 - **`formatters.py`**: Display formatting logic for paths, trees, and resource filtering.
 
+- **`filters.py`**: Resource filtering for `ls`/`find` — label/tag filters (including `key!=value` negation), glob/regex pattern matchers (display name, or full path for `//`-prefixed patterns), and `--exclude` glob handling.
+
 - **`serializers.py`**: Output serialization — TOON, JSON, YAML serializers for all commands.
 
 - **`toon.py`**: Thin wrapper around `toon_format.encode()` plus gcpath-specific AXI helpers (error formatting, empty states, help sections, dashboards).
@@ -162,6 +164,7 @@ Test files mirror source organization:
 - `test_loaders.py`: GCP API loading functions
 - `test_parsers.py`: Asset API response parsing
 - `test_formatters.py`: Display formatting
+- `test_filters.py`: Metadata filters, pattern matchers, exclusions
 - `test_serializers.py`: Output serialization (TOON, JSON, YAML)
 - `test_cli.py`: CLI command integration
 

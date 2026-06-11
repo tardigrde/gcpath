@@ -1,4 +1,3 @@
-import fnmatch
 import shutil
 import typer
 import logging
@@ -18,6 +17,14 @@ from gcpath.core import (
     GCPathError,
     OrganizationNode,
     Folder,
+)
+from gcpath.filters import (
+    PatternMatcher,
+    apply_exclusions,
+    build_pattern_matcher,
+    get_display_name,
+    get_resource_path,
+    matches_metadata,
 )
 from gcpath.formatters import (
     filter_direct_children,
@@ -116,31 +123,6 @@ def _matches_type(
     obj: Union[OrganizationNode, Folder, Project], type_filter: str
 ) -> bool:
     return get_resource_type(obj) == type_filter
-
-
-def _parse_label_filter(label_str: str) -> tuple:
-    if "=" not in label_str:
-        return (label_str, None)
-    key, _, value = label_str.partition("=")
-    return (key, value)
-
-
-def _matches_metadata(
-    obj: Union[OrganizationNode, Folder, Project],
-    filters: List[str],
-    attr: str,
-) -> bool:
-    if not filters:
-        return True
-    metadata = getattr(obj, attr, {})
-    for f in filters:
-        key, value = _parse_label_filter(f)
-        if value is None:
-            if key not in metadata:
-                return False
-        elif metadata.get(key) != value:
-            return False
-    return True
 
 
 @dataclass
@@ -767,6 +749,7 @@ def _apply_ls_filters(
     resource_type: Optional[str],
     label_filters: Optional[List[str]],
     tag_filters: Optional[List[str]],
+    excludes: Optional[List[str]] = None,
 ) -> list:
     if resource_type:
         items = [(p, obj) for p, obj in items if _matches_type(obj, resource_type)]
@@ -774,13 +757,13 @@ def _apply_ls_filters(
         items = [
             (p, obj)
             for p, obj in items
-            if _matches_metadata(obj, label_filters, "labels")
+            if matches_metadata(obj, label_filters, "labels")
         ]
     if tag_filters:
         items = [
-            (p, obj) for p, obj in items if _matches_metadata(obj, tag_filters, "tags")
+            (p, obj) for p, obj in items if matches_metadata(obj, tag_filters, "tags")
         ]
-    return items
+    return apply_exclusions(items, excludes)
 
 
 def _apply_depth_limit(
@@ -806,6 +789,7 @@ def _build_ls_items(
     label_filters: Optional[List[str]],
     tag_filters: Optional[List[str]],
     level: Optional[int],
+    excludes: Optional[List[str]] = None,
 ) -> Tuple[list, int]:
     """Build ls items and return (filtered_items, total_before_filtering)."""
     current_folders, current_projects = filter_direct_children(
@@ -821,7 +805,7 @@ def _build_ls_items(
     )
     items = sort_resources(items)
     total_in_scope = len(items)
-    items = _apply_ls_filters(items, resource_type, label_filters, tag_filters)
+    items = _apply_ls_filters(items, resource_type, label_filters, tag_filters, excludes)
     items = _apply_depth_limit(items, level, recursive, target_path_prefix)
     return items, total_in_scope
 
@@ -925,10 +909,19 @@ def ls(
         False, "--show-tags", help="Display GCP resource tags"
     ),
     label_filters: Optional[List[str]] = typer.Option(
-        None, "--label", help="Filter by label (key=value). Repeatable, ANDed together"
+        None,
+        "--label",
+        help="Filter by label (key, key=value, or key!=value). Repeatable, ANDed together",
     ),
     tag_filters: Optional[List[str]] = typer.Option(
-        None, "--tag", help="Filter by tag (key=value). Repeatable, ANDed together"
+        None,
+        "--tag",
+        help="Filter by tag (key, key=value, or key!=value). Repeatable, ANDed together",
+    ),
+    excludes: Optional[List[str]] = typer.Option(
+        None,
+        "--exclude",
+        help="Exclude resources matching glob (display name, or full path if it starts with //). Repeatable",
     ),
     fields: Optional[str] = typer.Option(
         None, "--fields", help=f"Comma-separated fields to show: {', '.join(_ALL_LS_FIELDS)}"
@@ -983,6 +976,7 @@ def ls(
             label_filters,
             tag_filters,
             level,
+            excludes,
         )
 
         if fmt == "rich":
@@ -1879,27 +1873,11 @@ def get_path_command(
         handle_error(e)
 
 
-def _get_resource_display_name(
-    item: Union[OrganizationNode, Folder, Project],
-) -> str:
-    if isinstance(item, OrganizationNode):
-        return item.organization.display_name
-    return item.display_name
-
-
-def _get_resource_path(item: Union[OrganizationNode, Folder, Project]) -> str:
-    if isinstance(item, OrganizationNode):
-        return f"//{path_escape(item.organization.display_name)}"
-    return item.path
-
-
 def _search_hierarchy(
     hierarchy: Hierarchy,
-    pattern: str,
+    matcher: PatternMatcher,
     type_filter: Optional[str],
 ) -> List[tuple[str, Union[OrganizationNode, Folder, Project]]]:
-    lower_pattern = pattern.lower()
-
     candidates: List[Union[OrganizationNode, Folder, Project]] = []
     if not type_filter or type_filter == "organization":
         candidates.extend(hierarchy.organizations)
@@ -1908,18 +1886,23 @@ def _search_hierarchy(
     if not type_filter or type_filter == "project":
         candidates.extend(hierarchy.projects)
 
-    return [
-        (_get_resource_path(item), item)
-        for item in candidates
-        if fnmatch.fnmatch(_get_resource_display_name(item).lower(), lower_pattern)
-    ]
+    matches = []
+    for item in candidates:
+        path = get_resource_path(item)
+        if matcher(path, get_display_name(item)):
+            matches.append((path, item))
+    return matches
 
 
 @app.command()
 def find(
     ctx: typer.Context,
     pattern: Annotated[
-        str, typer.Argument(help="Name pattern to search (glob syntax: *, ?)")
+        str,
+        typer.Argument(
+            help="Pattern to search (glob syntax: *, ?). Matches display names, "
+            "or full paths when the pattern starts with //"
+        ),
     ],
     resource: Annotated[
         Optional[str],
@@ -1931,14 +1914,29 @@ def find(
         "-t",
         help="Filter by resource type: folder, project, organization",
     ),
+    regex: bool = typer.Option(
+        False,
+        "--regex",
+        "-E",
+        help="Treat pattern as a regular expression (search semantics, case-insensitive)",
+    ),
     force_refresh: bool = typer.Option(
         False, "--force-refresh", "-F", help=_REFRESH_HELP
     ),
     label_filters: Optional[List[str]] = typer.Option(
-        None, "--label", help="Filter by label (key=value). Repeatable, ANDed together"
+        None,
+        "--label",
+        help="Filter by label (key, key=value, or key!=value). Repeatable, ANDed together",
     ),
     tag_filters: Optional[List[str]] = typer.Option(
-        None, "--tag", help="Filter by tag (key=value). Repeatable, ANDed together"
+        None,
+        "--tag",
+        help="Filter by tag (key, key=value, or key!=value). Repeatable, ANDed together",
+    ),
+    excludes: Optional[List[str]] = typer.Option(
+        None,
+        "--exclude",
+        help="Exclude resources matching glob (display name, or full path if it starts with //). Repeatable",
     ),
     fields: Optional[str] = typer.Option(
         None, "--fields", help=f"Comma-separated fields to show: {', '.join(_ALL_LS_FIELDS)}"
@@ -1947,9 +1945,13 @@ def find(
         False, "--full", help="Show all labels/tags without truncation"
     ),
 ) -> None:
-    """Search for resources by display name pattern (glob syntax)."""
+    """Search for resources by display name or path pattern (glob or regex)."""
     try:
         _validate_type_filter(resource_type)
+
+        # Compile the pattern before loading the hierarchy so an invalid
+        # regex fails fast without an API call.
+        matcher = build_pattern_matcher(pattern, regex=regex)
 
         parsed_fields = _parse_fields(fields)
         needs_labels = parsed_fields is not None and "labels" in parsed_fields
@@ -1970,7 +1972,9 @@ def find(
             include_tags=include_tags,
         )
 
-        all_matches = sort_resources(_search_hierarchy(hierarchy, pattern, resource_type))
+        all_matches = sort_resources(
+            _search_hierarchy(hierarchy, matcher, resource_type)
+        )
         total_searched = len(all_matches)
 
         items = all_matches
@@ -1978,14 +1982,15 @@ def find(
             items = [
                 (p, obj)
                 for p, obj in items
-                if _matches_metadata(obj, label_filters, "labels")
+                if matches_metadata(obj, label_filters, "labels")
             ]
         if tag_filters:
             items = [
                 (p, obj)
                 for p, obj in items
-                if _matches_metadata(obj, tag_filters, "tags")
+                if matches_metadata(obj, tag_filters, "tags")
             ]
+        items = apply_exclusions(items, excludes)
 
         fmt = ctx.obj.get("output_format", "toon")
 

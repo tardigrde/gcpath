@@ -1070,6 +1070,100 @@ def test_find_with_label_filter(mock_load):
 
 
 @patch("gcpath.core.Hierarchy.load")
+def test_find_path_glob(mock_load, mock_hierarchy):
+    mock_load.return_value = mock_hierarchy
+    result = runner.invoke(app, ["find", "//example.com/f1/*"])
+    assert result.exit_code == 0
+    assert "//example.com/f1/f11" in result.stdout
+    # f1 itself is not under //example.com/f1/
+    assert "//example.com/f1," not in result.stdout
+
+
+@patch("gcpath.core.Hierarchy.load")
+def test_find_regex(mock_load, mock_hierarchy):
+    mock_load.return_value = mock_hierarchy
+    result = runner.invoke(app, ["find", "-E", r"^f\d$"])
+    assert result.exit_code == 0
+    assert "//example.com/f1," in result.stdout
+    assert "f11" not in result.stdout
+
+
+@patch("gcpath.core.Hierarchy.load")
+def test_find_regex_path(mock_load, mock_hierarchy):
+    mock_load.return_value = mock_hierarchy
+    result = runner.invoke(app, ["find", "--regex", r"//example\.com/f1/"])
+    assert result.exit_code == 0
+    assert "//example.com/f1/f11" in result.stdout
+    assert ",organization," not in result.stdout
+
+
+@patch("gcpath.core.Hierarchy.load")
+def test_find_regex_invalid_fails_before_load(mock_load):
+    result = runner.invoke(app, ["find", "-E", "[unclosed"])
+    assert result.exit_code == 1
+    assert "Invalid regex" in result.output
+    mock_load.assert_not_called()
+
+
+@patch("gcpath.core.Hierarchy.load")
+def test_find_exclude(mock_load, mock_hierarchy):
+    mock_load.return_value = mock_hierarchy
+    result = runner.invoke(app, ["find", "f*", "--exclude", "f11"])
+    assert result.exit_code == 0
+    assert "//example.com/f1," in result.stdout
+    assert "f11" not in result.stdout
+
+
+@patch("gcpath.core.Hierarchy.load")
+def test_find_label_negation(mock_load):
+    hierarchy = make_test_hierarchy()
+    f1 = hierarchy.organizations[0].folders["folders/1"]
+    f1.labels = {"env": "prod"}
+    f11 = hierarchy.organizations[0].folders["folders/11"]
+    f11.labels = {"env": "dev"}
+    mock_load.return_value = hierarchy
+
+    result = runner.invoke(app, ["find", "f*", "--label", "env!=prod"])
+    assert result.exit_code == 0
+    assert "f11" in result.stdout
+    assert "//example.com/f1," not in result.stdout
+
+
+@patch("gcpath.core.Hierarchy.load")
+def test_ls_exclude_name(mock_load, mock_hierarchy):
+    mock_load.return_value = mock_hierarchy
+    result = runner.invoke(app, ["ls", "-R", "--exclude", "f1"])
+    assert result.exit_code == 0
+    assert "//example.com/f1," not in result.stdout
+    assert "//example.com/f1/f11" in result.stdout
+    assert "4 of 5 total" in result.stdout
+
+
+@patch("gcpath.core.Hierarchy.load")
+def test_ls_exclude_path_glob(mock_load, mock_hierarchy):
+    mock_load.return_value = mock_hierarchy
+    result = runner.invoke(app, ["ls", "-R", "--exclude", "//example.com/f1/*"])
+    assert result.exit_code == 0
+    assert "//example.com/f1," in result.stdout
+    assert "//example.com/f1/f11" not in result.stdout
+
+
+@patch("gcpath.core.Hierarchy.load")
+def test_ls_label_negation(mock_load):
+    hierarchy = make_test_hierarchy()
+    f1 = hierarchy.organizations[0].folders["folders/1"]
+    f1.labels = {"env": "prod"}
+    f11 = hierarchy.organizations[0].folders["folders/11"]
+    f11.labels = {"env": "dev"}
+    mock_load.return_value = hierarchy
+
+    result = runner.invoke(app, ["ls", "-R", "--label", "env!=prod"])
+    assert result.exit_code == 0
+    assert "f11" in result.stdout
+    assert "//example.com/f1," not in result.stdout
+
+
+@patch("gcpath.core.Hierarchy.load")
 def test_ls_fields_flag(mock_load, mock_hierarchy):
     mock_load.return_value = mock_hierarchy
     result = runner.invoke(app, ["ls", "--fields", "path,type"])

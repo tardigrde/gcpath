@@ -130,6 +130,9 @@ Options:
 - `-R, --recursive`: List resources recursively.
 - `-t, --type TYPE`: Filter by resource type: `folder`, `project`, `organization`.
 - `-L, --level N`: Limit depth for recursive listing (requires `-R`).
+- `--label FILTER`: Filter by label: `key` (presence), `key=value`, or `key!=value` (exclusion). Repeatable, ANDed together.
+- `--tag FILTER`: Filter by tag, same syntax as `--label`.
+- `--exclude GLOB`: Exclude resources matching a glob. Matches display names, or full paths when the glob starts with `//`. Repeatable.
 
 Examples:
 
@@ -148,6 +151,12 @@ gcpath ls -R --type folder
 
 # Recursive listing limited to depth 2
 gcpath ls -R -L 2
+
+# Everything except production resources
+gcpath ls -R --label "env!=prod"
+
+# Hide sandbox subtrees and test projects
+gcpath ls -R --exclude "//example.com/sandbox/*" --exclude "*-test"
 ```
 
 ### Tree View (`tree`)
@@ -221,15 +230,21 @@ gcpath path folders/987654321
 
 ### Find Resources (`find`)
 
-Search for resources by display name using glob patterns.
+Search for resources by display name (or full path) using glob or regex patterns.
 
 ```bash
 gcpath find PATTERN [RESOURCE]
 ```
 
+Patterns match display names by default. A pattern starting with `//` is matched against the full resource path instead.
+
 Options:
 
 - `-t, --type TYPE`: Filter by resource type: `folder`, `project`, `organization`.
+- `-E, --regex`: Treat the pattern as a regular expression (substring search semantics, case-insensitive).
+- `--label FILTER`: Filter by label: `key` (presence), `key=value`, or `key!=value` (exclusion). Repeatable, ANDed together.
+- `--tag FILTER`: Filter by tag, same syntax as `--label`.
+- `--exclude GLOB`: Exclude resources matching a glob. Matches display names, or full paths when the glob starts with `//`. Repeatable.
 
 The optional `RESOURCE` argument scopes the search to a subtree.
 
@@ -247,6 +262,18 @@ gcpath find "team-*" folders/123456789
 
 # Case-insensitive by default
 gcpath find "*STAGING*"
+
+# Match against the full path (pattern starts with //)
+gcpath find "//example.com/engineering/*"
+
+# Regex search on names
+gcpath find -E "^(api|web)-.*-prod$"
+
+# Regex search on full paths
+gcpath find -E "//example\.com/.*/sandbox"
+
+# Combine: prod-labeled projects, excluding test ones
+gcpath find "*" --type project --label "env=prod" --exclude "*-test"
 ```
 
 ### Show Ancestry (`ancestors`)
