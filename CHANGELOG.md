@@ -1,6 +1,67 @@
 # CHANGELOG
 
 
+## v0.13.0 (2026-06-11)
+
+### Chores
+
+- **deps-dev**: Bump pytest in the uv group across 1 directory
+  ([#32](https://github.com/tardigrde/gcpath/pull/32),
+  [`41bda21`](https://github.com/tardigrde/gcpath/commit/41bda2119ddc833a076e74beb9692e898cc0e4b4))
+
+Bumps the uv group with 1 update in the / directory: [pytest](https://github.com/pytest-dev/pytest).
+
+Updates `pytest` from 9.0.2 to 9.0.3 - [Release
+  notes](https://github.com/pytest-dev/pytest/releases) -
+  [Changelog](https://github.com/pytest-dev/pytest/blob/main/CHANGELOG.rst) -
+  [Commits](https://github.com/pytest-dev/pytest/compare/9.0.2...9.0.3)
+
+--- updated-dependencies: - dependency-name: pytest dependency-version: 9.0.3
+
+dependency-type: direct:development ...
+
+Signed-off-by: dependabot[bot] <support@github.com>
+
+Co-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>
+
+### Features
+
+- Actionable errors, did-you-mean suggestions, and cache refresh
+  ([#38](https://github.com/tardigrde/gcpath/pull/38),
+  [`ac0b557`](https://github.com/tardigrde/gcpath/commit/ac0b557fc89112149252afd53d4b40b695876ecd))
+
+* feat: actionable errors, did-you-mean suggestions, and cache refresh
+
+- Map DefaultCredentialsError, RefreshError, and Asset-API-disabled errors to structured TOON errors
+  with exact fix instructions - Add cache-backed "did you mean" suggestions on resource-not-found,
+  using difflib against cached paths (never triggers an API call) - Add `gcpath cache refresh` to
+  warm the cache out-of-band, and show stale cache age with a refresh hint on the home dashboard -
+  New errors module centralizes exception-to-guidance mapping
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix: address review feedback on errors and cache refresh
+
+- Case-insensitive service-disabled detection - Distinguish stale cache from empty even when age is
+  unknown - cache refresh now loads labels/tags so the warmed cache serves metadata commands, and
+  fails loudly if the cache was not written - Avoid bare domain substring assertions flagged by
+  CodeQL
+
+* fix: re-raise typer.Exit in cache refresh and name actual disabled service
+
+The write-failure path in cache_refresh raised typer.Exit inside the try block, which the generic
+  except Exception caught (typer.Exit subclasses RuntimeError), printing a spurious "Unexpected
+  error" line and traceback.
+
+Service-disabled errors now name the service from the error message instead of always blaming the
+  Cloud Asset API; the -U hint is only shown when the Asset API itself is disabled. Also strip
+  trailing punctuation from did-you-mean query extraction.
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com>
+
+
 ## v0.12.0 (2026-06-11)
 
 ### Features
