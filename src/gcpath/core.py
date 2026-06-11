@@ -1,7 +1,8 @@
 import logging
 import urllib.parse
+from collections import Counter
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from google.cloud import resourcemanager_v3  # type: ignore
 from google.api_core import exceptions
@@ -49,6 +50,48 @@ class PathParsingError(GCPathError, ValueError):
 def path_escape(display_name: str) -> str:
     """Escape display names for use in paths."""
     return urllib.parse.quote(display_name, safe="")
+
+
+def aggregate_metadata(
+    items: List[Union["Folder", "Project"]],
+    attr: str,
+    *,
+    key_filter: Optional[str] = None,
+) -> Tuple[List[Dict[str, Any]], int]:
+    """Aggregate label/tag occurrences across folders/projects.
+
+    Pure data helper shared by the CLI and the MCP server. Returns a list of
+    rows ``{"key", "value", "count", "examples"}`` and the number of items
+    scanned.
+    """
+    counts: Dict[Tuple[str, str], int] = {}
+    examples: Dict[Tuple[str, str], List[str]] = {}
+
+    for obj in items:
+        metadata: Dict[str, str] = getattr(obj, attr, {}) or {}
+        for k, v in metadata.items():
+            if key_filter is not None and k != key_filter:
+                continue
+            kv = (k, v)
+            counts[kv] = counts.get(kv, 0) + 1
+            ex_list = examples.setdefault(kv, [])
+            if len(ex_list) < 3:
+                ex_list.append(getattr(obj, "path", "") or obj.name)
+
+    rows: List[Dict[str, Any]] = []
+    for (k, v), c in counts.items():
+        ex = examples.get((k, v), [])
+        suffix = ""
+        if c > len(ex):
+            suffix = f" (+{c - len(ex)} more)"
+        rows.append({
+            "key": k,
+            "value": v,
+            "count": c,
+            "examples": ", ".join(ex) + suffix,
+        })
+    rows.sort(key=lambda r: (-r["count"], r["key"], r["value"]))
+    return rows, len(items)
 
 
 @dataclass
@@ -792,6 +835,159 @@ class Hierarchy:
                 raise ResourceNotFoundError(f"Resource not found: {name}")
 
         raise ResourceNotFoundError(f"Unknown resource type: {name}")
+
+    def summary(self, top_n: int = 5, deepest_n: int = 3) -> Dict[str, Any]:
+        """Build an agent-friendly snapshot of the loaded hierarchy.
+
+        Returns counts, depth, top label/tag keys, per-org project counts, and
+        a few of the deepest paths. All values are JSON-serializable.
+
+        Depth convention: an org is depth 0; each folder/project layer adds 1.
+        For a Folder, ``ancestors`` includes the folder itself plus its
+        ancestors up to the org, so depth == ``len(ancestors) - 1``. A Project
+        directly under a folder is one deeper than that folder, which is
+        equivalent to ``len(folder.ancestors)``. A Project directly under an
+        org has depth 1.
+        """
+        real_orgs = [
+            o for o in self.organizations
+            if o.organization.name != SYNTHETIC_ORG_NAME
+        ]
+        real_folders, real_projects = self._real_org_descendants(real_orgs)
+
+        max_depth = self._summary_max_depth(real_folders, real_projects)
+        label_counter, tag_counter = self._summary_metadata_counters(
+            real_folders, real_projects
+        )
+        top_label_keys = [
+            {"key": k, "count": c} for k, c in label_counter.most_common(top_n)
+        ]
+        top_tag_keys = [
+            {"key": k, "count": c} for k, c in tag_counter.most_common(top_n)
+        ]
+        org_rows = self._summary_org_rows(real_orgs)
+        deepest_paths = self._summary_deepest_paths(
+            real_folders, real_projects, deepest_n
+        )
+
+        return {
+            "org_count": len(real_orgs),
+            "folder_count": len(real_folders),
+            "project_count": len(real_projects),
+            "max_depth": max_depth,
+            "top_label_keys": top_label_keys,
+            "top_tag_keys": top_tag_keys,
+            "orgs": org_rows,
+            "deepest_paths": deepest_paths,
+        }
+
+    def _real_org_descendants(
+        self, real_orgs: List["OrganizationNode"]
+    ) -> tuple[List["Folder"], List["Project"]]:
+        """Drop synthetic-org descendants from summary metrics.
+
+        Folders only exist under an org, so they're filtered to those whose
+        org isn't synthetic. Projects can also be fully orgless (no synthetic
+        bridge involved) — those are kept since they represent real GCP
+        resources, just outside any organization the user can see.
+        """
+        synthetic_orgs = [
+            o for o in self.organizations
+            if o.organization.name == SYNTHETIC_ORG_NAME
+        ]
+        synth_ids = {id(o) for o in synthetic_orgs}
+        real_folders = [
+            f for f in self.folders
+            if id(f.organization) not in synth_ids
+        ]
+
+        def project_under_synthetic(p: "Project") -> bool:
+            if p.organization is not None and id(p.organization) in synth_ids:
+                return True
+            if p.folder is not None and id(p.folder.organization) in synth_ids:
+                return True
+            return False
+
+        real_projects = [p for p in self.projects if not project_under_synthetic(p)]
+        return real_folders, real_projects
+
+    @staticmethod
+    def _project_depth(p: "Project") -> int:
+        if p.folder:
+            return len(p.folder.ancestors)
+        if p.organization:
+            return 1
+        return 0
+
+    def _summary_max_depth(
+        self,
+        folders: List["Folder"],
+        projects: List["Project"],
+    ) -> int:
+        max_depth = 0
+        for f in folders:
+            depth = max(0, len(f.ancestors) - 1)
+            if depth > max_depth:
+                max_depth = depth
+        for p in projects:
+            pd = Hierarchy._project_depth(p)
+            if pd > max_depth:
+                max_depth = pd
+        return max_depth
+
+    def _summary_deepest_paths(
+        self,
+        folders: List["Folder"],
+        projects: List["Project"],
+        deepest_n: int,
+    ) -> List[str]:
+        candidate_paths: List[tuple[int, str]] = []
+        for f in folders:
+            candidate_paths.append((max(0, len(f.ancestors) - 1), f.path))
+        for p in projects:
+            candidate_paths.append((Hierarchy._project_depth(p), p.path))
+        candidate_paths.sort(key=lambda t: (-t[0], t[1]))
+        seen: set = set()
+        deepest: List[str] = []
+        for _depth, path in candidate_paths:
+            if path in seen:
+                continue
+            seen.add(path)
+            deepest.append(path)
+            if len(deepest) >= deepest_n:
+                break
+        return deepest
+
+    def _summary_metadata_counters(
+        self,
+        folders: List["Folder"],
+        projects: List["Project"],
+    ) -> tuple[Counter, Counter]:
+        label_counter: Counter = Counter()
+        tag_counter: Counter = Counter()
+        for resource in list(folders) + list(projects):
+            for k in (getattr(resource, "labels", None) or {}).keys():
+                label_counter[k] += 1
+            for k in (getattr(resource, "tags", None) or {}).keys():
+                tag_counter[k] += 1
+        return label_counter, tag_counter
+
+    def _summary_org_rows(
+        self, real_orgs: List["OrganizationNode"]
+    ) -> List[Dict[str, Any]]:
+        return [
+            {
+                "display_name": org.organization.display_name,
+                "resource_name": org.organization.name,
+                "folders": len(org.folders),
+                "projects": sum(
+                    1
+                    for p in self.projects
+                    if p.organization is org or (p.folder and p.folder.organization is org)
+                ),
+            }
+            for org in real_orgs
+        ]
 
     @staticmethod
     def resolve_ancestry_chain(resource_name: str) -> List[tuple[str, str, str]]:

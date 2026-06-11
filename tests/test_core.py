@@ -618,3 +618,165 @@ def test_resolve_ancestry_chain_permission_denied(mock_rm):
     chain = Hierarchy.resolve_ancestry_chain("projects/restricted")
     assert len(chain) == 1
     assert chain[0] == ("projects/restricted", "projects/restricted", "project")
+
+
+def _build_summary_hierarchy():
+    org_proto = resourcemanager_v3.Organization(
+        name="organizations/77", display_name="acme.example"
+    )
+    org_node = OrganizationNode(organization=org_proto)
+
+    f1 = Folder(
+        name="folders/100",
+        display_name="eng",
+        ancestors=["folders/100", "organizations/77"],
+        organization=org_node,
+        parent="organizations/77",
+        labels={"team": "eng", "tier": "prod"},
+    )
+    f2 = Folder(
+        name="folders/200",
+        display_name="ops",
+        ancestors=["folders/200", "organizations/77"],
+        organization=org_node,
+        parent="organizations/77",
+        labels={"team": "ops"},
+    )
+    f3 = Folder(
+        name="folders/300",
+        display_name="backend",
+        ancestors=["folders/300", "folders/100", "organizations/77"],
+        organization=org_node,
+        parent="folders/100",
+        labels={"team": "eng"},
+    )
+    org_node.folders["folders/100"] = f1
+    org_node.folders["folders/200"] = f2
+    org_node.folders["folders/300"] = f3
+
+    p1 = Project(
+        name="projects/p1",
+        project_id="p1",
+        display_name="p1",
+        parent="folders/300",
+        organization=org_node,
+        folder=f3,
+        labels={"team": "eng"},
+        tags={"env": "prod"},
+    )
+
+    return Hierarchy([org_node], [p1])
+
+
+def test_summary_basic_counts():
+    h = _build_summary_hierarchy()
+    summary = h.summary()
+    assert summary["org_count"] == 1
+    assert summary["folder_count"] == 3
+    assert summary["project_count"] == 1
+
+
+def test_summary_max_depth():
+    h = _build_summary_hierarchy()
+    summary = h.summary()
+    # Projects must be considered: p1 lives under folders/300 (folder depth 2),
+    # so its depth is 3 and dominates the folder-only max of 2.
+    assert summary["max_depth"] == 3
+
+
+def test_summary_top_label_keys_ordering():
+    h = _build_summary_hierarchy()
+    summary = h.summary(top_n=5)
+    keys = [r["key"] for r in summary["top_label_keys"]]
+    assert keys[0] == "team"
+    counts = {r["key"]: r["count"] for r in summary["top_label_keys"]}
+    assert counts["team"] == 4
+
+
+def test_summary_excludes_synthetic_org():
+    from gcpath.core import SYNTHETIC_ORG_NAME
+
+    synth_proto = resourcemanager_v3.Organization(
+        name=SYNTHETIC_ORG_NAME, display_name="root_folder"
+    )
+    real_proto = resourcemanager_v3.Organization(
+        name="organizations/77", display_name="acme.example"
+    )
+    synth = OrganizationNode(organization=synth_proto)
+    real = OrganizationNode(organization=real_proto)
+    h = Hierarchy([synth, real], [])
+    summary = h.summary()
+    assert summary["org_count"] == 1
+    assert summary["orgs"][0]["display_name"] == "acme.example"
+
+
+def test_summary_excludes_synthetic_org_descendants_from_global_metrics():
+    """folder_count, project_count, max_depth, top keys, and deepest_paths
+    must ignore synthetic-org descendants — otherwise the snapshot is
+    skewed by data that isn't really "in" any user-visible org.
+    """
+    from gcpath.core import SYNTHETIC_ORG_NAME
+
+    synth_proto = resourcemanager_v3.Organization(
+        name=SYNTHETIC_ORG_NAME, display_name="root_folder"
+    )
+    real_proto = resourcemanager_v3.Organization(
+        name="organizations/77", display_name="acme"
+    )
+    synth = OrganizationNode(organization=synth_proto)
+    real = OrganizationNode(organization=real_proto)
+
+    real_folder = Folder(
+        name="folders/100",
+        display_name="real",
+        ancestors=["folders/100", "organizations/77"],
+        organization=real,
+        parent="organizations/77",
+        labels={"team": "real"},
+    )
+    real.folders["folders/100"] = real_folder
+
+    synth_folder = Folder(
+        name="folders/999",
+        display_name="under_synth",
+        ancestors=["folders/999"],
+        organization=synth,
+        parent=SYNTHETIC_ORG_NAME,
+        labels={"team": "synth"},
+    )
+    synth.folders["folders/999"] = synth_folder
+
+    real_project = Project(
+        name="projects/real-1",
+        project_id="real-1",
+        display_name="real-1",
+        parent="folders/100",
+        organization=real,
+        folder=real_folder,
+    )
+    synth_project = Project(
+        name="projects/synth-1",
+        project_id="synth-1",
+        display_name="synth-1",
+        parent="folders/999",
+        organization=synth,
+        folder=synth_folder,
+    )
+
+    h = Hierarchy([synth, real], [real_project, synth_project])
+    summary = h.summary()
+    assert summary["org_count"] == 1
+    assert summary["folder_count"] == 1
+    assert summary["project_count"] == 1
+    label_keys = [r["key"] for r in summary["top_label_keys"]]
+    # Both folders set "team" but only the real one should be counted.
+    assert label_keys.count("team") <= 1
+    # No synth-1 path should leak into deepest_paths.
+    assert all("synth-1" not in p for p in summary["deepest_paths"])
+
+
+def test_summary_deepest_paths_sorted():
+    h = _build_summary_hierarchy()
+    summary = h.summary(deepest_n=3)
+    assert summary["deepest_paths"]
+    assert summary["deepest_paths"][0].count("/") >= summary["deepest_paths"][-1].count("/")

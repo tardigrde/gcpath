@@ -169,6 +169,27 @@ def toon_path(
     return toon_table("results", rows, ("resource_name", "path"))
 
 
+def serialize_open_results(
+    results: List[Dict[str, str]],
+) -> List[Dict[str, str]]:
+    return list(results)
+
+
+def toon_open(
+    results: List[Dict[str, str]],
+    help_lines: Optional[List[str]] = None,
+) -> str:
+    if not results:
+        return toon_empty("results", "for the requested paths", help_lines)
+    if len(results) == 1:
+        return with_help(toon_object(results[0]), help_lines)
+    fields = ("path", "resource_name", "url", "error")
+    has_error = any("error" in r for r in results)
+    use_fields = fields if has_error else ("path", "resource_name", "url")
+    output = toon_table("results", results, use_fields)
+    return with_help(output, help_lines)
+
+
 def toon_ancestors(
     chain: List[Tuple[str, str, str]],
     help_lines: Optional[List[str]] = None,
@@ -206,6 +227,53 @@ def toon_find(
     return with_help(output, help_lines)
 
 
+def toon_metadata_aggregation(
+    rows: List[Dict[str, Any]],
+    *,
+    metadata_kind: str,
+    total_resources: int,
+    help_lines: Optional[List[str]] = None,
+) -> str:
+    """Render aggregated label/tag rows as a TOON table."""
+    if not rows:
+        return toon_empty(
+            metadata_kind,
+            f"found across {total_resources} resources",
+            help_lines,
+        )
+    data: Dict[str, Any] = {
+        "count": f"{len(rows)} of {total_resources} resources scanned",
+        metadata_kind: rows,
+    }
+    return with_help(toon_encode(data), help_lines)
+
+
+def toon_labels(
+    rows: List[Dict[str, Any]],
+    total_resources: int,
+    help_lines: Optional[List[str]] = None,
+) -> str:
+    return toon_metadata_aggregation(
+        rows,
+        metadata_kind="labels",
+        total_resources=total_resources,
+        help_lines=help_lines,
+    )
+
+
+def toon_tags(
+    rows: List[Dict[str, Any]],
+    total_resources: int,
+    help_lines: Optional[List[str]] = None,
+) -> str:
+    return toon_metadata_aggregation(
+        rows,
+        metadata_kind="tags",
+        total_resources=total_resources,
+        help_lines=help_lines,
+    )
+
+
 def toon_stats(
     scope: str,
     organizations: int = 0,
@@ -221,6 +289,37 @@ def toon_stats(
     }
     output = toon_encode(data)
     return with_help(output, help_lines)
+
+
+def toon_summary(
+    data: Dict[str, Any],
+    help_lines: Optional[List[str]] = None,
+) -> str:
+    """Render a Hierarchy.summary() dict as TOON output."""
+    output = toon_encode(data)
+    return with_help(output, help_lines)
+
+
+def toon_audit(
+    issues: List[Dict[str, Any]],
+    severity_counts: Dict[str, int],
+    help_lines: Optional[List[str]] = None,
+) -> str:
+    """Render audit issues as a TOON table with a severity-aware count header."""
+    if not issues:
+        empty_help = help_lines or [
+            "Your hierarchy passes all enabled checks",
+        ]
+        return toon_empty("issues", "in scope", empty_help)
+    noun = "issue" if len(issues) == 1 else "issues"
+    header = (
+        f"{len(issues)} {noun} "
+        f"({severity_counts.get('error', 0)} error, "
+        f"{severity_counts.get('warn', 0)} warn, "
+        f"{severity_counts.get('info', 0)} info)"
+    )
+    data: Dict[str, Any] = {"count": header, "issues": issues}
+    return with_help(toon_encode(data), help_lines)
 
 
 def toon_cache_status(

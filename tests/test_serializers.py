@@ -462,3 +462,96 @@ class TestDefaultFieldsForItems:
         items = [("//x", f1)]
         fields = _default_fields_for_items(items)
         assert "project_id" not in fields
+
+
+class TestToonOpen:
+    def test_single_result_object_form(self):
+        from gcpath.serializers import toon_open
+
+        out = toon_open([
+            {"path": "//e/f1", "resource_name": "folders/1", "url": "https://x"}
+        ])
+        assert "url" in out
+        assert "https://x" in out
+
+    def test_multiple_results_table_form(self):
+        from gcpath.serializers import toon_open
+
+        out = toon_open([
+            {"path": "//e/f1", "resource_name": "folders/1", "url": "u1"},
+            {"path": "//e/f2", "resource_name": "folders/2", "url": "u2"},
+        ])
+        assert "results" in out
+        assert "u1" in out and "u2" in out
+
+
+class TestToonLabelsTags:
+    def test_labels_with_rows(self):
+        from gcpath.serializers import toon_labels
+
+        rows = [
+            {"key": "team", "value": "eng", "count": 3, "examples": "//x/a"},
+        ]
+        out = toon_labels(rows, total_resources=10)
+        assert "team" in out
+        assert "of 10" in out
+
+    def test_labels_empty(self):
+        from gcpath.serializers import toon_labels
+
+        out = toon_labels([], total_resources=5)
+        assert "0 labels" in out
+
+    def test_tags_with_rows(self):
+        from gcpath.serializers import toon_tags
+
+        rows = [
+            {"key": "env", "value": "prod", "count": 2, "examples": "//x/a"},
+        ]
+        out = toon_tags(rows, total_resources=4)
+        assert "env" in out
+
+
+class TestToonSummary:
+    def test_summary_serializes(self):
+        from gcpath.serializers import toon_summary
+
+        data = {
+            "org_count": 1,
+            "folder_count": 2,
+            "project_count": 3,
+            "max_depth": 2,
+            "top_label_keys": [{"key": "team", "count": 5}],
+            "top_tag_keys": [],
+            "orgs": [],
+            "deepest_paths": ["//x/a/b"],
+        }
+        out = toon_summary(data)
+        assert "org_count" in out
+        assert "folder_count" in out
+
+
+class TestToonAudit:
+    def test_audit_with_issues(self):
+        from gcpath.serializers import toon_audit
+
+        issues = [
+            {
+                "severity": "warn",
+                "check": "orphan_project",
+                "path": "//_/p1",
+                "type": "project",
+                "details": "no parent",
+            }
+        ]
+        out = toon_audit(issues, {"error": 0, "warn": 1, "info": 0})
+        assert "orphan_project" in out
+        # Singular noun for a count of 1 (avoids "1 issues" UI defect).
+        assert "1 issue" in out
+        assert "1 issues" not in out
+
+    def test_audit_empty(self):
+        from gcpath.serializers import toon_audit
+
+        out = toon_audit([], {"error": 0, "warn": 0, "info": 0})
+        assert "0 issues" in out

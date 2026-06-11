@@ -1244,3 +1244,383 @@ def test_find_rich_format(mock_load, mock_hierarchy):
     mock_load.return_value = mock_hierarchy
     result = runner.invoke(app, ["--format", "rich", "find", "f*"])
     assert result.exit_code == 0
+
+
+# ---- Feature 1: gcpath open ----
+
+
+@patch("gcpath.core.Hierarchy.load")
+def test_open_single_folder(mock_load, mock_hierarchy):
+    mock_load.return_value = mock_hierarchy
+    result = runner.invoke(app, ["open", "//example.com/f1"])
+    assert result.exit_code == 0
+    # Match the fully-formed URL (path + query) rather than the bare host so
+    # CodeQL's URL-substring-sanitization rule doesn't flag the assertion.
+    assert "https://console.cloud.google.com/welcome?folder=1" in result.stdout
+
+
+@patch("gcpath.core.Hierarchy.load")
+def test_open_organization(mock_load, mock_hierarchy):
+    mock_load.return_value = mock_hierarchy
+    result = runner.invoke(app, ["open", "//example.com"])
+    assert result.exit_code == 0
+    assert "organizationId=123" in result.stdout
+
+
+@patch("gcpath.core.Hierarchy.load")
+def test_open_project(mock_load, mock_hierarchy):
+    mock_load.return_value = mock_hierarchy
+    result = runner.invoke(app, ["open", "//example.com/f1/Project%201"])
+    assert result.exit_code == 0
+    assert "project=p1" in result.stdout
+
+
+@patch("gcpath.core.Hierarchy.load")
+def test_open_multiple_paths(mock_load, mock_hierarchy):
+    mock_load.return_value = mock_hierarchy
+    result = runner.invoke(app, ["open", "//example.com", "//example.com/f1"])
+    assert result.exit_code == 0
+    assert "organizationId=123" in result.stdout
+    assert "folder=1" in result.stdout
+
+
+@patch("gcpath.core.Hierarchy.load")
+def test_open_orgless_project_rejected(mock_load, mock_hierarchy):
+    mock_load.return_value = mock_hierarchy
+    result = runner.invoke(app, ["open", "//_/Standalone"])
+    assert result.exit_code == 1
+    assert "Organizationless" in result.stdout or "no console URL" in result.stdout
+
+
+@patch("gcpath.core.Hierarchy.load")
+@patch("webbrowser.open", return_value=True)
+def test_open_browser_flag_invokes_webbrowser(mock_open, mock_load, mock_hierarchy):
+    mock_load.return_value = mock_hierarchy
+    result = runner.invoke(app, ["open", "--browser", "//example.com/f1"])
+    assert result.exit_code == 0
+    mock_open.assert_called()
+
+
+@patch("gcpath.core.Hierarchy.load")
+@patch("webbrowser.open", return_value=True)
+def test_open_print_does_not_invoke_browser(mock_open, mock_load, mock_hierarchy):
+    mock_load.return_value = mock_hierarchy
+    result = runner.invoke(app, ["open", "//example.com/f1"])
+    assert result.exit_code == 0
+    mock_open.assert_not_called()
+
+
+# ---- Feature 2: gcpath labels / tags ----
+
+
+def _hierarchy_with_labels():
+    h = make_test_hierarchy()
+    h.folders[0].labels = {"team": "platform", "tier": "prod"}
+    h.folders[1].labels = {"team": "platform"}
+    h.projects[0].labels = {"team": "platform", "owner": "alice"}
+    return h
+
+
+@patch("gcpath.core.Hierarchy.load")
+def test_labels_basic(mock_load):
+    mock_load.return_value = _hierarchy_with_labels()
+    result = runner.invoke(app, ["labels"])
+    assert result.exit_code == 0
+    assert "team" in result.stdout
+    assert "platform" in result.stdout
+
+
+@patch("gcpath.core.Hierarchy.load")
+def test_labels_filter_by_key(mock_load):
+    mock_load.return_value = _hierarchy_with_labels()
+    result = runner.invoke(app, ["labels", "--key", "owner"])
+    assert result.exit_code == 0
+    assert "alice" in result.stdout
+    assert "platform" not in result.stdout or "team" not in result.stdout
+
+
+@patch("gcpath.core.Hierarchy.load")
+def test_labels_top_n(mock_load):
+    mock_load.return_value = _hierarchy_with_labels()
+    result = runner.invoke(app, ["labels", "--top", "1"])
+    assert result.exit_code == 0
+    assert "team" in result.stdout
+
+
+@patch("gcpath.core.Hierarchy.load")
+def test_labels_empty_scope(mock_load, mock_hierarchy):
+    mock_load.return_value = mock_hierarchy
+    result = runner.invoke(app, ["labels"])
+    assert result.exit_code == 0
+    assert "0 labels" in result.stdout or "labels:" in result.stdout
+
+
+@patch("gcpath.core.Hierarchy.load")
+def test_tags_basic(mock_load):
+    h = make_test_hierarchy()
+    h.folders[0].tags = {"env": "prod"}
+    h.projects[0].tags = {"env": "prod"}
+    mock_load.return_value = h
+    result = runner.invoke(app, ["tags"])
+    assert result.exit_code == 0
+    assert "env" in result.stdout
+    assert "prod" in result.stdout
+
+
+# ---- Feature 3: gcpath summary ----
+
+
+@patch("gcpath.core.Hierarchy.load")
+def test_summary_basic(mock_load, mock_hierarchy):
+    mock_load.return_value = mock_hierarchy
+    result = runner.invoke(app, ["summary"])
+    assert result.exit_code == 0
+    assert "org_count" in result.stdout
+    assert "folder_count" in result.stdout
+    assert "project_count" in result.stdout
+    assert "deepest_paths" in result.stdout
+
+
+@patch("gcpath.core.Hierarchy.load")
+def test_summary_json(mock_load, mock_hierarchy):
+    mock_load.return_value = mock_hierarchy
+    result = runner.invoke(app, ["--format", "json", "summary"])
+    assert result.exit_code == 0
+    data = json.loads(result.stdout)
+    assert data["org_count"] == 1
+    assert data["folder_count"] == 2
+    assert data["project_count"] == 2
+    assert data["max_depth"] == 2
+
+
+# ---- Feature 5: gcpath audit ----
+
+
+@patch("gcpath.core.Hierarchy.load")
+def test_audit_clean_hierarchy_warns_on_orphans(mock_load, mock_hierarchy):
+    mock_load.return_value = mock_hierarchy
+    result = runner.invoke(app, ["audit"])
+    assert result.exit_code == 1
+    assert "orphan_project" in result.stdout
+
+
+@patch("gcpath.core.Hierarchy.load")
+def test_audit_exit_zero_flag(mock_load, mock_hierarchy):
+    mock_load.return_value = mock_hierarchy
+    result = runner.invoke(app, ["audit", "--exit-zero"])
+    assert result.exit_code == 0
+
+
+@patch("gcpath.core.Hierarchy.load")
+def test_audit_missing_required_label(mock_load, mock_hierarchy):
+    mock_load.return_value = mock_hierarchy
+    result = runner.invoke(app, ["audit", "--require-labels", "owner", "--severity", "error"])
+    assert result.exit_code == 1
+    assert "missing_required_label" in result.stdout
+
+
+@patch("gcpath.core.Hierarchy.load")
+def test_audit_name_pattern(mock_load, mock_hierarchy):
+    mock_load.return_value = mock_hierarchy
+    result = runner.invoke(app, ["audit", "--name-pattern", r"^\d+$", "--exit-zero"])
+    assert result.exit_code == 0
+    assert "name_pattern_violation" in result.stdout
+
+
+@patch("gcpath.core.Hierarchy.load")
+def test_audit_invalid_check(mock_load, mock_hierarchy):
+    mock_load.return_value = mock_hierarchy
+    result = runner.invoke(app, ["audit", "--check", "bogus"])
+    assert result.exit_code == 1
+    assert "Unknown check" in result.stdout
+
+
+@patch("gcpath.core.Hierarchy.load")
+def test_audit_passes_when_only_orphans_filtered(mock_load):
+    org_proto = resourcemanager_v3.Organization(
+        name="organizations/777", display_name="clean.example.com"
+    )
+    org_node = OrganizationNode(organization=org_proto)
+    h = Hierarchy([org_node], [])
+    mock_load.return_value = h
+    result = runner.invoke(app, ["audit"])
+    assert result.exit_code == 0
+    assert "0 issues" in result.stdout
+
+
+# ---- Feature 4: gcpath mcp ----
+
+
+def test_mcp_invalid_transport():
+    result = runner.invoke(app, ["mcp", "--transport", "bogus"])
+    assert result.exit_code == 1
+    assert "Invalid transport" in result.stdout
+
+
+def test_mcp_missing_dependency_emits_help():
+    import sys
+
+    # Force `from mcp.server.fastmcp import FastMCP` (inside build_server) to
+    # raise ImportError so we always exercise the missing-extra branch.
+    sys.modules.pop("gcpath.mcp_server", None)
+    with patch.dict(sys.modules, {"mcp.server.fastmcp": None}):
+        result = runner.invoke(app, ["mcp", "--transport", "stdio"])
+    assert result.exit_code == 1
+    assert "MCP support requires" in result.stdout
+
+
+# ---- New audit validation / render coverage ----
+
+
+@patch("gcpath.core.Hierarchy.load")
+def test_audit_missing_required_label_check_without_keys_errors(
+    mock_load, mock_hierarchy
+):
+    mock_load.return_value = mock_hierarchy
+    result = runner.invoke(
+        app, ["audit", "--check", "missing_required_label"]
+    )
+    assert result.exit_code == 1
+    assert "--require-labels is required" in result.stdout
+
+
+@patch("gcpath.core.Hierarchy.load")
+def test_audit_name_pattern_check_without_pattern_errors(
+    mock_load, mock_hierarchy
+):
+    mock_load.return_value = mock_hierarchy
+    result = runner.invoke(
+        app, ["audit", "--check", "name_pattern_violation"]
+    )
+    assert result.exit_code == 1
+    assert "--name-pattern is required" in result.stdout
+
+
+@patch("gcpath.core.Hierarchy.load")
+def test_audit_rejects_oversized_name_pattern(mock_load, mock_hierarchy):
+    mock_load.return_value = mock_hierarchy
+    huge = "a" * 500
+    result = runner.invoke(app, ["audit", "--name-pattern", huge])
+    assert result.exit_code == 1
+    assert "ReDoS" in result.stdout or "too long" in result.stdout
+
+
+@patch("gcpath.core.Hierarchy.load")
+def test_audit_rich_renders_table(mock_load, mock_hierarchy):
+    mock_load.return_value = mock_hierarchy
+    result = runner.invoke(
+        app, ["--format", "rich", "audit", "--exit-zero"]
+    )
+    assert result.exit_code == 0
+
+
+@patch("gcpath.core.Hierarchy.load")
+def test_audit_rich_clean_renders_no_issues(mock_load):
+    org_proto = resourcemanager_v3.Organization(
+        name="organizations/777", display_name="clean.example.com"
+    )
+    h = Hierarchy([OrganizationNode(organization=org_proto)], [])
+    mock_load.return_value = h
+    result = runner.invoke(app, ["--format", "rich", "audit"])
+    assert result.exit_code == 0
+
+
+@patch("gcpath.core.Hierarchy.load")
+def test_audit_yaml_format(mock_load, mock_hierarchy):
+    mock_load.return_value = mock_hierarchy
+    result = runner.invoke(
+        app, ["--format", "yaml", "audit", "--exit-zero"]
+    )
+    assert result.exit_code == 0
+    data = yaml.safe_load(result.stdout)
+    assert "severity_counts" in data
+    assert "issues" in data
+
+
+@patch("gcpath.core.Hierarchy.load")
+def test_summary_rich_renders(mock_load, mock_hierarchy):
+    mock_load.return_value = mock_hierarchy
+    result = runner.invoke(app, ["--format", "rich", "summary"])
+    assert result.exit_code == 0
+
+
+# ---- Open browser-mode error surfacing ----
+
+
+@patch("gcpath.core.Hierarchy.load")
+@patch("webbrowser.open", return_value=True)
+def test_open_browser_partial_success_surfaces_errors(
+    mock_open, mock_load, mock_hierarchy
+):
+    """When --browser succeeds for some paths and fails for others, the
+    failed rows must still be rendered to stdout instead of being swallowed.
+    """
+    mock_load.return_value = mock_hierarchy
+    result = runner.invoke(
+        app,
+        ["open", "--browser", "//example.com/f1", "//_/Standalone"],
+    )
+    assert result.exit_code == 0
+    mock_open.assert_called()
+    assert "Standalone" in result.stdout
+    assert "Some paths could not be resolved" in result.stdout
+
+
+@patch("gcpath.core.Hierarchy.load")
+@patch("webbrowser.open", return_value=False)
+def test_open_browser_zero_opened_falls_back_to_print(
+    mock_open, mock_load, mock_hierarchy
+):
+    mock_load.return_value = mock_hierarchy
+    result = runner.invoke(app, ["open", "--browser", "//example.com/f1"])
+    assert result.exit_code == 0
+    assert "https://console.cloud.google.com/welcome?folder=1" in result.stdout
+
+
+def test_console_url_rejects_synthetic_org_project():
+    """Direct unit test for the formatters.console_url synthetic-org guard.
+
+    The CLI path is harder to exercise because path resolution under the
+    synthetic org has its own quirks; the formatter contract is the
+    authoritative line of defense.
+    """
+    from gcpath.core import (
+        Folder,
+        OrganizationNode,
+        Project,
+        SYNTHETIC_ORG_NAME,
+    )
+    from gcpath.formatters import console_url
+
+    synth_proto = resourcemanager_v3.Organization(
+        name=SYNTHETIC_ORG_NAME, display_name="root"
+    )
+    synth = OrganizationNode(organization=synth_proto)
+    f = Folder(
+        name="folders/9",
+        display_name="under_synth",
+        ancestors=["folders/9"],
+        organization=synth,
+        parent=SYNTHETIC_ORG_NAME,
+    )
+    p = Project(
+        name="projects/syn",
+        project_id="syn",
+        display_name="syn",
+        parent="folders/9",
+        organization=synth,
+        folder=f,
+    )
+    with pytest.raises(GCPathError, match="synthetic"):
+        console_url(p)
+    # Project pointing at synth org directly (no folder) must also be rejected.
+    p_direct = Project(
+        name="projects/syn2",
+        project_id="syn2",
+        display_name="syn2",
+        parent=SYNTHETIC_ORG_NAME,
+        organization=synth,
+        folder=None,
+    )
+    with pytest.raises(GCPathError, match="synthetic"):
+        console_url(p_direct)
