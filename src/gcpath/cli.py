@@ -272,8 +272,13 @@ def _show_home(_ctx: typer.Context) -> None:
     info = get_cache_info()
 
     if not info.exists or not info.fresh:
-        if info.exists and info.age_seconds is not None:
-            cache_state = f"stale ({format_age(info.age_seconds)} ago)"
+        if info.exists:
+            age = (
+                f" ({format_age(info.age_seconds)} ago)"
+                if info.age_seconds is not None
+                else ""
+            )
+            cache_state = f"stale{age}"
             help_lines = [
                 "Run `gcpath cache refresh` to reload from GCP",
                 "Run `gcpath ls` to load and list resources",
@@ -356,8 +361,16 @@ def cache_refresh(ctx: typer.Context) -> None:
             scope_resource=ep if ep else None,
             recursive=True,
             force_refresh=True,
+            include_labels=True,
+            include_tags=True,
         )
         info = get_cache_info()
+        if not info.exists:
+            print(toon_error(
+                "Cache refresh failed: cache file was not written",
+                [f"Check write permissions for {CACHE_FILE}"],
+            ))
+            raise typer.Exit(code=1)
         msg = (
             f"Cache refreshed: {info.org_count} organizations, "
             f"{info.folder_count} folders, {info.project_count} projects"

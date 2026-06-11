@@ -270,7 +270,7 @@ def test_handle_error_asset_api_disabled(capsys):
         ))
     out = capsys.readouterr().out
     assert "Cloud Asset API is disabled" in out
-    assert "cloudasset.googleapis.com" in out
+    assert "gcloud services enable" in out
 
 
 @patch("gcpath.core.Hierarchy.load")
@@ -356,18 +356,39 @@ def test_cache_refresh(mock_load, mock_write, mock_hierarchy, mock_get_cache_inf
     assert "Cache refreshed" in result.stdout
     assert "1 organizations" in result.stdout
     mock_load.assert_called_once()
+    assert mock_load.call_args.kwargs["include_labels"] is True
+    assert mock_load.call_args.kwargs["include_tags"] is True
     mock_write.assert_called_once()
 
 
 @patch("gcpath.cli.write_cache")
 @patch("gcpath.core.Hierarchy.load")
 def test_cache_refresh_skips_cache_read(
-    mock_load, mock_write, mock_hierarchy, mock_read_cache
+    mock_load, mock_write, mock_hierarchy, mock_read_cache, mock_get_cache_info_home
 ):
     mock_load.return_value = mock_hierarchy
+    mock_get_cache_info_home.return_value = CacheInfo(
+        exists=True, fresh=True, age_seconds=2.0, size_bytes=1024,
+        version=2, org_count=1, folder_count=2, project_count=2,
+    )
     result = runner.invoke(app, ["cache", "refresh"])
     assert result.exit_code == 0
     mock_read_cache.assert_not_called()
+
+
+@patch("gcpath.cli.write_cache")
+@patch("gcpath.core.Hierarchy.load")
+def test_cache_refresh_reports_write_failure(
+    mock_load, mock_write, mock_hierarchy, mock_get_cache_info_home
+):
+    mock_load.return_value = mock_hierarchy
+    mock_get_cache_info_home.return_value = CacheInfo(
+        exists=False, fresh=False, age_seconds=None, size_bytes=None,
+        version=None, org_count=0, folder_count=0, project_count=0,
+    )
+    result = runner.invoke(app, ["cache", "refresh"])
+    assert result.exit_code == 1
+    assert "Cache refresh failed" in result.stdout
 
 
 def test_home_stale_cache(mock_get_cache_info_home):

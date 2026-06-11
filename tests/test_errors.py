@@ -48,8 +48,17 @@ def test_describe_permission_denied_service_disabled():
     )
     message, help_lines = describe_error(e)
     assert "Cloud Asset API is disabled" in message
-    assert any("cloudasset.googleapis.com" in line for line in help_lines)
+    assert (
+        "Run `gcloud services enable cloudasset.googleapis.com` to enable it"
+        in help_lines
+    )
     assert any("-U" in line for line in help_lines)
+
+
+def test_describe_permission_denied_service_disabled_reason_code():
+    e = gcp_exceptions.PermissionDenied("Request denied. Reason: SERVICE_DISABLED")
+    message, _ = describe_error(e)
+    assert "Cloud Asset API is disabled" in message
 
 
 def test_describe_permission_denied_generic():

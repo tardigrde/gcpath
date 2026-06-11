@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 ADC_LOGIN_HELP = "Run `gcloud auth application-default login` to authenticate"
 _SERVICE_DISABLED_MARKERS = (
-    "SERVICE_DISABLED",
+    "service_disabled",
     "has not been used in project",
     "it is disabled",
 )
@@ -86,7 +86,7 @@ def _not_found_help(message: str) -> List[str]:
 
 
 def _is_service_disabled(e: Exception) -> bool:
-    text = str(e)
+    text = str(e).lower()
     return any(marker in text for marker in _SERVICE_DISABLED_MARKERS)
 
 
