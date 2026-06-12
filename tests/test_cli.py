@@ -1891,3 +1891,91 @@ def test_console_url_rejects_synthetic_org_project():
     )
     with pytest.raises(GCPathError, match="synthetic"):
         console_url(p_direct)
+
+
+def test_package_exposes_version():
+    import gcpath
+
+    assert gcpath.__version__
+    assert gcpath.__version__ != ""
+
+
+@patch("gcpath.core.Hierarchy.load")
+@patch("gcpath.cli.Hierarchy.resolve_ancestry")
+def test_ls_scoped_serves_from_fresh_global_cache(
+    mock_resolve, mock_load, mock_read_cache
+):
+    """A folder-scoped ls is served from the fresh global cache without API calls."""
+    mock_read_cache.return_value = make_test_hierarchy()
+
+    result = runner.invoke(app, ["ls", "folders/1"])
+
+    assert result.exit_code == 0
+    assert "//example.com/f1" in result.stdout
+    mock_load.assert_not_called()
+    mock_resolve.assert_not_called()
+
+
+@patch("gcpath.core.Hierarchy.load")
+@patch("gcpath.cli.Hierarchy.resolve_ancestry")
+def test_tree_scoped_serves_from_fresh_global_cache(
+    mock_resolve, mock_load, mock_read_cache
+):
+    mock_read_cache.return_value = make_test_hierarchy()
+
+    result = runner.invoke(app, ["tree", "folders/1"])
+
+    assert result.exit_code == 0
+    assert "f11" in result.stdout
+    mock_load.assert_not_called()
+    mock_resolve.assert_not_called()
+
+
+@patch("gcpath.core.Hierarchy.load")
+@patch("gcpath.cli.Hierarchy.resolve_ancestry")
+def test_ls_scoped_cache_miss_falls_back_to_live_load(
+    mock_resolve, mock_load, mock_hierarchy, mock_read_cache
+):
+    """A scope resource missing from the cache still triggers a live load."""
+    mock_read_cache.return_value = make_test_hierarchy()
+    mock_resolve.return_value = "//example.com/f-other"
+    mock_load.return_value = mock_hierarchy
+
+    result = runner.invoke(app, ["ls", "folders/999"])
+
+    mock_load.assert_called_once()
+    assert result.exit_code == 0
+
+
+@patch("gcpath.core.Hierarchy.load")
+def test_ls_unreachable_api_exits_nonzero(mock_load):
+    """Live load failures surface as structured errors, not empty results."""
+    from google.api_core import exceptions as gcp_exceptions
+
+    mock_load.side_effect = gcp_exceptions.ServiceUnavailable(
+        "failed to connect to all addresses"
+    )
+
+    result = runner.invoke(app, ["ls"])
+
+    assert result.exit_code == 1
+    assert "unreachable" in result.stdout
+    assert "0 of" not in result.stdout
+
+
+@patch("gcpath.core.Hierarchy.load")
+def test_ls_ids_flag(mock_load, mock_hierarchy):
+    mock_load.return_value = mock_hierarchy
+    result = runner.invoke(app, ["ls", "--ids"])
+    assert result.exit_code == 0
+    assert "resource_name" in result.stdout
+    assert "organizations/123" in result.stdout
+
+
+@patch("gcpath.core.Hierarchy.load")
+def test_find_ids_flag(mock_load, mock_hierarchy):
+    mock_load.return_value = mock_hierarchy
+    result = runner.invoke(app, ["find", "f1", "--ids"])
+    assert result.exit_code == 0
+    assert "resource_name" in result.stdout
+    assert "folders/1" in result.stdout

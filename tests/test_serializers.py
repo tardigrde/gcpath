@@ -579,3 +579,36 @@ class TestToonAudit:
 
         out = toon_audit([], {"error": 0, "warn": 0, "info": 0})
         assert "0 issues" in out
+
+
+class TestIncludeResourceName:
+    def test_toon_ls_appends_resource_name(self):
+        from gcpath.serializers import toon_ls
+
+        hierarchy, *_ = _h()
+        items = [(f.path, f) for f in hierarchy.folders]
+        out = toon_ls(items, len(items), include_resource_name=True)
+        assert "resource_name" in out
+        assert "folders/1" in out
+
+    def test_toon_ls_no_duplicate_resource_name(self):
+        from gcpath.serializers import toon_ls
+
+        hierarchy, *_ = _h()
+        items = [(f.path, f) for f in hierarchy.folders]
+        out = toon_ls(
+            items,
+            len(items),
+            fields=("path", "resource_name"),
+            include_resource_name=True,
+        )
+        assert out.count("resource_name") == 1
+
+    def test_toon_find_appends_resource_name(self):
+        from gcpath.serializers import toon_find
+
+        hierarchy, *_ = _h()
+        items = [(f.path, f) for f in hierarchy.folders]
+        out = toon_find(items, "f*", total_searched=2, include_resource_name=True)
+        assert "resource_name" in out
+        assert "folders/1" in out

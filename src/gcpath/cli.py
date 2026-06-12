@@ -15,6 +15,7 @@ from gcpath.core import (
     path_escape,
     Project,
     GCPathError,
+    ResourceNotFoundError,
     OrganizationNode,
     Folder,
 )
@@ -122,6 +123,12 @@ _FIELDS_OPTION = typer.Option(
     "--fields",
     help=f"Comma-separated fields to show: {', '.join(_ALL_LS_FIELDS)}",
 )
+_IDS_OPTION = typer.Option(
+    False,
+    "--ids",
+    "-i",
+    help="Include the resource_name column (shortcut for adding resource_name to --fields)",
+)
 
 
 def _metadata_inclusion(
@@ -178,6 +185,21 @@ class _ScopeResult:
     filter_orgs: Optional[List[str]]
 
 
+def _cached_path_for(resource_name: str) -> Optional[str]:
+    """Resolve a resource path from the fresh global cache without API calls.
+
+    Returns None when the cache is missing, stale, or doesn't contain the
+    resource — callers then fall back to live ancestry resolution.
+    """
+    cached = read_cache(scope=None)
+    if cached is None:
+        return None
+    try:
+        return cached.get_path_by_resource_name(resource_name)
+    except ResourceNotFoundError:
+        return None
+
+
 def _resolve_scope(
     resource: Optional[str],
     entrypoint: Optional[str],
@@ -195,7 +217,9 @@ def _resolve_scope(
     ):
         target_resource_name = effective_resource
         try:
-            target_path = Hierarchy.resolve_ancestry(effective_resource)
+            target_path = _cached_path_for(effective_resource) or (
+                Hierarchy.resolve_ancestry(effective_resource)
+            )
             if target_path.startswith("//"):
                 path_parts = target_path[2:].split("/")
                 if path_parts:
@@ -606,6 +630,16 @@ def _load_hierarchy(
                 )
             return cached
 
+    if not is_cacheable and not force_refresh and scope_resource:
+        # Scoped to a non-entrypoint resource: a fresh global cache that
+        # already contains the scope can serve the command without API calls.
+        cached = _try_read_cache(None, filter_orgs)
+        if cached is not None and cached.has_resource(scope_resource):
+            logger.debug(
+                f"Serving scoped command for {scope_resource} from the global cache."
+            )
+            return cached
+
     effective_recursive = True if is_cacheable else recursive
 
     hierarchy = Hierarchy.load(
@@ -653,7 +687,12 @@ def _parse_resource_arg(effective_resource: str, command_name: str) -> _ParsedRe
     target_path = None
 
     try:
-        target_path = _clean_resolve_path(
+        cached_path = (
+            _cached_path_for(effective_resource)
+            if any(effective_resource.startswith(p) for p in _RESOURCE_PREFIXES)
+            else None
+        )
+        target_path = cached_path or _clean_resolve_path(
             Hierarchy.resolve_ancestry(effective_resource)
         )
         if target_path.startswith("//"):
@@ -802,9 +841,15 @@ def _handle_empty_hierarchy(fmt: str) -> None:
     )
 
 
-def _resolve_target_path_prefix(target_resource_name: Optional[str]) -> str:
+def _resolve_target_path_prefix(
+    hierarchy: Hierarchy, target_resource_name: Optional[str]
+) -> str:
     if not target_resource_name:
         return ""
+    try:
+        return hierarchy.get_path_by_resource_name(target_resource_name)
+    except ResourceNotFoundError:
+        pass
     try:
         return _clean_resolve_path(Hierarchy.resolve_ancestry(target_resource_name))
     except (GCPathError, gcp_exceptions.GoogleAPICallError) as e:
@@ -993,6 +1038,7 @@ def ls(
     tag_filters: Optional[List[str]] = _TAG_FILTER_OPTION,
     excludes: Optional[List[str]] = _EXCLUDE_OPTION,
     fields: Optional[str] = _FIELDS_OPTION,
+    ids: bool = _IDS_OPTION,
     full: bool = _FULL_OPTION,
 ) -> None:
     """List folders and projects. Defaults to the root organization."""
@@ -1029,7 +1075,9 @@ def ls(
         ):
             return
 
-        target_path_prefix = _resolve_target_path_prefix(target_resource_name)
+        target_path_prefix = _resolve_target_path_prefix(
+            hierarchy, target_resource_name
+        )
 
         items, total = _build_ls_items(
             hierarchy,
@@ -1056,7 +1104,12 @@ def ls(
         help_lines = _ls_help_lines(recursive)
         print(
             toon_ls(
-                items, total, fields=parsed_fields, full=full, help_lines=help_lines
+                items,
+                total,
+                fields=parsed_fields,
+                full=full,
+                help_lines=help_lines,
+                include_resource_name=ids,
             )
         )
 
@@ -2037,6 +2090,7 @@ def find(
     tag_filters: Optional[List[str]] = _TAG_FILTER_OPTION,
     excludes: Optional[List[str]] = _EXCLUDE_OPTION,
     fields: Optional[str] = _FIELDS_OPTION,
+    ids: bool = _IDS_OPTION,
     full: bool = _FULL_OPTION,
 ) -> None:
     """Search for resources by display name or path pattern (glob or regex)."""
@@ -2111,6 +2165,7 @@ def find(
                 fields=parsed_fields,
                 full=full,
                 help_lines=help_lines,
+                include_resource_name=ids,
             )
         )
 

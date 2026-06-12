@@ -1,5 +1,12 @@
 """gcpath - Google Cloud Platform resource hierarchy utility."""
 
+from importlib.metadata import PackageNotFoundError, version
+
+try:
+    __version__ = version("gcpath")
+except PackageNotFoundError:  # running from a source tree without installation
+    __version__ = "0.0.0+unknown"
+
 from gcpath.core import (
     Hierarchy,
     OrganizationNode,
@@ -29,6 +36,7 @@ from gcpath.formatters import (
 )
 
 __all__ = [
+    "__version__",
     # Core data structures
     "Hierarchy",
     "OrganizationNode",
