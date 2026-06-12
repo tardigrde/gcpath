@@ -1,6 +1,82 @@
 # CHANGELOG
 
 
+## v0.14.0 (2026-06-12)
+
+### Features
+
+- Find on full path, --regex, and exclusion filters
+  ([#39](https://github.com/tardigrde/gcpath/pull/39),
+  [`e0cca06`](https://github.com/tardigrde/gcpath/commit/e0cca06977efdffdc5439a3df2e7368c5ba27e87))
+
+* feat: find on full path, --regex, and exclusion filters
+
+Batch 2 filter upgrades:
+
+- `find` patterns starting with `//` now match against the full resource path instead of the display
+  name - new `--regex/-E` flag on `find` for regular-expression search (case-insensitive, substring
+  semantics); invalid regexes fail fast before any hierarchy load - `--label`/`--tag` filters
+  support `key!=value` negation on both `ls` and `find` (passes when the key is absent or differs) -
+  new repeatable `--exclude <glob>` flag on `ls` and `find` (display name, or full path when the
+  glob starts with `//`)
+
+Filtering logic moved to a new `filters.py` module with unit tests; `cli.py` keeps only the command
+  wiring.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix: address PR review comments
+
+- strip whitespace around keys/values in metadata filters (`--label "env = prod"` now works; GCP
+  labels can't contain spaces) - anchored regexes (`^//`, `\A//`) now count as path patterns - add
+  module logger to filters.py per repo logging convention - add type hints to test helpers for mypy
+  compliance
+
+* refactor: dedupe shared ls/find options and metadata inclusion logic
+
+SonarCloud flagged the duplicated --label/--tag/--exclude/--fields/--full option blocks between `ls`
+  and `find`. Hoist them to module-level constants and extract the include-labels/tags decision into
+  `_metadata_inclusion`.
+
+* style: one-off ruff format of the codebase
+
+src/gcpath/_vendor stays untouched (already in ruff extend-exclude, along with mypy and coverage
+  excludes). Future `make format` runs are now churn-free.
+
+* fix: surface API failures and retry Asset queries without labels
+
+Two reliability fixes in the loading path:
+
+- Transient API errors (e.g. 503 connect failures) during org/project search were logged and
+  swallowed, so commands printed '0 resources' and exited 0 — indistinguishable from an empty
+  hierarchy. They now propagate as structured errors with exit code 1. PermissionDenied still
+  degrades gracefully. ServiceUnavailable also gained actionable help lines.
+
+- The Asset API derives its STRUCT schema from the data in scope, so selecting resource.data.labels
+  fails with '400 Field name labels does not exist in STRUCT<...>' when nothing in scope has labels.
+  Folder and project queries now retry without the labels column on that error.
+
+* feat: cache-served scoped commands, --ids flag, package __version__
+
+- Folder- and org-scoped commands (ls/tree/find folders/123) previously bypassed the cache unless
+  the scope matched the configured entrypoint, triggering live API traversal even right after a
+  successful cache refresh. Scope resolution and hierarchy loading now consult the fresh global
+  cache first and fall back to live scoped loads only on a miss.
+
+- New --ids/-i flag on ls and find appends the resource_name column to the TOON output (shortcut for
+  adding it to --fields), matching the tree/diagram --ids spelling.
+
+- gcpath.__version__ is now exposed via importlib.metadata so the package version is discoverable
+  from Python, not just the CLI.
+
+- README/CLAUDE.md updated: new flags documented, removed flags (-l/--long, -y/--yes) dropped, cache
+  and Asset API schema behavior described.
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com>
+
+
 ## v0.13.0 (2026-06-11)
 
 ### Chores
