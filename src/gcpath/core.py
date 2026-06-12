@@ -84,12 +84,14 @@ def aggregate_metadata(
         suffix = ""
         if c > len(ex):
             suffix = f" (+{c - len(ex)} more)"
-        rows.append({
-            "key": k,
-            "value": v,
-            "count": c,
-            "examples": ", ".join(ex) + suffix,
-        })
+        rows.append(
+            {
+                "key": k,
+                "value": v,
+                "count": c,
+                "examples": ", ".join(ex) + suffix,
+            }
+        )
     rows.sort(key=lambda r: (-r["count"], r["key"], r["value"]))
     return rows, len(items)
 
@@ -211,6 +213,14 @@ class Hierarchy:
 
         self._projects_by_name: Dict[str, Project] = {p.name: p for p in projects}
 
+    def has_resource(self, resource_name: str) -> bool:
+        """True when the resource is present in this hierarchy's lookup maps."""
+        return (
+            resource_name in self._orgs_by_name
+            or resource_name in self._folders_by_name
+            or resource_name in self._projects_by_name
+        )
+
     @classmethod
     def load(
         cls,
@@ -292,7 +302,12 @@ class Hierarchy:
 
     @classmethod
     def _search_organizations(cls, org_client) -> List[resourcemanager_v3.Organization]:
-        """Search for accessible organizations."""
+        """Search for accessible organizations.
+
+        PermissionDenied degrades to an empty result (the account may
+        legitimately have no org access); transient API failures propagate so
+        callers don't mistake an outage for an empty hierarchy.
+        """
         try:
             page_result = org_client.search_organizations(
                 request=resourcemanager_v3.SearchOrganizationsRequest()
@@ -300,8 +315,6 @@ class Hierarchy:
             return list(page_result)
         except exceptions.PermissionDenied:
             logger.warning("Permission denied searching organizations")
-        except Exception as e:
-            logger.error(f"Error searching organizations: {e}")
         return []
 
     @classmethod
@@ -581,8 +594,6 @@ class Hierarchy:
 
         except exceptions.PermissionDenied:
             logger.warning("Permission denied searching projects")
-        except Exception as e:
-            logger.error(f"Error searching projects: {e}")
 
         return all_projects
 
@@ -850,8 +861,7 @@ class Hierarchy:
         org has depth 1.
         """
         real_orgs = [
-            o for o in self.organizations
-            if o.organization.name != SYNTHETIC_ORG_NAME
+            o for o in self.organizations if o.organization.name != SYNTHETIC_ORG_NAME
         ]
         real_folders, real_projects = self._real_org_descendants(real_orgs)
 
@@ -892,14 +902,10 @@ class Hierarchy:
         resources, just outside any organization the user can see.
         """
         synthetic_orgs = [
-            o for o in self.organizations
-            if o.organization.name == SYNTHETIC_ORG_NAME
+            o for o in self.organizations if o.organization.name == SYNTHETIC_ORG_NAME
         ]
         synth_ids = {id(o) for o in synthetic_orgs}
-        real_folders = [
-            f for f in self.folders
-            if id(f.organization) not in synth_ids
-        ]
+        real_folders = [f for f in self.folders if id(f.organization) not in synth_ids]
 
         def project_under_synthetic(p: "Project") -> bool:
             if p.organization is not None and id(p.organization) in synth_ids:
@@ -983,7 +989,8 @@ class Hierarchy:
                 "projects": sum(
                     1
                     for p in self.projects
-                    if p.organization is org or (p.folder and p.folder.organization is org)
+                    if p.organization is org
+                    or (p.folder and p.folder.organization is org)
                 ),
             }
             for org in real_orgs

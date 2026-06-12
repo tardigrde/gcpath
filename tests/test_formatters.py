@@ -636,6 +636,7 @@ def test_format_tree_label_empty_labels():
 
 def test_console_url_organization():
     from gcpath.formatters import console_url
+
     org_proto = resourcemanager_v3.Organization(
         name="organizations/42", display_name="acme.com"
     )
@@ -646,6 +647,7 @@ def test_console_url_organization():
 
 def test_console_url_folder():
     from gcpath.formatters import console_url
+
     org_proto = resourcemanager_v3.Organization(
         name="organizations/42", display_name="acme.com"
     )
@@ -663,6 +665,7 @@ def test_console_url_folder():
 
 def test_console_url_project_uses_project_id():
     from gcpath.formatters import console_url
+
     org_proto = resourcemanager_v3.Organization(
         name="organizations/42", display_name="acme.com"
     )
@@ -682,6 +685,7 @@ def test_console_url_project_uses_project_id():
 def test_console_url_orgless_project_raises():
     from gcpath.formatters import console_url
     from gcpath.core import GCPathError
+
     p = Project(
         name="projects/9",
         project_id="orphan",
@@ -697,6 +701,7 @@ def test_console_url_orgless_project_raises():
 def test_console_url_synthetic_org_raises():
     from gcpath.formatters import console_url
     from gcpath.core import GCPathError, SYNTHETIC_ORG_NAME
+
     org_proto = resourcemanager_v3.Organization(
         name=SYNTHETIC_ORG_NAME, display_name="root"
     )

@@ -99,9 +99,7 @@ def test_list_resources_root_only_includes_org_level_projects():
 
 def test_list_resources_scoped_returns_direct_children_only():
     h = make_test_hierarchy()
-    rows = _list_resources_impl(
-        h, effective_scope="folders/1", recursive=False
-    )
+    rows = _list_resources_impl(h, effective_scope="folders/1", recursive=False)
     folder_names = [r["resource_name"] for r in rows if r["type"] == "folder"]
     project_names = [r["resource_name"] for r in rows if r["type"] == "project"]
     assert "folders/11" in folder_names
@@ -112,9 +110,7 @@ def test_list_resources_scoped_returns_direct_children_only():
 
 def test_list_resources_recursive_returns_everything():
     h = make_test_hierarchy()
-    rows = _list_resources_impl(
-        h, effective_scope="folders/1", recursive=True
-    )
+    rows = _list_resources_impl(h, effective_scope="folders/1", recursive=True)
     types = [r["type"] for r in rows]
     assert "folder" in types
     assert "project" in types
@@ -254,9 +250,7 @@ def test_name_to_path_for_org_returns_escaped_path():
 
 def test_audit_impl_returns_severity_counts_and_issues():
     h = make_test_hierarchy()
-    result = _audit_impl(
-        h, require_labels=None, name_pattern=None, severity="info"
-    )
+    result = _audit_impl(h, require_labels=None, name_pattern=None, severity="info")
     assert "severity_counts" in result
     assert "issues" in result
     assert any(i["check"] == "orphan_project" for i in result["issues"])
@@ -266,9 +260,7 @@ def test_audit_impl_rejects_oversized_name_pattern():
     h = make_test_hierarchy()
     huge = "a" * 500
     with pytest.raises(GCPathError):
-        _audit_impl(
-            h, require_labels=None, name_pattern=huge, severity="info"
-        )
+        _audit_impl(h, require_labels=None, name_pattern=huge, severity="info")
 
 
 # ---- synthetic-org regressions ----
@@ -305,12 +297,8 @@ def test_audit_impl_flags_synthetic_org_projects():
         folder=None,
     )
     h = Hierarchy([synth, real], [p])
-    result = _audit_impl(
-        h, require_labels=None, name_pattern=None, severity="info"
-    )
-    types = [
-        i["type"] for i in result["issues"] if i["check"] == "synthetic_org"
-    ]
+    result = _audit_impl(h, require_labels=None, name_pattern=None, severity="info")
+    types = [i["type"] for i in result["issues"] if i["check"] == "synthetic_org"]
     assert "folder" in types
     assert "project" in types
 
@@ -351,9 +339,7 @@ def test_build_server_registers_each_tool_callback():
     async def _exercise():
         with patch.object(Hierarchy, "load", return_value=h):
             server = build_server()
-            await server.call_tool(
-                "path_to_name", {"paths": ["//example.com/f1"]}
-            )
+            await server.call_tool("path_to_name", {"paths": ["//example.com/f1"]})
             await server.call_tool(
                 "list_resources", {"resource_scope": None, "recursive": False}
             )
@@ -361,16 +347,10 @@ def test_build_server_registers_each_tool_callback():
             await server.call_tool("get_summary", {})
             await server.call_tool("get_labels", {})
             await server.call_tool("get_tags", {})
-            await server.call_tool(
-                "get_console_url", {"paths": ["//example.com/f1"]}
-            )
+            await server.call_tool("get_console_url", {"paths": ["//example.com/f1"]})
             await server.call_tool("audit_hierarchy", {})
-            with patch.object(
-                Hierarchy, "resolve_ancestry_chain", return_value=[]
-            ):
-                await server.call_tool(
-                    "get_ancestors", {"resource_name": "folders/1"}
-                )
+            with patch.object(Hierarchy, "resolve_ancestry_chain", return_value=[]):
+                await server.call_tool("get_ancestors", {"resource_name": "folders/1"})
             with patch.object(
                 Hierarchy, "resolve_ancestry", return_value="//example.com/f1"
             ):

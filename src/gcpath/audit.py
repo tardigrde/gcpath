@@ -57,44 +57,49 @@ def _check_orphan(hierarchy: Hierarchy) -> List[Dict[str, Any]]:
     issues: List[Dict[str, Any]] = []
     for p in hierarchy.projects:
         if p.organization is None and p.folder is None:
-            issues.append({
-                "severity": "warn",
-                "check": "orphan_project",
-                "path": p.path,
-                "type": "project",
-                "details": f"project '{p.project_id}' has no organization or folder",
-            })
+            issues.append(
+                {
+                    "severity": "warn",
+                    "check": "orphan_project",
+                    "path": p.path,
+                    "type": "project",
+                    "details": f"project '{p.project_id}' has no organization or folder",
+                }
+            )
     return issues
 
 
 def _check_synthetic_org(hierarchy: Hierarchy) -> List[Dict[str, Any]]:
     issues: List[Dict[str, Any]] = []
     synthetic_orgs = [
-        o for o in hierarchy.organizations
-        if o.organization.name == SYNTHETIC_ORG_NAME
+        o for o in hierarchy.organizations if o.organization.name == SYNTHETIC_ORG_NAME
     ]
     if not synthetic_orgs:
         return issues
     for org in synthetic_orgs:
         for f in org.folders.values():
-            issues.append({
-                "severity": "info",
-                "check": "synthetic_org",
-                "path": f.path,
-                "type": "folder",
-                "details": "loaded under synthetic org (no real org access)",
-            })
+            issues.append(
+                {
+                    "severity": "info",
+                    "check": "synthetic_org",
+                    "path": f.path,
+                    "type": "folder",
+                    "details": "loaded under synthetic org (no real org access)",
+                }
+            )
     for p in hierarchy.projects:
         if p.organization is None:
             continue
         if any(p.organization is org for org in synthetic_orgs):
-            issues.append({
-                "severity": "info",
-                "check": "synthetic_org",
-                "path": p.path,
-                "type": "project",
-                "details": "loaded under synthetic org (no real org access)",
-            })
+            issues.append(
+                {
+                    "severity": "info",
+                    "check": "synthetic_org",
+                    "path": p.path,
+                    "type": "project",
+                    "details": "loaded under synthetic org (no real org access)",
+                }
+            )
     return issues
 
 
@@ -109,13 +114,15 @@ def _check_required_labels(
         labels = getattr(item, "labels", None) or {}
         missing = [k for k in required_labels if k not in labels]
         if missing:
-            issues.append({
-                "severity": "error",
-                "check": "missing_required_label",
-                "path": _resource_path(item),
-                "type": _resource_type(item),
-                "details": "missing label keys: " + ",".join(missing),
-            })
+            issues.append(
+                {
+                    "severity": "error",
+                    "check": "missing_required_label",
+                    "path": _resource_path(item),
+                    "type": _resource_type(item),
+                    "details": "missing label keys: " + ",".join(missing),
+                }
+            )
     return issues
 
 
@@ -132,16 +139,18 @@ def _check_duplicate_names(hierarchy: Hierarchy) -> List[Dict[str, Any]]:
             if len(items) <= 1:
                 continue
             for item in items:
-                issues.append({
-                    "severity": "warn",
-                    "check": "duplicate_display_name",
-                    "path": _resource_path(item),
-                    "type": _resource_type(item),
-                    "details": (
-                        f"display_name '{display_name}' shared with "
-                        f"{len(items) - 1} sibling(s) under {parent}"
-                    ),
-                })
+                issues.append(
+                    {
+                        "severity": "warn",
+                        "check": "duplicate_display_name",
+                        "path": _resource_path(item),
+                        "type": _resource_type(item),
+                        "details": (
+                            f"display_name '{display_name}' shared with "
+                            f"{len(items) - 1} sibling(s) under {parent}"
+                        ),
+                    }
+                )
     return issues
 
 
@@ -151,39 +160,45 @@ def _check_name_pattern(
     if not pattern:
         return []
     if len(pattern) > _NAME_PATTERN_MAX_LEN:
-        return [{
-            "severity": "error",
-            "check": "name_pattern_violation",
-            "path": "",
-            "type": "config",
-            "details": (
-                f"--name-pattern is too long "
-                f"({len(pattern)} chars, max {_NAME_PATTERN_MAX_LEN}); "
-                "rejected to limit ReDoS risk"
-            ),
-        }]
+        return [
+            {
+                "severity": "error",
+                "check": "name_pattern_violation",
+                "path": "",
+                "type": "config",
+                "details": (
+                    f"--name-pattern is too long "
+                    f"({len(pattern)} chars, max {_NAME_PATTERN_MAX_LEN}); "
+                    "rejected to limit ReDoS risk"
+                ),
+            }
+        ]
     try:
         regex = re.compile(pattern)
     except re.error as e:
-        return [{
-            "severity": "error",
-            "check": "name_pattern_violation",
-            "path": "",
-            "type": "config",
-            "details": f"invalid --name-pattern '{pattern}': {e}",
-        }]
+        return [
+            {
+                "severity": "error",
+                "check": "name_pattern_violation",
+                "path": "",
+                "type": "config",
+                "details": f"invalid --name-pattern '{pattern}': {e}",
+            }
+        ]
     issues: List[Dict[str, Any]] = []
     targets: Iterable[Any] = list(hierarchy.folders) + list(hierarchy.projects)
     for item in targets:
         display_name = getattr(item, "display_name", "")
         if not regex.fullmatch(display_name):
-            issues.append({
-                "severity": "warn",
-                "check": "name_pattern_violation",
-                "path": _resource_path(item),
-                "type": _resource_type(item),
-                "details": f"display_name '{display_name}' does not match /{pattern}/",
-            })
+            issues.append(
+                {
+                    "severity": "warn",
+                    "check": "name_pattern_violation",
+                    "path": _resource_path(item),
+                    "type": _resource_type(item),
+                    "details": f"display_name '{display_name}' does not match /{pattern}/",
+                }
+            )
     return issues
 
 

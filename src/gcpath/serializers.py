@@ -51,6 +51,12 @@ def _default_fields_for_items(
     return _PROJECT_LS_FIELDS if has_projects else _DEFAULT_LS_FIELDS
 
 
+def _with_resource_name(fields: Tuple[str, ...]) -> Tuple[str, ...]:
+    if "resource_name" in fields:
+        return fields
+    return fields + ("resource_name",)
+
+
 def _truncate_metadata(
     metadata: Dict[str, str], limit: int = 5, full: bool = False
 ) -> Dict[str, str]:
@@ -121,6 +127,7 @@ def toon_ls(
     fields: Optional[Sequence[str]] = None,
     full: bool = False,
     help_lines: Optional[List[str]] = None,
+    include_resource_name: bool = False,
 ) -> str:
     if not items:
         empty_data: Dict[str, Any] = {
@@ -130,6 +137,8 @@ def toon_ls(
         return with_help(toon_encode(empty_data), help_lines)
 
     effective_fields = tuple(fields) if fields else _default_fields_for_items(items)
+    if include_resource_name:
+        effective_fields = _with_resource_name(effective_fields)
     rows = [
         _serialize_resource_fields(p, obj, effective_fields, full=full)
         for p, obj in items
@@ -140,9 +149,7 @@ def toon_ls(
     return with_help(output, help_lines)
 
 
-def toon_name(
-    results: List[Tuple[str, str]], id_only: bool = False
-) -> str:
+def toon_name(results: List[Tuple[str, str]], id_only: bool = False) -> str:
     if len(results) == 1:
         path, res_name = results[0]
         if id_only:
@@ -155,7 +162,9 @@ def toon_name(
             rows.append({"path": path, "resource_id": res_name.split("/")[-1]})
         else:
             rows.append({"path": path, "resource_name": res_name})
-    return toon_table("results", rows, ("path", "resource_id" if id_only else "resource_name"))
+    return toon_table(
+        "results", rows, ("path", "resource_id" if id_only else "resource_name")
+    )
 
 
 def toon_path(
@@ -195,8 +204,7 @@ def toon_ancestors(
     help_lines: Optional[List[str]] = None,
 ) -> str:
     rows = [
-        {"resource_name": name, "display_name": dn, "type": t}
-        for name, dn, t in chain
+        {"resource_name": name, "display_name": dn, "type": t} for name, dn, t in chain
     ]
     output = toon_table("ancestors", rows, ("resource_name", "display_name", "type"))
     return with_help(output, help_lines)
@@ -209,6 +217,7 @@ def toon_find(
     fields: Optional[Sequence[str]] = None,
     full: bool = False,
     help_lines: Optional[List[str]] = None,
+    include_resource_name: bool = False,
 ) -> str:
     if not items:
         empty_help = help_lines or [
@@ -217,6 +226,8 @@ def toon_find(
         return toon_empty("resources", f"matching '{pattern}' found", empty_help)
 
     effective_fields = tuple(fields) if fields else _default_fields_for_items(items)
+    if include_resource_name:
+        effective_fields = _with_resource_name(effective_fields)
     rows = [
         _serialize_resource_fields(p, obj, effective_fields, full=full)
         for p, obj in items

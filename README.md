@@ -126,10 +126,15 @@ gcpath ls [RESOURCE_NAME]
 
 Options:
 
-- `-l, --long`: Show resource IDs and numbers (for projects).
 - `-R, --recursive`: List resources recursively.
 - `-t, --type TYPE`: Filter by resource type: `folder`, `project`, `organization`.
 - `-L, --level N`: Limit depth for recursive listing (requires `-R`).
+- `--fields FIELDS`: Comma-separated columns to show: `path,type,display_name,resource_name,project_id,labels,tags`.
+- `-i, --ids`: Include the `resource_name` column (shortcut for adding `resource_name` to `--fields`).
+- `--full`: Show all labels/tags without truncation.
+- `--label FILTER`: Filter by label: `key` (presence), `key=value`, or `key!=value` (exclusion). Repeatable, ANDed together.
+- `--tag FILTER`: Filter by tag, same syntax as `--label`.
+- `--exclude GLOB`: Exclude resources matching a glob. Matches display names, or full paths when the glob starts with `//`. Repeatable.
 
 Examples:
 
@@ -148,6 +153,12 @@ gcpath ls -R --type folder
 
 # Recursive listing limited to depth 2
 gcpath ls -R -L 2
+
+# Everything except production resources
+gcpath ls -R --label "env!=prod"
+
+# Hide sandbox subtrees and test projects
+gcpath ls -R --exclude "//example.com/sandbox/*" --exclude "*-test"
 ```
 
 ### Tree View (`tree`)
@@ -163,7 +174,6 @@ Options:
 - `-L, --level N`: Limit depth of the tree (no limit by default).
 - `-i, --ids`: Include resource IDs in the output.
 - `-t, --type TYPE`: Filter by resource type: `folder`, `project`.
-- `-y, --yes`: Skip confirmation prompts for large hierarchy loads.
 
 ### Generate Diagram (`diagram`)
 
@@ -175,11 +185,10 @@ gcpath diagram [RESOURCE_NAME]
 
 Options:
 
-- `-f, --format FORMAT`: Output format: `mermaid` (default) or `d2`.
+- `-d, --diagram-format FORMAT`: Output format: `mermaid` (default) or `d2`.
 - `-L, --level N`: Limit depth of the diagram.
 - `-i, --ids`: Include resource IDs in node labels.
 - `-o, --output FILE`: Write diagram to a file instead of stdout.
-- `-y, --yes`: Skip confirmation prompts for large hierarchy loads.
 
 Examples:
 
@@ -221,15 +230,24 @@ gcpath path folders/987654321
 
 ### Find Resources (`find`)
 
-Search for resources by display name using glob patterns.
+Search for resources by display name (or full path) using glob or regex patterns.
 
 ```bash
 gcpath find PATTERN [RESOURCE]
 ```
 
+Patterns match display names by default. A pattern starting with `//` is matched against the full resource path instead.
+
 Options:
 
 - `-t, --type TYPE`: Filter by resource type: `folder`, `project`, `organization`.
+- `-E, --regex`: Treat the pattern as a regular expression (substring search semantics, case-insensitive).
+- `--fields FIELDS`: Comma-separated columns to show: `path,type,display_name,resource_name,project_id,labels,tags`.
+- `-i, --ids`: Include the `resource_name` column (shortcut for adding `resource_name` to `--fields`).
+- `--full`: Show all labels/tags without truncation.
+- `--label FILTER`: Filter by label: `key` (presence), `key=value`, or `key!=value` (exclusion). Repeatable, ANDed together.
+- `--tag FILTER`: Filter by tag, same syntax as `--label`.
+- `--exclude GLOB`: Exclude resources matching a glob. Matches display names, or full paths when the glob starts with `//`. Repeatable.
 
 The optional `RESOURCE` argument scopes the search to a subtree.
 
@@ -247,6 +265,18 @@ gcpath find "team-*" folders/123456789
 
 # Case-insensitive by default
 gcpath find "*STAGING*"
+
+# Match against the full path (pattern starts with //)
+gcpath find "//example.com/engineering/*"
+
+# Regex search on names
+gcpath find -E "^(api|web)-.*-prod$"
+
+# Regex search on full paths
+gcpath find -E "//example\.com/.*/sandbox"
+
+# Combine: prod-labeled projects, excluding test ones
+gcpath find "*" --type project --label "env=prod" --exclude "*-test"
 ```
 
 ### Show Ancestry (`ancestors`)
@@ -389,6 +419,7 @@ gcpath -e folders/987654321 tree
   ```
 
 - The cache is **scope-aware**: cached data stores which entrypoint it was built for. Changing the entrypoint automatically invalidates the cache and triggers a fresh load.
+- Commands scoped to an arbitrary resource (e.g. `gcpath ls folders/555`) are served from the fresh global cache when it already contains that resource; only on a cache miss do they fall back to a live scoped API load.
 
 ## Python API
 

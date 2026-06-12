@@ -142,9 +142,7 @@ def _serialize_resource(item: Any) -> Dict[str, Any]:
     return {"type": "unknown", "value": str(item)}
 
 
-def _path_to_name_impl(
-    hierarchy: Hierarchy, paths: List[str]
-) -> List[Dict[str, str]]:
+def _path_to_name_impl(hierarchy: Hierarchy, paths: List[str]) -> List[Dict[str, str]]:
     out: List[Dict[str, str]] = []
     for p in paths:
         try:
@@ -280,9 +278,7 @@ def _audit_impl(
     }
 
 
-def _console_url_impl(
-    hierarchy: Hierarchy, paths: List[str]
-) -> List[Dict[str, str]]:
+def _console_url_impl(hierarchy: Hierarchy, paths: List[str]) -> List[Dict[str, str]]:
     out: List[Dict[str, str]] = []
     for p in paths:
         try:
@@ -349,8 +345,7 @@ def build_server(
         """Return ancestry chain for a resource name from root to leaf."""
         chain = Hierarchy.resolve_ancestry_chain(resource_name)
         return [
-            {"resource_name": rn, "display_name": dn, "type": t}
-            for rn, dn, t in chain
+            {"resource_name": rn, "display_name": dn, "type": t} for rn, dn, t in chain
         ]
 
     @server.tool()

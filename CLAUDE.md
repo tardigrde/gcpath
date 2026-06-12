@@ -27,6 +27,7 @@ gcpath follows the [AXI specification](https://axi.md/) for agent-friendly CLI t
 - **Content-first home**: Running `gcpath` with no args shows a live dashboard from cache
 - **Contextual help**: `help[]` sections appended after list outputs with relevant next-step commands
 - **`--fields` flag**: Control which columns appear in tabular output (`path,type,display_name,resource_name,project_id,labels,tags`)
+- **`--ids` flag**: `ls`/`find` shortcut that appends `resource_name` to the displayed fields
 - **`--full` flag**: Expand truncated labels/tags without truncation
 - **No interactive prompts**: All confirm prompts removed; commands just proceed
 - **`tree` is human-oriented**: Classic unicode tree output, not TOON. Agents should use `ls -R` instead. No `help[]` suggestions for `tree` in agent followups.
@@ -78,6 +79,8 @@ The codebase is organized into focused, single-responsibility modules:
 
 - **`formatters.py`**: Display formatting logic for paths, trees, and resource filtering.
 
+- **`filters.py`**: Resource filtering for `ls`/`find` — label/tag filters (including `key!=value` negation), glob/regex pattern matchers (display name, or full path for `//`-prefixed patterns), and `--exclude` glob handling.
+
 - **`serializers.py`**: Output serialization — TOON, JSON, YAML serializers for all commands.
 
 - **`toon.py`**: Thin wrapper around `toon_format.encode()` plus gcpath-specific AXI helpers (error formatting, empty states, help sections, dashboards).
@@ -103,7 +106,8 @@ The codebase is organized into focused, single-responsibility modules:
    - **Resource Manager API**: Iterative loading via list/get operations. Slower but simpler permissions model.
 
 3. **Scoped Loading**: When a specific resource is targeted (e.g., `ls folders/123`):
-   - Passes `scope_resource` to `Hierarchy.load()`
+   - If the fresh global cache already contains the scope resource, the command is served from cache (no API calls)
+   - Otherwise passes `scope_resource` to `Hierarchy.load()`
    - Loaders use filters to only fetch descendants of that resource
    - Significantly reduces API calls and latency for large hierarchies
 
@@ -131,6 +135,7 @@ The Asset API returns STRUCT fields as `MapComposite` objects. Key handling:
 - Access data directly as dictionary (`.fields` not available)
 - Use `IN UNNEST(ancestors)` for ancestry filtering in SQL
 - Extract nested STRUCT data like `resource.data.parent.id` carefully
+- The STRUCT schema is derived from the data in scope: selecting `resource.data.labels` fails with `400 Field name labels does not exist in STRUCT<...>` when no resource in scope has labels. Loaders retry the query without labels on that error.
 
 ### Resource Naming
 
@@ -162,6 +167,7 @@ Test files mirror source organization:
 - `test_loaders.py`: GCP API loading functions
 - `test_parsers.py`: Asset API response parsing
 - `test_formatters.py`: Display formatting
+- `test_filters.py`: Metadata filters, pattern matchers, exclusions
 - `test_serializers.py`: Output serialization (TOON, JSON, YAML)
 - `test_cli.py`: CLI command integration
 

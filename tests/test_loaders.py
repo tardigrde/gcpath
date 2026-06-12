@@ -1028,3 +1028,127 @@ def test_load_projects_asset_with_labels(mock_asset_client_cls, mock_org_node):
 
     assert len(projects) == 1
     assert projects[0].labels == {"env": "dev"}
+
+
+# Test labels fallback when the Asset API schema lacks the labels field
+def _make_folder_response():
+    row = {
+        "f": [
+            {"v": "//cloudresourcemanager.googleapis.com/folders/1"},
+            {"v": "f1"},
+            {"v": "organizations/123"},
+            {"v": [{"v": "//cloudresourcemanager.googleapis.com/organizations/123"}]},
+        ]
+    }
+    mock_query_result = MagicMock()
+    mock_query_result.rows = [row]
+    mock_response = MagicMock()
+    mock_response.query_result = mock_query_result
+    return mock_response
+
+
+@patch("google.cloud.asset_v1.AssetServiceClient")
+def test_load_folders_asset_labels_schema_fallback(
+    mock_asset_client_cls, mock_org_node
+):
+    """A 400 'labels does not exist in STRUCT' retries the query without labels."""
+    from google.api_core import exceptions
+
+    mock_client = mock_asset_client_cls.return_value
+    mock_client.query_assets.side_effect = [
+        exceptions.InvalidArgument(
+            "Field name labels does not exist in STRUCT<displayName STRING>"
+        ),
+        _make_folder_response(),
+    ]
+
+    load_folders_asset(mock_org_node, include_labels=True)
+
+    assert mock_client.query_assets.call_count == 2
+    first_stmt = mock_client.query_assets.call_args_list[0].kwargs["request"].statement
+    second_stmt = mock_client.query_assets.call_args_list[1].kwargs["request"].statement
+    assert "labels" in first_stmt
+    assert "labels" not in second_stmt
+    assert "folders/1" in mock_org_node.folders
+    assert mock_org_node.folders["folders/1"].labels == {}
+
+
+@patch("google.cloud.asset_v1.AssetServiceClient")
+def test_load_folders_asset_other_invalid_argument_raises(
+    mock_asset_client_cls, mock_org_node
+):
+    """InvalidArgument errors unrelated to the labels schema propagate."""
+    from google.api_core import exceptions
+
+    mock_client = mock_asset_client_cls.return_value
+    mock_client.query_assets.side_effect = exceptions.InvalidArgument("bad query")
+
+    with pytest.raises(exceptions.InvalidArgument):
+        load_folders_asset(mock_org_node, include_labels=True)
+    assert mock_client.query_assets.call_count == 1
+
+
+@patch("google.cloud.asset_v1.AssetServiceClient")
+def test_load_projects_asset_labels_schema_fallback(
+    mock_asset_client_cls, mock_org_node
+):
+    """Project loading retries without labels on the schema 400 as well."""
+    from google.api_core import exceptions
+
+    row = {
+        "f": [
+            {"v": "//cloudresourcemanager.googleapis.com/projects/p1"},
+            {"v": "12345"},
+            {"v": "p1"},
+            {"v": {"f": [{"v": "organization"}, {"v": "123"}]}},
+            {"v": [{"v": "projects/p1"}, {"v": "organizations/123"}]},
+        ]
+    }
+    mock_query_result = MagicMock()
+    mock_query_result.rows = [row]
+    mock_response = MagicMock()
+    mock_response.query_result = mock_query_result
+
+    mock_client = mock_asset_client_cls.return_value
+    mock_client.query_assets.side_effect = [
+        exceptions.InvalidArgument(
+            "Field name labels does not exist in STRUCT<projectId STRING>"
+        ),
+        mock_response,
+    ]
+
+    projects = load_projects_asset(mock_org_node, include_labels=True)
+
+    assert mock_client.query_assets.call_count == 2
+    assert len(projects) == 1
+    assert projects[0].labels == {}
+
+
+@patch("google.cloud.asset_v1.AssetServiceClient")
+def test_load_projects_asset_propagates_unavailable(
+    mock_asset_client_cls, mock_org_node
+):
+    """Transient API failures surface instead of returning an empty result."""
+    from google.api_core import exceptions
+
+    mock_client = mock_asset_client_cls.return_value
+    mock_client.query_assets.side_effect = exceptions.ServiceUnavailable(
+        "failed to connect to all addresses"
+    )
+
+    with pytest.raises(exceptions.ServiceUnavailable):
+        load_projects_asset(mock_org_node)
+
+
+@patch("google.cloud.resourcemanager_v3.ProjectsClient")
+def test_load_organizationless_projects_propagates_unavailable(mock_proj_cls):
+    """Transient API failures surface instead of returning an empty result."""
+    from google.api_core import exceptions
+
+    mock_proj_client = mock_proj_cls.return_value
+    mock_proj_client.search_projects.side_effect = exceptions.ServiceUnavailable(
+        "failed to connect to all addresses"
+    )
+
+    with pytest.raises(exceptions.ServiceUnavailable):
+        load_organizationless_projects(set())

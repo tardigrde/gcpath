@@ -79,7 +79,9 @@ def _install_claude_code(command: str) -> bool:
         hooks["SessionStart"] = []
 
     for entry in hooks["SessionStart"]:
-        if isinstance(entry, dict) and _is_managed_hook(_get_claude_entry_command(entry)):
+        if isinstance(entry, dict) and _is_managed_hook(
+            _get_claude_entry_command(entry)
+        ):
             if _get_claude_entry_command(entry) == command:
                 return False
             # Update command in-place (new format preferred)
@@ -87,16 +89,20 @@ def _install_claude_code(command: str) -> bool:
             if isinstance(nested, list) and nested:
                 nested[0]["command"] = command
             else:
-                entry["hooks"] = [{"type": "command", "command": command, "timeout": 10000}]
+                entry["hooks"] = [
+                    {"type": "command", "command": command, "timeout": 10000}
+                ]
                 entry.pop("command", None)
                 entry.setdefault("matcher", "")
             _write_json(_CLAUDE_SETTINGS_PATH, data)
             return True
 
-    hooks["SessionStart"].append({
-        "matcher": "",
-        "hooks": [{"type": "command", "command": command, "timeout": 10000}],
-    })
+    hooks["SessionStart"].append(
+        {
+            "matcher": "",
+            "hooks": [{"type": "command", "command": command, "timeout": 10000}],
+        }
+    )
     _write_json(_CLAUDE_SETTINGS_PATH, data)
     return True
 
@@ -113,8 +119,12 @@ def _uninstall_claude_code() -> bool:
 
     original_len = len(hooks["SessionStart"])
     hooks["SessionStart"] = [
-        entry for entry in hooks["SessionStart"]
-        if not (isinstance(entry, dict) and _is_managed_hook(_get_claude_entry_command(entry)))
+        entry
+        for entry in hooks["SessionStart"]
+        if not (
+            isinstance(entry, dict)
+            and _is_managed_hook(_get_claude_entry_command(entry))
+        )
     ]
 
     if len(hooks["SessionStart"]) == original_len:
@@ -157,7 +167,8 @@ def _uninstall_codex() -> bool:
 
     original_len = len(data["SessionStart"])
     data["SessionStart"] = [
-        entry for entry in data["SessionStart"]
+        entry
+        for entry in data["SessionStart"]
         if not (isinstance(entry, dict) and _is_managed_hook(entry.get("command", "")))
     ]
 
@@ -212,7 +223,9 @@ def repair_hooks() -> Dict[str, bool]:
 def _check_hook_entries(entries: list, command: str) -> tuple:
     """Check if gcpath hook is installed in a list of hook entries."""
     for entry in entries:
-        if isinstance(entry, dict) and _is_managed_hook(_get_claude_entry_command(entry)):
+        if isinstance(entry, dict) and _is_managed_hook(
+            _get_claude_entry_command(entry)
+        ):
             return True, _get_claude_entry_command(entry) == command
     return False, False
 
@@ -254,15 +267,19 @@ def run_session_start() -> str:
     info = get_cache_info()
 
     if not info.exists or not info.fresh:
-        return toon_encode({
-            "gcp": {"cache": "empty"},
-            "help": [
-                "Run `gcpath ls` to list resources",
-                "Run `gcpath ls -R` for recursive listing",
-            ],
-        })
+        return toon_encode(
+            {
+                "gcp": {"cache": "empty"},
+                "help": [
+                    "Run `gcpath ls` to list resources",
+                    "Run `gcpath ls -R` for recursive listing",
+                ],
+            }
+        )
 
-    age_str = format_age(info.age_seconds) if info.age_seconds is not None else "unknown"
+    age_str = (
+        format_age(info.age_seconds) if info.age_seconds is not None else "unknown"
+    )
 
     org_rows = []
     raw_data = read_cache_raw()
@@ -272,11 +289,13 @@ def run_session_start() -> str:
             name = org_info.get("display_name", "unknown")
             folder_count = len(org_data.get("folders", {}))
             project_count = len(org_data.get("projects", []))
-            org_rows.append({
-                "name": name,
-                "folders": folder_count,
-                "projects": project_count,
-            })
+            org_rows.append(
+                {
+                    "name": name,
+                    "folders": folder_count,
+                    "projects": project_count,
+                }
+            )
 
     data: Dict[str, Any] = {
         "gcp": {

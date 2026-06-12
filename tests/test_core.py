@@ -779,4 +779,47 @@ def test_summary_deepest_paths_sorted():
     h = _build_summary_hierarchy()
     summary = h.summary(deepest_n=3)
     assert summary["deepest_paths"]
-    assert summary["deepest_paths"][0].count("/") >= summary["deepest_paths"][-1].count("/")
+    assert summary["deepest_paths"][0].count("/") >= summary["deepest_paths"][-1].count(
+        "/"
+    )
+
+
+@patch("gcpath.core.resourcemanager_v3")
+def test_hierarchy_load_propagates_service_unavailable(mock_rm):
+    """Transient org-search failures raise instead of yielding an empty hierarchy."""
+    org_client = mock_rm.OrganizationsClient.return_value
+    org_client.search_organizations.side_effect = exceptions.ServiceUnavailable(
+        "failed to connect to all addresses"
+    )
+
+    with pytest.raises(exceptions.ServiceUnavailable):
+        Hierarchy.load()
+
+
+def test_has_resource():
+    org_proto = resourcemanager_v3.Organization(
+        name="organizations/123", display_name="example.com"
+    )
+    org_node = OrganizationNode(organization=org_proto)
+    folder = Folder(
+        name="folders/1",
+        display_name="f1",
+        ancestors=["folders/1", "organizations/123"],
+        organization=org_node,
+        parent="organizations/123",
+    )
+    org_node.folders["folders/1"] = folder
+    project = Project(
+        name="projects/p1",
+        project_id="p1",
+        display_name="P1",
+        parent="folders/1",
+        organization=org_node,
+        folder=folder,
+    )
+    h = Hierarchy([org_node], [project])
+
+    assert h.has_resource("organizations/123")
+    assert h.has_resource("folders/1")
+    assert h.has_resource("projects/p1")
+    assert not h.has_resource("folders/999")
