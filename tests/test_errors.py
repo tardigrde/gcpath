@@ -91,7 +91,8 @@ def test_describe_service_unavailable():
         gcp_exceptions.ServiceUnavailable("unavailable")
     )
     assert "unreachable" in message
-    assert help_lines == []
+    assert any("network" in line for line in help_lines)
+    assert any("cache status" in line for line in help_lines)
 
 
 def test_describe_gcpath_error_passthrough():

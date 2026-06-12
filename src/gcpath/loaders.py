@@ -19,6 +19,45 @@ from gcpath.parsers import (
 logger = logging.getLogger(__name__)
 
 _FOLDER_PREFIX = "folders/"
+_MISSING_STRUCT_FIELD_MARKER = "does not exist in STRUCT"
+
+
+def _query_assets_with_labels_fallback(
+    asset_client,
+    api_parent: str,
+    build_query,
+    include_labels: bool,
+):
+    """Run an Asset API query, retrying without labels if the schema lacks them.
+
+    The Asset API derives its STRUCT schema from the data in scope: when no
+    resource carries labels, selecting ``resource.data.labels`` fails with
+    ``400 Field name labels does not exist in STRUCT<...>``.
+
+    Args:
+        asset_client: AssetServiceClient instance
+        api_parent: Parent resource for QueryAssetsRequest
+        build_query: Callable accepting ``include_labels`` and returning SQL
+        include_labels: Whether to attempt fetching labels
+
+    Returns:
+        Tuple of (query response, effective include_labels after fallback)
+    """
+    statement = build_query(include_labels=include_labels)
+    logger.debug(f"Asset query: {statement}")
+    request = asset_v1.QueryAssetsRequest(parent=api_parent, statement=statement)
+    try:
+        return asset_client.query_assets(request=request), include_labels
+    except exceptions.InvalidArgument as e:
+        if not include_labels or _MISSING_STRUCT_FIELD_MARKER not in str(e):
+            raise
+        logger.warning(
+            "Asset API schema has no labels field in this scope; "
+            "retrying query without labels"
+        )
+        statement = build_query(include_labels=False)
+        request = asset_v1.QueryAssetsRequest(parent=api_parent, statement=statement)
+        return asset_client.query_assets(request=request), False
 
 
 def build_folder_sql_query(
@@ -306,18 +345,14 @@ def load_folders_asset(
     api_parent = query_parent or node.organization.name
     root = root_ancestor or node.organization.name
 
-    # Build SQL query
-    statement = build_folder_sql_query(
-        parent_filter, ancestors_filter, include_labels=include_labels
+    response, has_labels = _query_assets_with_labels_fallback(
+        asset_client,
+        api_parent,
+        lambda include_labels: build_folder_sql_query(
+            parent_filter, ancestors_filter, include_labels=include_labels
+        ),
+        include_labels,
     )
-
-    logger.debug(f"Folders query: {statement}")
-    query_request = asset_v1.QueryAssetsRequest(
-        parent=api_parent,
-        statement=statement,
-    )
-
-    response = asset_client.query_assets(request=query_request)
     logger.debug(f"GCP API: query_assets(folders) returned for {api_parent}")
 
     # Iterate directly over the response (pagination is handled automatically)
@@ -331,7 +366,7 @@ def load_folders_asset(
     for row in response.query_result.rows:
         try:
             # Parse the folder row using parsers module
-            folder_data = parse_folder_row(row, has_labels=include_labels)
+            folder_data = parse_folder_row(row, has_labels=has_labels)
 
             # Get the parent - either from the API response or from parent_filter
             if folder_data["parent"]:
@@ -422,58 +457,52 @@ def load_projects_asset(
     api_parent = query_parent or node.organization.name
     projects: List[Project] = []
 
-    statement = build_project_sql_query(
-        parent_filter, ancestors_filter, include_labels=include_labels
+    response, has_labels = _query_assets_with_labels_fallback(
+        asset_client,
+        api_parent,
+        lambda include_labels: build_project_sql_query(
+            parent_filter, ancestors_filter, include_labels=include_labels
+        ),
+        include_labels,
     )
-    logger.debug(f"Projects query: {statement}")
-    query_request = asset_v1.QueryAssetsRequest(
-        parent=api_parent,
-        statement=statement,
-    )
+    logger.debug(f"GCP API: query_assets(projects) returned for {api_parent}")
 
-    try:
-        response = asset_client.query_assets(request=query_request)
-        logger.debug(f"GCP API: query_assets(projects) returned for {api_parent}")
+    if not response.query_result or not response.query_result.rows:
+        logger.debug("No project rows returned from Asset API")
+        return projects
 
-        if not response.query_result or not response.query_result.rows:
-            logger.debug("No project rows returned from Asset API")
-            return projects
+    for row in response.query_result.rows:
+        try:
+            project_data = parse_project_row(row, has_labels=has_labels)
+            parent_res = _resolve_project_parent(
+                project_data,
+                parent_filter,
+                node.organization.name,
+            )
+            parent_folder = (
+                node.folders.get(parent_res)
+                if parent_res.startswith(_FOLDER_PREFIX)
+                else None
+            )
 
-        for row in response.query_result.rows:
-            try:
-                project_data = parse_project_row(row, has_labels=include_labels)
-                parent_res = _resolve_project_parent(
-                    project_data,
-                    parent_filter,
-                    node.organization.name,
-                )
-                parent_folder = (
-                    node.folders.get(parent_res)
-                    if parent_res.startswith(_FOLDER_PREFIX)
-                    else None
-                )
+            proj = Project(
+                name=project_data["name"],
+                project_id=project_data["project_id"],
+                display_name=project_data["display_name"],
+                parent=parent_res,
+                organization=node,
+                folder=parent_folder,
+                labels=project_data.get("labels", {}),
+            )
+            logger.debug(
+                f"Added project {project_data['project_id']} to hierarchy "
+                f"from Asset API (parent: {parent_res})"
+            )
+            projects.append(proj)
 
-                proj = Project(
-                    name=project_data["name"],
-                    project_id=project_data["project_id"],
-                    display_name=project_data["display_name"],
-                    parent=parent_res,
-                    organization=node,
-                    folder=parent_folder,
-                    labels=project_data.get("labels", {}),
-                )
-                logger.debug(
-                    f"Added project {project_data['project_id']} to hierarchy "
-                    f"from Asset API (parent: {parent_res})"
-                )
-                projects.append(proj)
-
-            except (ValueError, KeyError) as e:
-                logger.warning(f"Error parsing project row: {e}")
-                continue
-
-    except Exception as e:
-        logger.error(f"Error querying projects via Asset API: {e}")
+        except (ValueError, KeyError) as e:
+            logger.warning(f"Error parsing project row: {e}")
+            continue
 
     return projects
 
@@ -532,8 +561,6 @@ def load_organizationless_projects(existing_project_names: set):
 
     except exceptions.PermissionDenied:
         logger.warning("Permission denied searching organizationless projects")
-    except Exception as e:
-        logger.error(f"Error searching organizationless projects: {e}")
 
     return projects
 

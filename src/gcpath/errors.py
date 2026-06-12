@@ -141,7 +141,13 @@ def describe_error(e: Exception) -> Tuple[str, List[str]]:
         )
 
     if isinstance(e, gcp_exceptions.ServiceUnavailable):
-        return "The GCP API is currently unreachable.", []
+        return (
+            "The GCP API is currently unreachable.",
+            [
+                "Check network connectivity and proxy settings",
+                "Run `gcpath cache status` to see if cached data is available",
+            ],
+        )
 
     return f"Unexpected error: {e}", []
 

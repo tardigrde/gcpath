@@ -213,6 +213,14 @@ class Hierarchy:
 
         self._projects_by_name: Dict[str, Project] = {p.name: p for p in projects}
 
+    def has_resource(self, resource_name: str) -> bool:
+        """True when the resource is present in this hierarchy's lookup maps."""
+        return (
+            resource_name in self._orgs_by_name
+            or resource_name in self._folders_by_name
+            or resource_name in self._projects_by_name
+        )
+
     @classmethod
     def load(
         cls,
@@ -294,7 +302,12 @@ class Hierarchy:
 
     @classmethod
     def _search_organizations(cls, org_client) -> List[resourcemanager_v3.Organization]:
-        """Search for accessible organizations."""
+        """Search for accessible organizations.
+
+        PermissionDenied degrades to an empty result (the account may
+        legitimately have no org access); transient API failures propagate so
+        callers don't mistake an outage for an empty hierarchy.
+        """
         try:
             page_result = org_client.search_organizations(
                 request=resourcemanager_v3.SearchOrganizationsRequest()
@@ -302,8 +315,6 @@ class Hierarchy:
             return list(page_result)
         except exceptions.PermissionDenied:
             logger.warning("Permission denied searching organizations")
-        except Exception as e:
-            logger.error(f"Error searching organizations: {e}")
         return []
 
     @classmethod
@@ -583,8 +594,6 @@ class Hierarchy:
 
         except exceptions.PermissionDenied:
             logger.warning("Permission denied searching projects")
-        except Exception as e:
-            logger.error(f"Error searching projects: {e}")
 
         return all_projects
 
