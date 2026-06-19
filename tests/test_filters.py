@@ -5,6 +5,7 @@ from conftest import make_test_hierarchy
 
 from gcpath.core import GCPathError
 from gcpath.filters import (
+    MAX_REGEX_PATTERN_LENGTH,
     apply_exclusions,
     build_pattern_matcher,
     get_display_name,
@@ -158,6 +159,11 @@ def test_glob_anchored_prefix_is_not_path_pattern():
 def test_regex_invalid_raises_gcpath_error():
     with pytest.raises(GCPathError, match="Invalid regex"):
         build_pattern_matcher("[unclosed", regex=True)
+
+
+def test_regex_too_long_raises_gcpath_error():
+    with pytest.raises(GCPathError, match="too long"):
+        build_pattern_matcher("a" * (MAX_REGEX_PATTERN_LENGTH + 1), regex=True)
 
 
 # ---- apply_exclusions ----

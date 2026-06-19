@@ -113,6 +113,23 @@ def test_hierarchy_get_resource_name_full_path():
     assert h.get_resource_name("//example.com") == "organizations/123"
 
 
+def test_hierarchy_get_resource_name_unescapes_folder_segments():
+    org_proto = resourcemanager_v3.Organization(
+        name="organizations/123", display_name="example.com"
+    )
+    org_node = OrganizationNode(organization=org_proto)
+    folder = Folder(
+        name="folders/space",
+        display_name="Team Folder",
+        ancestors=["folders/space", "organizations/123"],
+        organization=org_node,
+    )
+    org_node.folders[folder.name] = folder
+
+    h = Hierarchy([org_node], [])
+    assert h.get_resource_name("//example.com/Team%20Folder") == "folders/space"
+
+
 def test_hierarchy_get_path_by_resource_name():
     org_proto = resourcemanager_v3.Organization(
         name="organizations/123", display_name="example.com"
@@ -140,6 +157,52 @@ def test_hierarchy_get_path_by_resource_name():
     assert h.get_path_by_resource_name("folders/1") == "//example.com/f1"
     assert h.get_path_by_resource_name("organizations/123") == "//example.com"
     assert h.get_path_by_resource_name("projects/p1") == "//example.com/f1/Project%201"
+
+
+def test_scoped_to_folder_excludes_unrelated_and_orgless_resources():
+    from conftest import make_test_hierarchy
+
+    h = make_test_hierarchy()
+    scoped = h.scoped_to_resource("folders/1")
+
+    assert {f.name for f in scoped.folders} == {"folders/1", "folders/11"}
+    assert {p.name for p in scoped.projects} == {"projects/p1"}
+    assert not scoped.has_resource("projects/standalone")
+
+
+def test_filtered_by_org_display_names_rebuilds_indexes():
+    org1 = OrganizationNode(
+        organization=resourcemanager_v3.Organization(
+            name="organizations/1", display_name="one.example"
+        )
+    )
+    org2 = OrganizationNode(
+        organization=resourcemanager_v3.Organization(
+            name="organizations/2", display_name="two.example"
+        )
+    )
+    org1.folders["folders/1"] = Folder(
+        name="folders/1",
+        display_name="f1",
+        ancestors=["folders/1", "organizations/1"],
+        organization=org1,
+        parent="organizations/1",
+    )
+    org2.folders["folders/2"] = Folder(
+        name="folders/2",
+        display_name="f2",
+        ancestors=["folders/2", "organizations/2"],
+        organization=org2,
+        parent="organizations/2",
+    )
+
+    filtered = Hierarchy([org1, org2], []).filtered_by_org_display_names(
+        ["one.example"]
+    )
+
+    assert filtered.has_resource("folders/1")
+    assert not filtered.has_resource("folders/2")
+    assert {f.name for f in filtered.folders} == {"folders/1"}
 
 
 def test_organizationless_project_path():
@@ -273,6 +336,149 @@ def test_hierarchy_load_rm(mock_core_rm, mock_loaders_rm):
     assert len(h.projects) == 1
     assert h.projects[0].folder is not None
     assert h.projects[0].folder.name == "folders/1"
+
+
+@patch("gcpath.loaders.resourcemanager_v3")
+@patch("gcpath.core.resourcemanager_v3")
+def test_hierarchy_load_rm_recursive_folder_scope_filters_subtree(
+    mock_core_rm, mock_loaders_rm
+):
+    """RM folder scope should load only the scoped subtree and reconstruct paths."""
+    mock_rm = mock_core_rm
+    mock_loaders_rm.FoldersClient = mock_rm.FoldersClient
+    mock_loaders_rm.ProjectsClient = mock_rm.ProjectsClient
+
+    org_client = mock_rm.OrganizationsClient.return_value
+    org_proto = resourcemanager_v3.Organization(
+        name="organizations/123", display_name="org"
+    )
+    org_client.search_organizations.return_value = [org_proto]
+
+    folders_client = mock_rm.FoldersClient.return_value
+    folders_client.list_folders.side_effect = [
+        [resourcemanager_v3.Folder(name="folders/11", display_name="child")],
+        [resourcemanager_v3.Folder(name="folders/111", display_name="grandchild")],
+        [],
+    ]
+    folders_client.get_folder.return_value = resourcemanager_v3.Folder(
+        name="folders/1", display_name="root", parent="organizations/123"
+    )
+
+    p_client = mock_rm.ProjectsClient.return_value
+    p_client.search_projects.return_value = [
+        resourcemanager_v3.Project(
+            name="projects/direct",
+            project_id="direct",
+            display_name="Direct",
+            parent="folders/1",
+        ),
+        resourcemanager_v3.Project(
+            name="projects/desc",
+            project_id="desc",
+            display_name="Desc",
+            parent="folders/11",
+        ),
+        resourcemanager_v3.Project(
+            name="projects/outside",
+            project_id="outside",
+            display_name="Outside",
+            parent="organizations/123",
+        ),
+    ]
+
+    h = Hierarchy.load(
+        via_resource_manager=True,
+        scope_resource="folders/1",
+        recursive=True,
+    )
+
+    assert {f.name for f in h.folders} == {"folders/1", "folders/11", "folders/111"}
+    assert {p.name for p in h.projects} == {"projects/direct", "projects/desc"}
+    direct = next(p for p in h.projects if p.name == "projects/direct")
+    assert direct.folder is not None
+    assert direct.path == "//org/root/Direct"
+
+
+@patch("gcpath.loaders.resourcemanager_v3")
+@patch("gcpath.core.resourcemanager_v3")
+def test_hierarchy_load_rm_org_scope_skips_other_orgs(
+    mock_core_rm, mock_loaders_rm
+):
+    mock_rm = mock_core_rm
+    mock_loaders_rm.FoldersClient = mock_rm.FoldersClient
+    mock_loaders_rm.ProjectsClient = mock_rm.ProjectsClient
+
+    org_client = mock_rm.OrganizationsClient.return_value
+    org_client.search_organizations.return_value = [
+        resourcemanager_v3.Organization(name="organizations/123", display_name="org"),
+        resourcemanager_v3.Organization(
+            name="organizations/999", display_name="other"
+        ),
+    ]
+
+    folders_client = mock_rm.FoldersClient.return_value
+    folders_client.list_folders.return_value = []
+
+    project_client = mock_rm.ProjectsClient.return_value
+    project_client.search_projects.return_value = [
+        resourcemanager_v3.Project(
+            name="projects/in",
+            project_id="in",
+            display_name="In",
+            parent="organizations/123",
+        ),
+        resourcemanager_v3.Project(
+            name="projects/out",
+            project_id="out",
+            display_name="Out",
+            parent="organizations/999",
+        ),
+    ]
+
+    h = Hierarchy.load(
+        via_resource_manager=True,
+        scope_resource="organizations/123",
+        recursive=True,
+    )
+
+    assert [org.organization.name for org in h.organizations] == ["organizations/123"]
+    assert {p.name for p in h.projects} == {"projects/in"}
+
+
+@patch("gcpath.loaders.resourcemanager_v3")
+@patch("gcpath.core.resourcemanager_v3")
+def test_hierarchy_load_rm_folder_scope_skips_other_orgs(
+    mock_core_rm, mock_loaders_rm
+):
+    mock_rm = mock_core_rm
+    mock_loaders_rm.FoldersClient = mock_rm.FoldersClient
+    mock_loaders_rm.ProjectsClient = mock_rm.ProjectsClient
+
+    org_client = mock_rm.OrganizationsClient.return_value
+    org_client.search_organizations.return_value = [
+        resourcemanager_v3.Organization(name="organizations/123", display_name="org"),
+        resourcemanager_v3.Organization(
+            name="organizations/999", display_name="other"
+        ),
+    ]
+
+    folders_client = mock_rm.FoldersClient.return_value
+    folders_client.get_folder.return_value = resourcemanager_v3.Folder(
+        name="folders/1", display_name="root", parent="organizations/123"
+    )
+    folders_client.list_folders.return_value = []
+
+    project_client = mock_rm.ProjectsClient.return_value
+    project_client.search_projects.return_value = []
+
+    h = Hierarchy.load(
+        via_resource_manager=True,
+        scope_resource="folders/1",
+        recursive=True,
+    )
+
+    assert [org.organization.name for org in h.organizations] == ["organizations/123"]
+    assert {f.name for f in h.folders} == {"folders/1"}
 
 
 @patch("gcpath.core.resourcemanager_v3")

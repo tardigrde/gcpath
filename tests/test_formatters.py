@@ -13,6 +13,8 @@ from gcpath.formatters import (
     build_diagram,
     _sanitize_node_id,
     _get_node_label,
+    _format_d2,
+    _format_mermaid,
 )
 from google.cloud import resourcemanager_v3
 
@@ -474,6 +476,18 @@ def test_build_diagram_unsupported_format(mock_org_node, mock_hierarchy):
             {},
             fmt="graphviz",
         )
+
+
+def test_diagram_label_escaping():
+    labels = {"node_1": 'Line "one"\nLine \\two'}
+
+    mermaid = _format_mermaid(labels, [])
+    d2 = _format_d2(labels, [])
+
+    assert "&quot;one&quot;" in mermaid
+    assert "<br/>Line \\two" in mermaid
+    assert '\\"one\\"' in d2
+    assert "\\nLine \\\\two" in d2
 
 
 def test_build_diagram_folder_root(

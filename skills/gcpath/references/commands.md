@@ -1,236 +1,218 @@
 # gcpath Command Reference
 
-Quick reference for all gcpath commands and flags.
+Quick reference for current gcpath commands and flags.
 
 ## Global Flags
 
-Apply to every command (place before the subcommand):
+Global flags apply to every command and should be placed before the subcommand.
 
 | Flag | Short | Default | Description |
 |------|-------|---------|-------------|
-| `--entrypoint RESOURCE` | `-e` | config/none | Scope all commands to this resource |
-| `--json` | | false | JSON output |
-| `--yaml` | | false | YAML output |
-| `--use-asset-api / --no-use-asset-api` | `-u / -U` | true (asset) | API backend |
+| `--entrypoint RESOURCE` | `-e` | config/none | Scope commands to an organization or folder |
+| `--format FORMAT` | | `toon` | Output: `toon`, `json`, `yaml`, or `rich` |
+| `--use-asset-api / --no-use-asset-api` | `-u / -U` | asset | API backend |
 | `--debug` | | false | Debug logging |
-
----
 
 ## `ls [RESOURCE]`
 
-List direct children (or descendants with `-R`) of a resource.
+List direct children, or descendants with `-R`.
 
 | Flag | Short | Description |
 |------|-------|-------------|
-| `--long` | `-l` | Show resource names alongside paths |
 | `--recursive` | `-R` | List all descendants |
-| `--level N` | `-L N` | Max depth (requires `-R`) |
-| `--type TYPE` | `-t` | Filter: `folder`, `project`, `organization` |
-| `--show-labels` | | Show GCP labels column |
-| `--show-tags` | | Show GCP tags column |
-| `--label KEY=VALUE` | | Filter by label (repeatable, ANDed) |
-| `--tag KEY=VALUE` | | Filter by tag (repeatable, ANDed) |
+| `--level N` | `-L N` | Max depth for recursive output |
+| `--type TYPE` | `-t` | `organization`, `folder`, or `project` |
+| `--fields FIELDS` | | Comma-separated fields |
+| `--ids` | `-i` | Include resource names |
+| `--full` | | Do not truncate label/tag fields |
+| `--show-labels` | | Display labels |
+| `--show-tags` | | Display tags |
+| `--label FILTER` | | `key`, `key=value`, or `key!=value`; repeatable |
+| `--tag FILTER` | | Same syntax as `--label` |
+| `--exclude GLOB` | | Exclude name or path glob; repeatable |
 | `--force-refresh` | `-F` | Bypass cache |
 
-**Examples:**
+Examples:
 
-```
+```bash
 gcpath ls
 gcpath ls folders/123
 gcpath ls folders/123 -R -L 2 --type project
-gcpath ls -R --label env=prod --show-labels --json
+gcpath --format json ls -R --label env=prod --show-labels
 ```
-
----
 
 ## `tree [RESOURCE]`
 
-Display resource hierarchy as an interactive tree.
+Display hierarchy as a tree.
 
 | Flag | Short | Description |
 |------|-------|-------------|
 | `--level N` | `-L N` | Max display depth |
-| `--ids` | `-i` | Show resource names next to display names |
-| `--type TYPE` | `-t` | Filter: `folder`, `project` |
-| `--yes` | `-y` | Skip confirmation for large unscoped loads |
-| `--show-labels` | | Show labels in tree nodes |
-| `--show-tags` | | Show tags in tree nodes |
-| `--label KEY=VALUE` | | Filter by label (repeatable, ANDed) |
-| `--tag KEY=VALUE` | | Filter by tag (repeatable, ANDed) |
+| `--ids` | `-i` | Show resource names |
+| `--type TYPE` | `-t` | `folder` or `project` |
+| `--show-labels` | | Show labels |
+| `--show-tags` | | Show tags |
+| `--label FILTER` | | Filter by label; repeatable |
+| `--tag FILTER` | | Filter by tag; repeatable |
 | `--force-refresh` | `-F` | Bypass cache |
 
-**Examples:**
+Examples:
 
-```
+```bash
 gcpath tree
 gcpath tree folders/123 -L 3 -i
-gcpath tree --type project --json
+gcpath --format json tree --type project
 ```
-
----
 
 ## `diagram [RESOURCE]`
 
-Generate a Mermaid or D2 diagram of the hierarchy.
+Generate a Mermaid or D2 diagram.
 
 | Flag | Short | Description |
 |------|-------|-------------|
-| `--format FORMAT` | `-f` | `mermaid` (default) or `d2` |
+| `--diagram-format FORMAT` | `-d` | `mermaid` or `d2` |
 | `--level N` | `-L N` | Max display depth |
 | `--ids` | `-i` | Show resource names in node labels |
-| `--output FILE` | `-o` | Write to file instead of stdout |
-| `--yes` | `-y` | Skip confirmation |
+| `--output FILE` | `-o` | Write to file |
 | `--force-refresh` | `-F` | Bypass cache |
 
-**Examples:**
+Examples:
 
-```
+```bash
 gcpath diagram folders/123
-gcpath diagram -f d2 -o org.d2
+gcpath diagram -d d2 -o org.d2
 gcpath diagram folders/123 -L 2 --ids
 ```
 
----
-
 ## `stats [RESOURCE]`
 
-Count organizations, folders, and projects in scope. Resource must be `organizations/...` or `folders/...`.
+Count organizations, folders, and projects. Resource must be an organization or folder.
 
 | Flag | Short | Description |
 |------|-------|-------------|
 | `--force-refresh` | `-F` | Bypass cache |
 
-**Examples:**
+## `summary [RESOURCE]`
 
-```
-gcpath stats
-gcpath stats folders/123
-gcpath stats organizations/456
-```
+Snapshot with counts, max depth, deepest paths, and top label/tag keys.
 
----
+| Flag | Description |
+|------|-------------|
+| `--top N` | Number of top label/tag keys |
+| `--force-refresh`, `-F` | Bypass cache |
+
+## `audit [RESOURCE]`
+
+Run read-only governance checks against the loaded hierarchy.
+
+| Flag | Description |
+|------|-------------|
+| `--require-labels a,b` | Require labels on folders/projects |
+| `--name-pattern REGEX` | Required display-name regex |
+| `--severity info|warn|error` | Minimum severity |
+| `--check CHECKS` | Comma-separated check subset |
+| `--exit-zero` | Do not fail on warn/error findings |
+| `--force-refresh`, `-F` | Bypass cache |
 
 ## `name PATH [PATH ...]`
 
-Convert human-readable path(s) to GCP resource name(s).
+Convert paths to GCP resource names.
 
-| Flag | Short | Description |
-|------|-------|-------------|
-| `--id` | | Print only the numeric ID (not the full resource name) |
-| `--force-refresh` | `-F` | Bypass cache |
+| Flag | Description |
+|------|-------------|
+| `--id` | Print only the ID segment |
+| `--force-refresh`, `-F` | Bypass cache |
 
-**Examples:**
+Examples:
 
-```
+```bash
 gcpath name //example.com/Engineering/Backend
 gcpath name //example.com/Dept/Team --id
-gcpath name //a.com/X //a.com/Y --json
+gcpath --format json name //a.com/X //a.com/Y
 ```
-
----
 
 ## `path RESOURCE [RESOURCE ...]`
 
-Convert GCP resource name(s) to human-readable path(s). Does not load full hierarchy — resolves via GCP ancestry API directly.
+Convert resource names to paths via direct ancestry API calls.
 
-No extra flags (uses global `--json` / `--yaml`).
+Examples:
 
-**Examples:**
-
-```
+```bash
 gcpath path folders/123
 gcpath path projects/my-project
-gcpath path folders/123 folders/456 --json
+gcpath --format json path folders/123 folders/456
 ```
-
----
 
 ## `find PATTERN [RESOURCE]`
 
-Search resources by display name glob pattern (case-insensitive). Supports `*` and `?`.
+Search display names or full paths using glob patterns; `--regex` enables regex search.
 
 | Flag | Short | Description |
 |------|-------|-------------|
-| `--type TYPE` | `-t` | Filter: `folder`, `project`, `organization` |
-| `--label KEY=VALUE` | | Filter by label (repeatable, ANDed) |
-| `--tag KEY=VALUE` | | Filter by tag (repeatable, ANDed) |
+| `--type TYPE` | `-t` | `organization`, `folder`, or `project` |
+| `--regex` | `-E` | Use regex search semantics |
+| `--fields FIELDS` | | Comma-separated fields |
+| `--ids` | `-i` | Include resource names |
+| `--full` | | Do not truncate label/tag fields |
+| `--label FILTER` | | Filter by label; repeatable |
+| `--tag FILTER` | | Filter by tag; repeatable |
+| `--exclude GLOB` | | Exclude matches; repeatable |
 | `--force-refresh` | `-F` | Bypass cache |
 
-**Examples:**
+Examples:
 
-```
+```bash
 gcpath find "*payments*"
 gcpath find "prod-*" --type project
-gcpath find "*" folders/123 --label env=staging
-gcpath find "data-*" --json
+gcpath find -E "^api-.*-prod$"
+gcpath --format json find "*" folders/123 --label env=staging
 ```
-
----
 
 ## `ancestors RESOURCE`
 
-Show the full ancestry chain from a resource up to the organization root. Works for `organizations/...`, `folders/...`, and `projects/...`.
+Show the full ancestry chain from a resource to the organization root.
 
-No extra flags (uses global `--json` / `--yaml`).
-
-**Output columns:** Resource Name, Display Name, Type
-
-**Examples:**
-
-```
+```bash
 gcpath ancestors projects/my-project
-gcpath ancestors folders/123 --json
+gcpath --format json ancestors folders/123
 ```
 
----
+## `labels [RESOURCE]` / `tags [RESOURCE]`
 
-## `cache status`
+Aggregate labels or tags across folders and projects.
 
-Show cache age, size, scope, and resource counts.
+| Flag | Description |
+|------|-------------|
+| `--key KEY` | Show only a specific key |
+| `--top N` | Limit most frequent rows |
+| `--force-refresh`, `-F` | Bypass cache |
 
-No flags.
+## `open PATH [PATH ...]`
 
----
+Print GCP Console URLs, or open them with `--browser`.
 
-## `cache clear`
+| Flag | Description |
+|------|-------------|
+| `--browser / --print` | Open in browser or print URL |
+| `--force-refresh`, `-F` | Bypass cache |
 
-Delete the local cache file, forcing next run to re-fetch from GCP.
+## Local Management Commands
 
-No flags.
+These commands write only local files; run write actions only when the user asks.
 
----
-
-## `cache refresh`
-
-Re-load the hierarchy from GCP and rewrite the cache. Respects the configured entrypoint. Useful for warming the cache out-of-band (e.g., cron) so session-start hooks serve fresh data.
-
-No flags.
-
----
-
-## `config set-entrypoint RESOURCE`
-
-Set a persistent default entrypoint. Subsequent commands will scope to this resource unless overridden with `-e`.
-
-**Example:**
-
-```
-gcpath config set-entrypoint folders/123
-```
-
----
-
-## `config show`
-
-Display current configuration and config file location.
-
----
-
-## `config clear-entrypoint`
-
-Remove the configured default entrypoint.
-
----
+| Command | Description |
+|---------|-------------|
+| `gcpath cache status` | Show cache age, size, scope, API mode, and counts |
+| `gcpath cache refresh` | Re-fetch hierarchy and rewrite cache |
+| `gcpath cache clear` | Delete local cache |
+| `gcpath config set-entrypoint RESOURCE` | Set default scope in local config |
+| `gcpath config show` | Show local config |
+| `gcpath config clear-entrypoint` | Remove default scope |
+| `gcpath hook install` | Install local Claude Code/Codex hooks |
+| `gcpath hook uninstall` | Remove local hooks |
+| `gcpath hook status` | Show hook status |
+| `gcpath hook run` | Print session-start dashboard |
+| `gcpath mcp` | Run the optional MCP server |
 
 ## Resource Name Formats
 
@@ -238,14 +220,13 @@ Remove the configured default entrypoint.
 |----------|--------|---------|
 | Organization | `organizations/ID` | `organizations/123456789` |
 | Folder | `folders/ID` | `folders/987654321` |
-| Project (by number) | `projects/NUMBER` | `projects/111222333` |
-| Project (by ID) | `projects/PROJECT-ID` | `projects/my-project` |
+| Project | `projects/NUMBER` or `projects/PROJECT-ID` | `projects/my-project` |
 
 ## Path Format
 
-```
+```text
 //DOMAIN/SEGMENT/SEGMENT/...
 ```
 
 - `//example.com/Engineering/Backend/Services`
-- `//_/OrphanedProject` (organizationless)
+- `//_/OrphanedProject` for organizationless projects

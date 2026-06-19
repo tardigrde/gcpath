@@ -24,13 +24,12 @@ from gcpath.mcp_server import (
     _cache_key,
     _console_url_impl,
     _find_resources_impl,
-    _get_hierarchy,
     _list_resources_impl,
     _name_to_path_impl,
     _path_to_name_impl,
     _resolve_to_object,
+    _resolve_server_scope,
     _serialize_resource,
-    build_server,
 )
 
 
@@ -65,18 +64,95 @@ def test_get_hierarchy_caches_per_metadata_flag_combo():
     import gcpath.mcp_server as mcp_mod
 
     mcp_mod._HIERARCHY_CACHE.clear()
-    with patch.object(Hierarchy, "load") as mock_load:
+    with (
+        patch.object(mcp_mod, "read_cache", return_value=None),
+        patch.object(mcp_mod, "write_cache"),
+        patch.object(Hierarchy, "load") as mock_load,
+    ):
         mock_load.side_effect = [
             make_test_hierarchy(),
             make_test_hierarchy(),
         ]
-        _get_hierarchy(use_asset_api=True, scope=None, include_labels=True)
+        mcp_mod._get_hierarchy(use_asset_api=True, scope=None, include_labels=True)
         # Same key — must hit cache, no extra load.
-        _get_hierarchy(use_asset_api=True, scope=None, include_labels=True)
+        mcp_mod._get_hierarchy(use_asset_api=True, scope=None, include_labels=True)
         # Different include_labels — must re-load (different cache key).
-        _get_hierarchy(use_asset_api=True, scope=None, include_labels=False)
+        mcp_mod._get_hierarchy(use_asset_api=True, scope=None, include_labels=False)
         assert mock_load.call_count == 2
     mcp_mod._HIERARCHY_CACHE.clear()
+
+
+def test_get_hierarchy_uses_disk_cache_before_live_load():
+    import gcpath.mcp_server as mcp_mod
+
+    mcp_mod._HIERARCHY_CACHE.clear()
+    cached = make_test_hierarchy()
+    with (
+        patch.object(mcp_mod, "read_cache", return_value=cached) as mock_read,
+        patch.object(mcp_mod, "write_cache") as mock_write,
+        patch.object(Hierarchy, "load") as mock_load,
+    ):
+        result = mcp_mod._get_hierarchy(use_asset_api=True, scope=None)
+
+    assert result is cached
+    mock_read.assert_called_once()
+    mock_load.assert_not_called()
+    mock_write.assert_not_called()
+    mcp_mod._HIERARCHY_CACHE.clear()
+
+
+def test_get_hierarchy_refresh_loads_and_writes_disk_cache():
+    import gcpath.mcp_server as mcp_mod
+
+    mcp_mod._HIERARCHY_CACHE.clear()
+    loaded = make_test_hierarchy()
+    with (
+        patch.object(mcp_mod, "read_cache") as mock_read,
+        patch.object(mcp_mod, "write_cache") as mock_write,
+        patch.object(Hierarchy, "load", return_value=loaded) as mock_load,
+    ):
+        result = mcp_mod._get_hierarchy(
+            use_asset_api=False,
+            scope="folders/1",
+            refresh=True,
+            include_labels=True,
+            include_tags=False,
+        )
+
+    assert result is loaded
+    mock_read.assert_not_called()
+    mock_load.assert_called_once()
+    mock_write.assert_called_once_with(
+        loaded,
+        scope="folders/1",
+        via_resource_manager=True,
+        include_labels=True,
+        include_tags=False,
+    )
+    mcp_mod._HIERARCHY_CACHE.clear()
+
+
+def test_resolve_server_scope_rejects_resource_outside_server_scope():
+    with patch.object(
+        Hierarchy,
+        "resolve_ancestry_chain",
+        return_value=[("organizations/2", "other", "organization")],
+    ):
+        with pytest.raises(GCPathError):
+            _resolve_server_scope("folders/999", "folders/1")
+
+
+def test_resolve_server_scope_allows_descendant_scope():
+    with patch.object(
+        Hierarchy,
+        "resolve_ancestry_chain",
+        return_value=[
+            ("organizations/1", "org", "organization"),
+            ("folders/1", "root", "folder"),
+            ("folders/2", "child", "folder"),
+        ],
+    ):
+        assert _resolve_server_scope("folders/2", "folders/1") == "folders/2"
 
 
 # ---- _list_resources_impl ----
@@ -308,16 +384,19 @@ def test_audit_impl_flags_synthetic_org_projects():
 
 def test_build_server_raises_when_mcp_extra_missing():
     import sys
+    import gcpath.mcp_server as mcp_mod
 
     sys.modules.pop("mcp.server.fastmcp", None)
     with patch.dict(sys.modules, {"mcp.server.fastmcp": None}):
         with pytest.raises(GCPathError):
-            build_server()
+            mcp_mod.build_server()
 
 
 def test_build_server_succeeds_when_mcp_available():
+    import gcpath.mcp_server as mcp_mod
+
     pytest.importorskip("mcp.server.fastmcp")
-    server = build_server()
+    server = mcp_mod.build_server()
     assert server is not None
 
 
@@ -337,8 +416,12 @@ def test_build_server_registers_each_tool_callback():
     mcp_mod._HIERARCHY_CACHE.clear()
 
     async def _exercise():
-        with patch.object(Hierarchy, "load", return_value=h):
-            server = build_server()
+        with (
+            patch.object(mcp_mod, "read_cache", return_value=None),
+            patch.object(mcp_mod, "write_cache"),
+            patch.object(Hierarchy, "load", return_value=h),
+        ):
+            server = mcp_mod.build_server()
             await server.call_tool("path_to_name", {"paths": ["//example.com/f1"]})
             await server.call_tool(
                 "list_resources", {"resource_scope": None, "recursive": False}
@@ -349,6 +432,7 @@ def test_build_server_registers_each_tool_callback():
             await server.call_tool("get_tags", {})
             await server.call_tool("get_console_url", {"paths": ["//example.com/f1"]})
             await server.call_tool("audit_hierarchy", {})
+            await server.call_tool("refresh_hierarchy", {})
             with patch.object(Hierarchy, "resolve_ancestry_chain", return_value=[]):
                 await server.call_tool("get_ancestors", {"resource_name": "folders/1"})
             with patch.object(

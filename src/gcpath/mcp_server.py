@@ -24,6 +24,7 @@ from gcpath.core import (
     aggregate_metadata,
     path_escape,
 )
+from gcpath.cache import read_cache, write_cache
 from gcpath.formatters import console_url
 
 logger = logging.getLogger(__name__)
@@ -37,6 +38,38 @@ _PREFIX_PROJECTS = "projects/"
 
 # Caps caller-supplied regex length to bound worst-case backtracking time.
 _NAME_PATTERN_MAX_LEN = 200
+
+
+def _resource_is_within_scope(resource_name: str, server_scope: str) -> bool:
+    if resource_name == server_scope:
+        return True
+    try:
+        chain = Hierarchy.resolve_ancestry_chain(resource_name)
+    except Exception as e:
+        logger.debug(
+            "Could not verify resource %s against server scope %s: %s",
+            resource_name,
+            server_scope,
+            e,
+        )
+        return False
+    return any(name == server_scope for name, _, _ in chain)
+
+
+def _resolve_server_scope(
+    requested_scope: Optional[str], server_scope: Optional[str]
+) -> Optional[str]:
+    """Apply a server-level scope as a boundary for caller-requested scopes."""
+    if server_scope is None:
+        return requested_scope
+    if requested_scope is None:
+        return server_scope
+    if not _resource_is_within_scope(requested_scope, server_scope):
+        raise GCPathError(
+            f"Requested scope '{requested_scope}' is outside server scope "
+            f"'{server_scope}'"
+        )
+    return requested_scope
 
 
 def _cache_key(
@@ -63,6 +96,16 @@ def _get_hierarchy(
     key = _cache_key(use_asset_api, scope, include_labels, include_tags)
     if not refresh and key in _HIERARCHY_CACHE:
         return _HIERARCHY_CACHE[key]
+    if not refresh:
+        cached = read_cache(
+            scope=scope,
+            via_resource_manager=not use_asset_api,
+            include_labels=include_labels,
+            include_tags=include_tags,
+        )
+        if cached is not None:
+            _HIERARCHY_CACHE[key] = cached
+            return cached
     hierarchy = Hierarchy.load(
         via_resource_manager=not use_asset_api,
         scope_resource=scope,
@@ -71,6 +114,13 @@ def _get_hierarchy(
         include_tags=include_tags,
     )
     _HIERARCHY_CACHE[key] = hierarchy
+    write_cache(
+        hierarchy,
+        scope=scope,
+        via_resource_manager=not use_asset_api,
+        include_labels=include_labels,
+        include_tags=include_tags,
+    )
     return hierarchy
 
 
@@ -308,9 +358,14 @@ def build_server(
 
     server = FastMCP("gcpath")
 
+    def _effective(resource_scope: Optional[str] = None) -> Optional[str]:
+        return _resolve_server_scope(resource_scope, scope)
+
     def _hier(resource_scope: Optional[str] = None) -> Hierarchy:
+        effective_scope = _effective(resource_scope)
         return _get_hierarchy(
-            use_asset_api=use_asset_api, scope=resource_scope or scope
+            use_asset_api=use_asset_api,
+            scope=effective_scope,
         )
 
     @server.tool()
@@ -329,7 +384,7 @@ def build_server(
         recursive: bool = False,
     ) -> List[Dict[str, Any]]:
         """List folders and projects in the hierarchy. Optional scope (e.g. folders/123)."""
-        effective = resource_scope or scope
+        effective = _effective(resource_scope)
         return _list_resources_impl(_hier(resource_scope), effective, recursive)
 
     @server.tool()
@@ -343,6 +398,10 @@ def build_server(
     @server.tool()
     def get_ancestors(resource_name: str) -> List[Dict[str, str]]:
         """Return ancestry chain for a resource name from root to leaf."""
+        if scope is not None and not _resource_is_within_scope(resource_name, scope):
+            raise GCPathError(
+                f"Resource '{resource_name}' is outside server scope '{scope}'"
+            )
         chain = Hierarchy.resolve_ancestry_chain(resource_name)
         return [
             {"resource_name": rn, "display_name": dn, "type": t} for rn, dn, t in chain
@@ -394,6 +453,15 @@ def build_server(
             name_pattern=name_pattern,
             severity=severity,
         )
+
+    @server.tool()
+    def refresh_hierarchy(resource_scope: Optional[str] = None) -> Dict[str, Any]:
+        """Force a hierarchy reload and refresh the shared gcpath cache."""
+        return _get_hierarchy(
+            use_asset_api=use_asset_api,
+            scope=_effective(resource_scope),
+            refresh=True,
+        ).summary()
 
     return server
 

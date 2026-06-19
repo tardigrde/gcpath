@@ -1,5 +1,7 @@
 # CLAUDE.md
 
+@/home/levente/.codex/RTK.md
+
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Project Overview
@@ -231,3 +233,4 @@ The project uses **semantic versioning** with automated release workflow via Git
 - Follow conventional commits for automatic version bumping
 - TOON encoding uses `toon_format` library (imported as `toon_format`)
 - `toon.py` is a thin wrapper that adds gcpath-specific AXI conventions on top of `toon_format.encode()`
+- Do not modify `src/gcpath/_vendor/`. It contains vendored `toon_format` code and must stay untouched until the vendored copy is removed after the upstream toon package release.

@@ -11,12 +11,18 @@ import shutil
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from gcpath.core import GCPathError
+
 logger = logging.getLogger(__name__)
 
 _GCPATH_HOOK_COMMAND = "gcpath hook run"
 
 _CLAUDE_SETTINGS_PATH = Path.home() / ".claude" / "settings.json"
 _CODEX_HOOKS_PATH = Path.home() / ".codex" / "hooks.json"
+
+
+class HookConfigError(GCPathError):
+    """Raised when an existing hook config cannot be safely modified."""
 
 
 def _get_gcpath_bin() -> str:
@@ -42,7 +48,7 @@ def _get_claude_entry_command(entry: Dict[str, Any]) -> str:
     return entry.get("command", "")
 
 
-def _read_json(path: Path) -> Optional[Dict[str, Any]]:
+def _read_json(path: Path, *, strict: bool = False) -> Optional[Dict[str, Any]]:
     if not path.exists():
         return None
     try:
@@ -50,9 +56,18 @@ def _read_json(path: Path) -> Optional[Dict[str, Any]]:
             loaded = json.load(f)
     except (json.JSONDecodeError, OSError) as e:
         logger.warning(f"Could not read {path}: {e}")
+        if strict:
+            raise HookConfigError(
+                f"Refusing to modify malformed hook config at {path}: {e}"
+            ) from e
         return None
     if not isinstance(loaded, dict):
         logger.warning(f"Unexpected JSON shape in {path}: {type(loaded).__name__}")
+        if strict:
+            raise HookConfigError(
+                f"Refusing to modify hook config at {path}: "
+                f"expected a JSON object, got {type(loaded).__name__}"
+            )
         return None
     return loaded
 
@@ -69,7 +84,7 @@ def _write_json(path: Path, data: Dict[str, Any]) -> None:
 
 def _install_claude_code(command: str) -> bool:
     """Install hook into Claude Code settings. Returns True if changed."""
-    data = _read_json(_CLAUDE_SETTINGS_PATH) or {}
+    data = _read_json(_CLAUDE_SETTINGS_PATH, strict=True) or {}
 
     if "hooks" not in data:
         data["hooks"] = {}
@@ -141,7 +156,7 @@ def _uninstall_claude_code() -> bool:
 
 def _install_codex(command: str) -> bool:
     """Install hook into Codex hooks. Returns True if changed."""
-    data = _read_json(_CODEX_HOOKS_PATH) or {}
+    data = _read_json(_CODEX_HOOKS_PATH, strict=True) or {}
 
     if "SessionStart" not in data:
         data["SessionStart"] = []
