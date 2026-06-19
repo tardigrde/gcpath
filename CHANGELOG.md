@@ -1,6 +1,15 @@
 # CHANGELOG
 
 
+## v0.15.0 (2026-06-19)
+
+### Features
+
+- Sync updated codebase from development snapshot
+  ([#40](https://github.com/tardigrde/gcpath/pull/40),
+  [`3f95486`](https://github.com/tardigrde/gcpath/commit/3f9548699ab551f9eeeb8cd0ad155ea6aa3ae7ea))
+
+
 ## v0.14.0 (2026-06-12)
 
 ### Features
