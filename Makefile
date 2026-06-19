@@ -24,7 +24,7 @@ lint:
 	uv run ruff check .
 
 typecheck:
-	uv run mypy .
+	uv run --all-extras mypy .
 
 format:
 	uv run ruff format .

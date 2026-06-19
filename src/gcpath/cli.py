@@ -1,6 +1,7 @@
 import shutil
 import typer
 import logging
+import re
 from pathlib import Path
 from dataclasses import dataclass
 from typing import Optional, List, Dict, Union
@@ -97,6 +98,7 @@ _RESOURCE_PREFIXES = (
     _RESOURCE_PREFIX_FOLDERS,
     _RESOURCE_PREFIX_PROJECTS,
 )
+_RESOURCE_NAME_RE = re.compile(r"^(organizations|folders|projects)/[A-Za-z0-9_-]+$")
 _REFRESH_HELP = "Force a refresh of the cache from the GCP API"
 
 # Options shared between `ls` and `find`.
@@ -172,6 +174,14 @@ def _validate_type_filter(resource_type: Optional[str]) -> None:
         raise typer.Exit(code=1)
 
 
+def _validate_resource_name(resource_name: str) -> None:
+    if not _RESOURCE_NAME_RE.fullmatch(resource_name):
+        raise GCPathError(
+            f"Invalid resource name '{resource_name}'. Expected organizations/ID, "
+            "folders/ID, or projects/ID."
+        )
+
+
 def _matches_type(
     obj: Union[OrganizationNode, Folder, Project], type_filter: str
 ) -> bool:
@@ -215,6 +225,7 @@ def _resolve_scope(
     if effective_resource and any(
         effective_resource.startswith(p) for p in _RESOURCE_PREFIXES
     ):
+        _validate_resource_name(effective_resource)
         target_resource_name = effective_resource
         try:
             target_path = _cached_path_for(effective_resource) or (
@@ -395,7 +406,14 @@ def _show_home(_ctx: typer.Context) -> None:
 def cache_clear(ctx: typer.Context) -> None:
     """Clear the local resource cache."""
     fmt = ctx.obj.get("output_format", "toon")
-    if clear_cache():
+    cleared = clear_cache()
+    if fmt in ("json", "yaml"):
+        dumper = _get_dumper(fmt)
+        assert dumper is not None
+        print(dumper({"cleared": cleared, "location": str(CACHE_FILE)}))
+        return
+
+    if cleared:
         msg = f"Cache cleared at {CACHE_FILE}"
         if fmt == "rich":
             rprint(f"[green]{msg}[/green]")
@@ -425,6 +443,19 @@ def cache_refresh(ctx: typer.Context) -> None:
         )
         info = get_cache_info()
         if not info.exists:
+            if fmt in ("json", "yaml"):
+                dumper = _get_dumper(fmt)
+                assert dumper is not None
+                print(
+                    dumper(
+                        {
+                            "refreshed": False,
+                            "error": "cache file was not written",
+                            "location": str(CACHE_FILE),
+                        }
+                    )
+                )
+                raise typer.Exit(code=1)
             print(
                 toon_error(
                     "Cache refresh failed: cache file was not written",
@@ -436,6 +467,21 @@ def cache_refresh(ctx: typer.Context) -> None:
             f"Cache refreshed: {info.org_count} organizations, "
             f"{info.folder_count} folders, {info.project_count} projects"
         )
+        if fmt in ("json", "yaml"):
+            dumper = _get_dumper(fmt)
+            assert dumper is not None
+            print(
+                dumper(
+                    {
+                        "refreshed": True,
+                        "organizations": info.org_count,
+                        "folders": info.folder_count,
+                        "projects": info.project_count,
+                        "location": str(CACHE_FILE),
+                    }
+                )
+            )
+            return
         if fmt == "rich":
             rprint(f"[green]{msg}[/green]")
         else:
@@ -489,6 +535,29 @@ def cache_status(ctx: typer.Context) -> None:
     if fmt == "rich":
         _cache_status_rich(info)
         return
+    if fmt in ("json", "yaml"):
+        dumper = _get_dumper(fmt)
+        assert dumper is not None
+        print(
+            dumper(
+                {
+                    "exists": info.exists,
+                    "fresh": info.fresh,
+                    "age_seconds": info.age_seconds,
+                    "size_bytes": info.size_bytes,
+                    "version": info.version,
+                    "scope": info.scope,
+                    "via_resource_manager": info.via_resource_manager,
+                    "include_labels": info.include_labels,
+                    "include_tags": info.include_tags,
+                    "organizations": info.org_count,
+                    "folders": info.folder_count,
+                    "projects": info.project_count,
+                    "location": str(CACHE_FILE),
+                }
+            )
+        )
+        return
 
     print(
         toon_cache_status(
@@ -521,6 +590,11 @@ def config_set_entrypoint(
     try:
         set_entrypoint(resource)
         msg = f"Entrypoint set to {resource}"
+        if fmt in ("json", "yaml"):
+            dumper = _get_dumper(fmt)
+            assert dumper is not None
+            print(dumper({"entrypoint": resource, "changed": True}))
+            return
         if fmt == "rich":
             rprint(f"[green]{msg}[/green]")
         else:
@@ -556,6 +630,11 @@ def config_show(ctx: typer.Context) -> None:
         table.add_row("location", str(CONFIG_FILE))
         console.print(table)
         return
+    if fmt in ("json", "yaml"):
+        dumper = _get_dumper(fmt)
+        assert dumper is not None
+        print(dumper({"config": config, "location": str(CONFIG_FILE)}))
+        return
 
     print(toon_config(config, str(CONFIG_FILE)))
 
@@ -566,6 +645,11 @@ def config_clear_entrypoint(ctx: typer.Context) -> None:
     fmt = ctx.obj.get("output_format", "toon")
     clear_entrypoint()
     msg = "Entrypoint cleared"
+    if fmt in ("json", "yaml"):
+        dumper = _get_dumper(fmt)
+        assert dumper is not None
+        print(dumper({"entrypoint": None, "changed": True}))
+        return
     if fmt == "rich":
         rprint(f"[green]{msg}[/green]")
     else:
@@ -590,17 +674,26 @@ def _clean_resolve_path(path: str) -> str:
 def _try_read_cache(
     cache_scope: Optional[str],
     filter_orgs: Optional[List[str]],
+    via_resource_manager: bool = True,
+    include_labels: bool = False,
+    include_tags: bool = False,
+    scope_resource: Optional[str] = None,
 ) -> Optional[Hierarchy]:
-    cached_hierarchy = read_cache(scope=cache_scope)
+    cached_hierarchy = read_cache(
+        scope=cache_scope,
+        via_resource_manager=via_resource_manager,
+        include_labels=include_labels,
+        include_tags=include_tags,
+    )
     if cached_hierarchy is None:
         return None
 
     if filter_orgs:
-        cached_hierarchy.organizations = [
-            o
-            for o in cached_hierarchy.organizations
-            if o.organization.display_name in filter_orgs
-        ]
+        cached_hierarchy = cached_hierarchy.filtered_by_org_display_names(filter_orgs)
+    if scope_resource and cache_scope is None:
+        if not cached_hierarchy.has_resource(scope_resource):
+            return None
+        cached_hierarchy = cached_hierarchy.scoped_to_resource(scope_resource)
     return cached_hierarchy
 
 
@@ -614,6 +707,7 @@ def _load_hierarchy(
     include_tags: bool = False,
 ) -> Hierarchy:
     entrypoint = ctx.obj.get("entrypoint")
+    via_resource_manager = not ctx.obj["use_asset_api"]
 
     is_cacheable = (scope_resource is None) or (
         entrypoint is not None and scope_resource == entrypoint
@@ -621,7 +715,13 @@ def _load_hierarchy(
     cache_scope = scope_resource if is_cacheable and scope_resource else None
 
     if is_cacheable and not force_refresh:
-        cached = _try_read_cache(cache_scope, filter_orgs)
+        cached = _try_read_cache(
+            cache_scope,
+            filter_orgs,
+            via_resource_manager,
+            include_labels,
+            include_tags,
+        )
         if cached is not None:
             info = get_cache_info()
             if info.age_seconds is not None:
@@ -633,7 +733,14 @@ def _load_hierarchy(
     if not is_cacheable and not force_refresh and scope_resource:
         # Scoped to a non-entrypoint resource: a fresh global cache that
         # already contains the scope can serve the command without API calls.
-        cached = _try_read_cache(None, filter_orgs)
+        cached = _try_read_cache(
+            None,
+            filter_orgs,
+            via_resource_manager,
+            include_labels,
+            include_tags,
+            scope_resource=scope_resource,
+        )
         if cached is not None and cached.has_resource(scope_resource):
             logger.debug(
                 f"Serving scoped command for {scope_resource} from the global cache."
@@ -644,7 +751,7 @@ def _load_hierarchy(
 
     hierarchy = Hierarchy.load(
         display_names=filter_orgs,
-        via_resource_manager=not ctx.obj["use_asset_api"],
+        via_resource_manager=via_resource_manager,
         scope_resource=scope_resource,
         recursive=effective_recursive,
         include_labels=include_labels,
@@ -652,7 +759,13 @@ def _load_hierarchy(
     )
 
     if is_cacheable:
-        write_cache(hierarchy, scope=cache_scope)
+        write_cache(
+            hierarchy,
+            scope=cache_scope,
+            via_resource_manager=via_resource_manager,
+            include_labels=include_labels,
+            include_tags=include_tags,
+        )
 
     return hierarchy
 
@@ -674,6 +787,9 @@ class _ParsedResource:
 
 
 def _parse_resource_arg(effective_resource: str, command_name: str) -> _ParsedResource:
+    if any(effective_resource.startswith(p) for p in _RESOURCE_PREFIXES):
+        _validate_resource_name(effective_resource)
+
     if effective_resource.startswith(_RESOURCE_PREFIX_PROJECTS):
         print(
             toon_error(
@@ -1365,6 +1481,7 @@ def _validate_stats_resource(effective_resource: Optional[str]) -> Optional[str]
         effective_resource.startswith(p)
         for p in [_RESOURCE_PREFIX_ORGS, _RESOURCE_PREFIX_FOLDERS]
     ):
+        _validate_resource_name(effective_resource)
         return effective_resource
     print(
         toon_error(
@@ -2422,8 +2539,17 @@ def mcp_command(
 def hook_install(ctx: typer.Context) -> None:
     """Self-install session hooks for Claude Code and Codex (idempotent)."""
     fmt = ctx.obj.get("output_format", "toon")
-    results = install_hooks()
+    try:
+        results = install_hooks()
+    except Exception as e:
+        handle_error(e)
+        raise
 
+    if fmt in ("json", "yaml"):
+        dumper = _get_dumper(fmt)
+        assert dumper is not None
+        print(dumper({"targets": results}))
+        return
     if fmt == "rich":
         for target, changed in results.items():
             if changed:
@@ -2449,6 +2575,11 @@ def hook_uninstall(ctx: typer.Context) -> None:
     fmt = ctx.obj.get("output_format", "toon")
     results = uninstall_hooks()
 
+    if fmt in ("json", "yaml"):
+        dumper = _get_dumper(fmt)
+        assert dumper is not None
+        print(dumper({"targets": results}))
+        return
     if fmt == "rich":
         for target, changed in results.items():
             if changed:
@@ -2492,6 +2623,12 @@ def hook_status(ctx: typer.Context) -> None:
                 )
             else:
                 rprint(f"[dim]{target}[/dim]: not installed ({loc})")
+        return
+
+    if fmt in ("json", "yaml"):
+        dumper = _get_dumper(fmt)
+        assert dumper is not None
+        print(dumper(status))
         return
 
     print(toon_encode(status))

@@ -5,6 +5,7 @@ This module handles path formatting, resource filtering, tree visualization,
 and diagram generation (Mermaid, D2).
 """
 
+import html
 from typing import List, Dict, Tuple, Union, Optional, Any
 from gcpath.core import (
     OrganizationNode,
@@ -458,7 +459,7 @@ def _format_mermaid(labels: Dict[str, str], edges: List[Tuple[str, str]]) -> str
     """Format collected nodes and edges as a Mermaid flowchart."""
     lines = ["graph TD"]
     for node_id, label in labels.items():
-        safe_label = label.replace('"', "#quot;")
+        safe_label = html.escape(label, quote=True).replace("\n", "<br/>")
         lines.append(f'    {node_id}["{safe_label}"]')
     for parent_id, child_id in edges:
         lines.append(f"    {parent_id} --> {child_id}")
@@ -469,7 +470,10 @@ def _format_d2(labels: Dict[str, str], edges: List[Tuple[str, str]]) -> str:
     """Format collected nodes and edges as a D2 diagram."""
     lines: List[str] = []
     for node_id, label in labels.items():
-        lines.append(f'{node_id}: "{label}"')
+        safe_label = (
+            label.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
+        )
+        lines.append(f'{node_id}: "{safe_label}"')
     for parent_id, child_id in edges:
         lines.append(f"{parent_id} -> {child_id}")
     return "\n".join(lines)

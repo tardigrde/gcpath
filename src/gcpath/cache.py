@@ -6,6 +6,7 @@ This module handles reading from and writing to the cache file.
 
 import json
 import logging
+import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -36,10 +37,17 @@ class CacheInfo:
     folder_count: int
     project_count: int
     scope: Optional[str] = None
+    via_resource_manager: Optional[bool] = None
+    include_labels: bool = False
+    include_tags: bool = False
 
 
 def _hierarchy_to_dict(
-    hierarchy: Hierarchy, scope: Optional[str] = None
+    hierarchy: Hierarchy,
+    scope: Optional[str] = None,
+    via_resource_manager: Optional[bool] = None,
+    include_labels: bool = False,
+    include_tags: bool = False,
 ) -> Dict[str, Any]:
     """Serializes the Hierarchy object to a dictionary."""
     organizations_data = []
@@ -98,6 +106,9 @@ def _hierarchy_to_dict(
         "version": CACHE_VERSION,
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "scope": scope,
+        "via_resource_manager": via_resource_manager,
+        "include_labels": include_labels,
+        "include_tags": include_tags,
         "organizations": organizations_data,
         "organizationless_projects": orgless_projects_data,
     }
@@ -118,59 +129,63 @@ def _dict_to_hierarchy(data: Dict[str, Any]) -> Optional[Hierarchy]:
     # Note: resourcemanager_v3.Organization is a specialized Map/Message class.
     # We can instantiate it with kwargs matching the fields.
 
-    for org_data in data.get("organizations", []):
-        org_info = org_data["organization"]
-        # Reconstruct Organization protobuf
-        org_proto = resourcemanager_v3.Organization(
-            name=org_info["name"], display_name=org_info["display_name"]
-        )
-
-        node = OrganizationNode(organization=org_proto)
-        org_nodes.append(node)
-
-        # Reconstruct Folders
-        for folder_name, folder_data in org_data.get("folders", {}).items():
-            folder = Folder(
-                name=folder_data["name"],
-                display_name=folder_data["display_name"],
-                ancestors=folder_data["ancestors"],
-                parent=folder_data["parent"],
-                organization=node,
-                labels=folder_data.get("labels", {}),
-                tags=folder_data.get("tags", {}),
+    try:
+        for org_data in data.get("organizations", []):
+            org_info = org_data["organization"]
+            # Reconstruct Organization protobuf
+            org_proto = resourcemanager_v3.Organization(
+                name=org_info["name"], display_name=org_info["display_name"]
             )
-            node.folders[folder_name] = folder
 
-        # Reconstruct Projects for this Org
-        for p_data in org_data.get("projects", []):
-            folder_name = p_data.get("folder_name")
-            parent_folder = node.folders.get(folder_name) if folder_name else None
+            node = OrganizationNode(organization=org_proto)
+            org_nodes.append(node)
 
+            # Reconstruct Folders
+            for folder_name, folder_data in org_data.get("folders", {}).items():
+                folder = Folder(
+                    name=folder_data["name"],
+                    display_name=folder_data["display_name"],
+                    ancestors=folder_data["ancestors"],
+                    parent=folder_data["parent"],
+                    organization=node,
+                    labels=folder_data.get("labels", {}),
+                    tags=folder_data.get("tags", {}),
+                )
+                node.folders[folder_name] = folder
+
+            # Reconstruct Projects for this Org
+            for p_data in org_data.get("projects", []):
+                folder_name = p_data.get("folder_name")
+                parent_folder = node.folders.get(folder_name) if folder_name else None
+
+                project = Project(
+                    name=p_data["name"],
+                    project_id=p_data["project_id"],
+                    display_name=p_data["display_name"],
+                    parent=p_data["parent"],
+                    organization=node,
+                    folder=parent_folder,
+                    labels=p_data.get("labels", {}),
+                    tags=p_data.get("tags", {}),
+                )
+                projects.append(project)
+
+        # Reconstruct Organizationless Projects
+        for p_data in data.get("organizationless_projects", []):
             project = Project(
                 name=p_data["name"],
                 project_id=p_data["project_id"],
                 display_name=p_data["display_name"],
                 parent=p_data["parent"],
-                organization=node,
-                folder=parent_folder,
+                organization=None,
+                folder=None,
                 labels=p_data.get("labels", {}),
                 tags=p_data.get("tags", {}),
             )
             projects.append(project)
-
-    # Reconstruct Organizationless Projects
-    for p_data in data.get("organizationless_projects", []):
-        project = Project(
-            name=p_data["name"],
-            project_id=p_data["project_id"],
-            display_name=p_data["display_name"],
-            parent=p_data["parent"],
-            organization=None,
-            folder=None,
-            labels=p_data.get("labels", {}),
-            tags=p_data.get("tags", {}),
-        )
-        projects.append(project)
+    except (KeyError, TypeError) as e:
+        logger.warning(f"Cache data has invalid structure: {e}")
+        return None
 
     return Hierarchy(organizations=org_nodes, projects=projects)
 
@@ -211,9 +226,13 @@ def is_cache_fresh(
 
 
 def read_cache(
-    ttl_hours: float = DEFAULT_CACHE_TTL_HOURS, scope: Optional[str] = None
+    ttl_hours: float = DEFAULT_CACHE_TTL_HOURS,
+    scope: Optional[str] = None,
+    via_resource_manager: Optional[bool] = None,
+    include_labels: bool = False,
+    include_tags: bool = False,
 ) -> Optional[Hierarchy]:
-    """Reads the hierarchy from the cache file. Returns None if stale, missing, or scope mismatch."""
+    """Read hierarchy from cache when freshness, scope, and capabilities match."""
     data = read_cache_raw()
     if data is None:
         return None
@@ -226,6 +245,24 @@ def read_cache(
         logger.debug(
             f"Cache scope mismatch (cached={data.get('scope')}, requested={scope}). Ignoring cache."
         )
+        return None
+
+    if (
+        via_resource_manager is not None
+        and data.get("via_resource_manager") is not via_resource_manager
+    ):
+        logger.debug(
+            "Cache API mode mismatch "
+            f"(cached={data.get('via_resource_manager')}, requested={via_resource_manager}). Ignoring cache."
+        )
+        return None
+
+    if include_labels and data.get("include_labels") is not True:
+        logger.debug("Cache lacks labels required by this command. Ignoring cache.")
+        return None
+
+    if include_tags and data.get("include_tags") is not True:
+        logger.debug("Cache lacks tags required by this command. Ignoring cache.")
         return None
 
     return _dict_to_hierarchy(data)
@@ -303,6 +340,9 @@ def get_cache_info(
             folder_count=folder_count,
             project_count=project_count,
             scope=data.get("scope"),
+            via_resource_manager=data.get("via_resource_manager"),
+            include_labels=bool(data.get("include_labels")),
+            include_tags=bool(data.get("include_tags")),
         )
     except Exception:
         return CacheInfo(
@@ -317,13 +357,30 @@ def get_cache_info(
         )
 
 
-def write_cache(hierarchy: Hierarchy, scope: Optional[str] = None) -> None:
+def write_cache(
+    hierarchy: Hierarchy,
+    scope: Optional[str] = None,
+    via_resource_manager: Optional[bool] = None,
+    include_labels: bool = False,
+    include_tags: bool = False,
+) -> None:
     """Writes the hierarchy to the cache file."""
     try:
         CACHE_DIR.mkdir(parents=True, exist_ok=True)
-        data = _hierarchy_to_dict(hierarchy, scope=scope)
-        with open(CACHE_FILE, "w") as f:
+        data = _hierarchy_to_dict(
+            hierarchy,
+            scope=scope,
+            via_resource_manager=via_resource_manager,
+            include_labels=include_labels,
+            include_tags=include_tags,
+        )
+
+        def opener(path: str, flags: int) -> int:
+            return os.open(path, flags, 0o600)
+
+        with open(CACHE_FILE, "w", opener=opener) as f:
             json.dump(data, f, indent=2)
+        CACHE_FILE.chmod(0o600)
         logger.debug(f"Successfully wrote hierarchy to cache file: {CACHE_FILE}")
     except Exception as e:
         logger.error(f"Failed to write to cache file: {e}")

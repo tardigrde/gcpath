@@ -7,7 +7,7 @@
 [![CI](https://github.com/tardigrde/gcpath/actions/workflows/ci.yml/badge.svg)](https://github.com/tardigrde/gcpath/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/tardigrde/gcpath/branch/main/graph/badge.svg)](https://codecov.io/gh/tardigrde/gcpath)
 
-`gcpath` is an agent-native, read-only CLI for querying Google Cloud Platform resource hierarchy paths. It translates between GCP resource names (e.g., `folders/12345`) and human-readable paths (e.g., `//example.com/department/team`).
+`gcpath` is an agent-native, GCP-read-only CLI for querying Google Cloud Platform resource hierarchy paths. It translates between GCP resource names (e.g., `folders/12345`) and human-readable paths (e.g., `//example.com/department/team`).
 
 ## Why gcpath?
 
@@ -19,7 +19,7 @@ gcpath gives you a single tool that treats the hierarchy as a first-class concep
 
 gcpath is designed from the ground up to be used by AI coding agents (Claude Code, Codex, etc.), not just humans:
 
-- **Fully read-only** — every command is a query, never a mutation. Agents can run gcpath freely with zero risk of modifying your GCP environment.
+- **GCP read-only** — hierarchy commands query GCP and never mutate your cloud environment. Local management commands such as `cache`, `config`, and `hook` only touch local files.
 - **[AXI-compliant](https://axi.md/) output** — defaults to [TOON format](https://github.com/mwmwmw/toon-format), a token-efficient structured format that agents parse natively. Includes pre-computed aggregates, definitive empty states, structured errors, and contextual help sections — no screen-scraping required.
 - **Ambient context hooks** — `gcpath hook install` registers a session-start hook with Claude Code and Codex so the agent automatically knows your GCP hierarchy context when a session begins. No manual prompting needed.
 - **Agent Skill definition** — ships with an [Agent Skills](https://agentskills.io) manifest that teaches agents when to use gcpath, what commands are available, and common workflows — so the agent reaches for the right tool without you telling it to.
@@ -107,7 +107,7 @@ gcpath tree folders/123456789
 gcpath diagram
 
 # Generate a D2 diagram scoped to a folder
-gcpath diagram folders/123456789 --format d2
+gcpath diagram folders/123456789 --diagram-format d2
 
 # Machine-readable output
 gcpath --format json ls -R
@@ -197,7 +197,7 @@ Examples:
 gcpath diagram
 
 # Generate D2 diagram scoped to a folder
-gcpath diagram folders/123456789 --format d2
+gcpath diagram folders/123456789 --diagram-format d2
 
 # Save Mermaid diagram to a file with depth limit
 gcpath diagram -L 3 -o hierarchy.mmd

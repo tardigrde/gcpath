@@ -52,6 +52,11 @@ def path_escape(display_name: str) -> str:
     return urllib.parse.quote(display_name, safe="")
 
 
+def path_unescape(segment: str) -> str:
+    """Decode a single gcpath path segment."""
+    return urllib.parse.unquote(segment)
+
+
 def aggregate_metadata(
     items: List[Union["Folder", "Project"]],
     attr: str,
@@ -110,7 +115,7 @@ class OrganizationNode:
         if not clean_path:
             return self.organization.name
 
-        parts = clean_path.split("/")
+        parts = [path_unescape(part) for part in clean_path.split("/")]
         matches = []
         for folder in self.folders.values():
             if folder.is_path_match(parts):
@@ -139,6 +144,7 @@ class Folder:
     )
     labels: Dict[str, str] = field(default_factory=dict)
     tags: Dict[str, str] = field(default_factory=dict)
+    path_override: Optional[str] = None
 
     def is_path_match(self, path_parts: List[str]) -> bool:
         # path matching logic
@@ -159,6 +165,9 @@ class Folder:
 
     @property
     def path(self) -> str:
+        if self.path_override is not None:
+            return self.path_override
+
         # Reconstruct path
         path_str = "//" + path_escape(self.organization.organization.display_name)
 
@@ -184,9 +193,13 @@ class Project:
     folder: Optional[Folder]
     labels: Dict[str, str] = field(default_factory=dict)
     tags: Dict[str, str] = field(default_factory=dict)
+    path_override: Optional[str] = None
 
     @property
     def path(self) -> str:
+        if self.path_override is not None:
+            return self.path_override
+
         if self.folder:
             return f"{self.folder.path}/{path_escape(self.display_name)}"
         if self.organization:
@@ -212,6 +225,190 @@ class Hierarchy:
         self.folders = list(self._folders_by_name.values())
 
         self._projects_by_name: Dict[str, Project] = {p.name: p for p in projects}
+
+    def _rebuild_indexes(self) -> None:
+        """Rebuild lookup fields after controlled in-memory filtering."""
+        self._orgs_by_name = {o.organization.name: o for o in self.organizations}
+        self._folders_by_name = {}
+        for org in self.organizations:
+            self._folders_by_name.update(org.folders)
+        self.folders = list(self._folders_by_name.values())
+        self._projects_by_name = {p.name: p for p in self.projects}
+
+    @staticmethod
+    def _project_org_name(project: "Project") -> Optional[str]:
+        if project.organization is not None:
+            return project.organization.organization.name
+        if project.folder is not None:
+            return project.folder.organization.organization.name
+        return None
+
+    @classmethod
+    def _clone_view(
+        cls,
+        source_orgs: List[OrganizationNode],
+        selected_folders: Dict[str, set[str]],
+        selected_projects: List[Project],
+        *,
+        include_orgless_projects: bool = False,
+        include_empty_orgs: bool = False,
+    ) -> "Hierarchy":
+        """Clone a filtered hierarchy while preserving original display paths."""
+        org_map: Dict[str, OrganizationNode] = {}
+        folder_map: Dict[str, Folder] = {}
+        cloned_orgs: List[OrganizationNode] = []
+
+        for org in source_orgs:
+            folder_names = selected_folders.get(org.organization.name, set())
+            projects_for_org = [
+                p
+                for p in selected_projects
+                if cls._project_org_name(p) == org.organization.name
+            ]
+            if not folder_names and not projects_for_org and not include_empty_orgs:
+                continue
+
+            org_clone = OrganizationNode(organization=org.organization)
+            org_map[org.organization.name] = org_clone
+            cloned_orgs.append(org_clone)
+
+            for folder_name in folder_names:
+                folder = org.folders.get(folder_name)
+                if folder is None:
+                    continue
+                folder_clone = Folder(
+                    name=folder.name,
+                    display_name=folder.display_name,
+                    ancestors=list(folder.ancestors),
+                    organization=org_clone,
+                    parent=folder.parent,
+                    labels=dict(folder.labels),
+                    tags=dict(folder.tags),
+                    path_override=folder.path,
+                )
+                org_clone.folders[folder.name] = folder_clone
+                folder_map[folder.name] = folder_clone
+
+        cloned_projects: List[Project] = []
+        for project in selected_projects:
+            org_name = cls._project_org_name(project)
+            project_org_clone = org_map.get(org_name or "")
+
+            if project_org_clone is None:
+                if project.organization is None and include_orgless_projects:
+                    cloned_projects.append(
+                        Project(
+                            name=project.name,
+                            project_id=project.project_id,
+                            display_name=project.display_name,
+                            parent=project.parent,
+                            organization=None,
+                            folder=None,
+                            labels=dict(project.labels),
+                            tags=dict(project.tags),
+                            path_override=project.path,
+                        )
+                    )
+                continue
+
+            project_folder_clone = (
+                folder_map.get(project.folder.name)
+                if project.folder is not None
+                else None
+            )
+            cloned_projects.append(
+                Project(
+                    name=project.name,
+                    project_id=project.project_id,
+                    display_name=project.display_name,
+                    parent=project.parent,
+                    organization=project_org_clone,
+                    folder=project_folder_clone,
+                    labels=dict(project.labels),
+                    tags=dict(project.tags),
+                    path_override=project.path,
+                )
+            )
+
+        return cls(cloned_orgs, cloned_projects)
+
+    def filtered_by_org_display_names(self, display_names: List[str]) -> "Hierarchy":
+        """Return a hierarchy containing only the named organizations."""
+        allowed = set(display_names)
+        source_orgs = [o for o in self.organizations if o.organization.display_name in allowed]
+        selected_folders = {
+            o.organization.name: set(o.folders.keys())
+            for o in source_orgs
+        }
+        selected_org_names = {o.organization.name for o in source_orgs}
+        selected_projects = [
+            p for p in self.projects if self._project_org_name(p) in selected_org_names
+        ]
+        return self._clone_view(
+            source_orgs,
+            selected_folders,
+            selected_projects,
+            include_empty_orgs=True,
+        )
+
+    def scoped_to_resource(self, resource_name: str) -> "Hierarchy":
+        """Return a hierarchy view limited to an organization or folder subtree."""
+        if resource_name.startswith(_PREFIX_ORGS):
+            org = self._orgs_by_name.get(resource_name)
+            if org is None:
+                raise ResourceNotFoundError(f"Organization '{resource_name}' not found")
+            selected_folders = {org.organization.name: set(org.folders.keys())}
+            selected_projects = [
+                p for p in self.projects if self._project_org_name(p) == org.organization.name
+            ]
+            return self._clone_view(
+                [org],
+                selected_folders,
+                selected_projects,
+                include_empty_orgs=True,
+            )
+
+        if resource_name.startswith(_PREFIX_FOLDERS):
+            folder = self._folders_by_name.get(resource_name)
+            if folder is None:
+                raise ResourceNotFoundError(f"Folder '{resource_name}' not found")
+            org = folder.organization
+            selected_folder_names = {
+                f.name
+                for f in org.folders.values()
+                if f.name == resource_name or resource_name in f.ancestors
+            }
+            selected_projects = [
+                p
+                for p in self.projects
+                if p.parent in selected_folder_names
+                or (p.folder is not None and resource_name in p.folder.ancestors)
+            ]
+            return self._clone_view(
+                [org],
+                {org.organization.name: selected_folder_names},
+                selected_projects,
+            )
+
+        if resource_name.startswith(_PREFIX_PROJECTS):
+            project = self._projects_by_name.get(resource_name)
+            if project is None:
+                raise ResourceNotFoundError(f"Project '{resource_name}' not found")
+            org_name = self._project_org_name(project)
+            source_orgs = [
+                o for o in self.organizations if o.organization.name == org_name
+            ]
+            project_folder_names: Dict[str, set[str]] = {}
+            if project.folder is not None and org_name is not None:
+                project_folder_names[org_name] = {project.folder.name}
+            return self._clone_view(
+                source_orgs,
+                project_folder_names,
+                [project],
+                include_orgless_projects=project.organization is None,
+            )
+
+        raise ResourceNotFoundError(f"Unsupported resource name '{resource_name}'")
 
     def has_resource(self, resource_name: str) -> bool:
         """True when the resource is present in this hierarchy's lookup maps."""
@@ -329,9 +526,21 @@ class Hierarchy:
     ) -> List[OrganizationNode]:
         """Load organizations and their folders."""
         display_names_set = set(display_names) if display_names else None
+        scope_org_name = cls._scope_root_org_name(scope_resource)
+        if (
+            scope_resource
+            and scope_resource.startswith(_PREFIX_FOLDERS)
+            and scope_org_name is None
+        ):
+            return []
         org_nodes = []
 
         for org in cls._search_organizations(org_client):
+            if scope_org_name and org.name != scope_org_name:
+                logger.debug(
+                    f"Skipping organization '{org.display_name}' (outside scope)"
+                )
+                continue
             if display_names_set and org.display_name not in display_names_set:
                 logger.debug(
                     f"Skipping organization '{org.display_name}' (not in filter)"
@@ -356,6 +565,29 @@ class Hierarchy:
             )
 
         return org_nodes
+
+    @staticmethod
+    def _scope_root_org_name(scope_resource: Optional[str]) -> Optional[str]:
+        """Resolve the organization that owns a scoped resource when possible."""
+        if not scope_resource:
+            return None
+        if scope_resource.startswith(_PREFIX_ORGS):
+            return scope_resource
+        if not scope_resource.startswith(_PREFIX_FOLDERS):
+            return None
+
+        folders_client = resourcemanager_v3.FoldersClient()
+        current = scope_resource
+        while current.startswith(_PREFIX_FOLDERS):
+            try:
+                folder_proto = folders_client.get_folder(name=current)
+            except (exceptions.PermissionDenied, exceptions.NotFound):
+                return None
+            parent = folder_proto.parent
+            if parent.startswith(_PREFIX_ORGS):
+                return parent
+            current = parent
+        return None
 
     @classmethod
     def _load_from_folder_scope(
@@ -450,6 +682,8 @@ class Hierarchy:
             all_projects = cls._load_projects_rm(
                 project_client,
                 [node],
+                scope_resource=scope_resource,
+                recursive=recursive,
                 include_labels=include_labels,
             )
         else:
@@ -482,8 +716,11 @@ class Hierarchy:
     ):
         """Load folders for a single organization."""
         if via_resource_manager:
-            root_parent = query_parent or node.organization.name
-            load_folders_rm(node, root_parent)
+            root_parent = query_parent or scope_resource or node.organization.name
+            effective_recursive = True if scope_resource is None else recursive
+            load_folders_rm(node, root_parent, recursive=effective_recursive)
+            if scope_resource and scope_resource.startswith(_PREFIX_FOLDERS):
+                load_scope_folder(node, scope_resource)
         else:
             # Determine filters for Asset API based on scope_resource and recursive
             folder_parent_filter = None
@@ -527,6 +764,8 @@ class Hierarchy:
             all_projects = cls._load_projects_rm(
                 project_client,
                 org_nodes,
+                scope_resource=scope_resource,
+                recursive=True if scope_resource is None else recursive,
                 include_labels=include_labels,
             )
         else:
@@ -538,10 +777,10 @@ class Hierarchy:
                 include_labels=include_labels,
             )
 
-            # Load organizationless projects
-            existing_project_names = {p.name for p in all_projects}
-            orgless_projects = load_organizationless_projects(existing_project_names)
-            all_projects.extend(orgless_projects)
+            if scope_resource is None:
+                existing_project_names = {p.name for p in all_projects}
+                orgless_projects = load_organizationless_projects(existing_project_names)
+                all_projects.extend(orgless_projects)
 
         return all_projects
 
@@ -550,6 +789,8 @@ class Hierarchy:
         cls,
         project_client,
         org_nodes: List[OrganizationNode],
+        scope_resource: Optional[str] = None,
+        recursive: bool = True,
         include_labels: bool = False,
     ) -> List[Project]:
         """Load projects using Resource Manager API."""
@@ -561,6 +802,11 @@ class Hierarchy:
             logger.debug("GCP API: search_projects() returned successfully")
 
             for p_proto in projects_pager:
+                if scope_resource and not cls._project_in_scope(
+                    p_proto.parent, org_nodes, scope_resource, recursive
+                ):
+                    continue
+
                 # Find parent organization and folder
                 parent_org = None
                 parent_folder = None
@@ -596,6 +842,31 @@ class Hierarchy:
             logger.warning("Permission denied searching projects")
 
         return all_projects
+
+    @staticmethod
+    def _project_in_scope(
+        parent: str,
+        org_nodes: List[OrganizationNode],
+        scope_resource: str,
+        recursive: bool,
+    ) -> bool:
+        if parent == scope_resource:
+            return True
+        if not recursive:
+            return False
+        if scope_resource.startswith(_PREFIX_ORGS):
+            target_orgs = [
+                org for org in org_nodes if org.organization.name == scope_resource
+            ]
+            if parent == scope_resource:
+                return True
+            return any(parent in org.folders for org in target_orgs)
+        if scope_resource.startswith(_PREFIX_FOLDERS):
+            for org in org_nodes:
+                parent_folder = org.folders.get(parent)
+                if parent_folder and scope_resource in parent_folder.ancestors:
+                    return True
+        return False
 
     @classmethod
     def _load_projects_asset_all_orgs(
@@ -646,7 +917,7 @@ class Hierarchy:
             )
 
         parts = trimmed.split("/", 1)
-        org_name = parts[0]
+        org_name = path_unescape(parts[0])
         resource_path = "/" + parts[1] if len(parts) > 1 else "/"
         return org_name, resource_path
 
@@ -863,7 +1134,8 @@ class Hierarchy:
         real_orgs = [
             o for o in self.organizations if o.organization.name != SYNTHETIC_ORG_NAME
         ]
-        real_folders, real_projects = self._real_org_descendants(real_orgs)
+        metric_orgs = real_orgs or list(self.organizations)
+        real_folders, real_projects = self._real_org_descendants(metric_orgs)
 
         max_depth = self._summary_max_depth(real_folders, real_projects)
         label_counter, tag_counter = self._summary_metadata_counters(

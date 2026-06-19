@@ -1,12 +1,15 @@
 import json
 from unittest.mock import patch
 
+import pytest
+
 from gcpath.hooks import (
     _install_claude_code,
     _install_codex,
     _uninstall_claude_code,
     _uninstall_codex,
     _read_json,
+    HookConfigError,
     install_hooks,
     uninstall_hooks,
     get_hook_status,
@@ -24,6 +27,12 @@ class TestReadJson:
         bad_file.write_text("{not valid json")
         result = _read_json(bad_file)
         assert result is None
+
+    def test_malformed_json_strict_raises(self, tmp_path):
+        bad_file = tmp_path / "bad.json"
+        bad_file.write_text("{not valid json")
+        with pytest.raises(HookConfigError):
+            _read_json(bad_file, strict=True)
 
     def test_valid_json(self, tmp_path):
         good_file = tmp_path / "good.json"
@@ -79,6 +88,15 @@ class TestInstallClaudeCode:
             _install_claude_code("/usr/bin/gcpath hook run")
             data = json.loads(settings_path.read_text())
             assert len(data["hooks"]["SessionStart"]) == 2
+
+    def test_malformed_settings_are_not_clobbered(self, tmp_path):
+        settings_path = tmp_path / "settings.json"
+        original = "{not valid json"
+        settings_path.write_text(original)
+        with patch("gcpath.hooks._CLAUDE_SETTINGS_PATH", settings_path):
+            with pytest.raises(HookConfigError):
+                _install_claude_code("/usr/bin/gcpath hook run")
+            assert settings_path.read_text() == original
 
 
 class TestUninstallClaudeCode:

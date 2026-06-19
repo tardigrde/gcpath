@@ -19,6 +19,7 @@ Resource = Union[OrganizationNode, Folder, Project]
 
 # matcher(path, display_name) -> bool
 PatternMatcher = Callable[[str, str], bool]
+MAX_REGEX_PATTERN_LENGTH = 200
 
 
 def get_display_name(obj: Resource) -> str:
@@ -89,6 +90,11 @@ def build_pattern_matcher(pattern: str, regex: bool = False) -> PatternMatcher:
         regex and (pattern.startswith("^//") or pattern.startswith(r"\A//"))
     )
     if regex:
+        if len(pattern) > MAX_REGEX_PATTERN_LENGTH:
+            raise GCPathError(
+                f"Regex pattern too long ({len(pattern)} chars, "
+                f"max {MAX_REGEX_PATTERN_LENGTH}); rejected to limit ReDoS risk"
+            )
         try:
             compiled = re.compile(pattern, re.IGNORECASE)
         except re.error as e:

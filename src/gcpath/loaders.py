@@ -5,6 +5,8 @@ This module handles loading resources from GCP via Resource Manager and Asset AP
 """
 
 import logging
+import re
+import urllib.parse
 from typing import Dict, List, Optional
 
 from google.cloud import resourcemanager_v3, asset_v1  # type: ignore
@@ -20,6 +22,14 @@ logger = logging.getLogger(__name__)
 
 _FOLDER_PREFIX = "folders/"
 _MISSING_STRUCT_FIELD_MARKER = "does not exist in STRUCT"
+_RESOURCE_FILTER_RE = re.compile(r"^(organizations|folders)/[A-Za-z0-9_-]+$")
+
+
+def _sql_resource_literal(resource: str) -> str:
+    """Validate and quote a resource name for Asset API SQL."""
+    if not _RESOURCE_FILTER_RE.fullmatch(resource):
+        raise ValueError(f"Invalid resource filter '{resource}'")
+    return resource.replace("'", "''")
 
 
 def _query_assets_with_labels_fallback(
@@ -83,9 +93,11 @@ def build_folder_sql_query(
     )
 
     if parent_filter:
+        parent_filter = _sql_resource_literal(parent_filter)
         # Scoped query: only direct children of the specified parent
         return f"{base_query} AND resource.data.parent = '{parent_filter}'"
     elif ancestors_filter:
+        ancestors_filter = _sql_resource_literal(ancestors_filter)
         # Recursive query: all descendants of the specified ancestor
         # Use IN UNNEST() for array membership check in BigQuery SQL
         # Exclude the ancestor folder itself from results
@@ -123,11 +135,13 @@ def build_project_sql_query(
     )
 
     if parent_filter:
+        parent_filter = _sql_resource_literal(parent_filter)
         # Scoped query: only direct children of the specified parent
         # Note: parent is a STRUCT with 'type' and 'id' fields
         parent_id = parent_filter.split("/")[-1]
         return f"{base_query} AND resource.data.parent.id = '{parent_id}'"
     elif ancestors_filter:
+        ancestors_filter = _sql_resource_literal(ancestors_filter)
         # Recursive query: all descendants of the specified ancestor
         # Use IN UNNEST() for array membership check in BigQuery SQL
         return f"{base_query} AND '{ancestors_filter}' IN UNNEST(ancestors)"
@@ -136,7 +150,7 @@ def build_project_sql_query(
         return base_query
 
 
-def load_folders_rm(node, root_parent: str):
+def load_folders_rm(node, root_parent: str, recursive: bool = True):
     """Load folders using Resource Manager API (recursive calls).
 
     Args:
@@ -170,7 +184,8 @@ def load_folders_rm(node, root_parent: str):
                     parent=parent_name,  # The parent we're listing under
                 )
                 node.folders[f.name] = f
-                recurse(f.name, new_ancestors)
+                if recursive:
+                    recurse(f.name, new_ancestors)
         except exceptions.PermissionDenied:
             logger.warning(f"Permission denied listing folders for {parent_name}")
 
@@ -274,7 +289,9 @@ def load_scope_folder(node, scope_resource: str, root_ancestor: Optional[str] = 
 
         # Build ancestors by traversing parent chain
         ancestors_chain = [folder_proto.name]
+        display_chain = [folder_proto.display_name]
         current_parent = folder_proto.parent
+        path_override = None
 
         while current_parent and current_parent.startswith(_FOLDER_PREFIX):
             ancestors_chain.append(current_parent)
@@ -290,11 +307,14 @@ def load_scope_folder(node, scope_resource: str, root_ancestor: Optional[str] = 
                         if a != current_parent and a not in ancestors_chain
                     ]
                 )
+                escaped_leaf = urllib.parse.quote(folder_proto.display_name, safe="")
+                path_override = f"{loaded_folder.path}/{escaped_leaf}"
                 break
             else:
                 # Fetch the parent folder
                 try:
                     parent_proto = folders_client.get_folder(name=current_parent)
+                    display_chain.append(parent_proto.display_name)
                     current_parent = parent_proto.parent
                 except Exception:
                     break
@@ -302,6 +322,13 @@ def load_scope_folder(node, scope_resource: str, root_ancestor: Optional[str] = 
         # Add root at the end
         if not ancestors_chain or ancestors_chain[-1] != root:
             ancestors_chain.append(root)
+        if path_override is None and root.startswith("organizations/"):
+            escaped_org = urllib.parse.quote(node.organization.display_name, safe="")
+            escaped_segments = [
+                urllib.parse.quote(segment, safe="")
+                for segment in reversed(display_chain)
+            ]
+            path_override = "//" + "/".join([escaped_org, *escaped_segments])
 
         folder_obj = Folder(
             name=folder_proto.name,
@@ -309,6 +336,7 @@ def load_scope_folder(node, scope_resource: str, root_ancestor: Optional[str] = 
             ancestors=ancestors_chain,
             organization=node,
             parent=folder_proto.parent,
+            path_override=path_override,
         )
         node.folders[folder_proto.name] = folder_obj
         logger.debug(

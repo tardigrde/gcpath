@@ -13,7 +13,17 @@ compatibility: >
   Requires gcpath CLI (pip install gcpath or uvx gcpath) and GCP Application
   Default Credentials (gcloud auth application-default login or
   GOOGLE_APPLICATION_CREDENTIALS env var).
-allowed-tools: Bash(gcpath:*) Bash(uvx gcpath:*)
+allowed-tools: >
+  Bash(gcpath ls:*) Bash(gcpath tree:*) Bash(gcpath diagram:*)
+  Bash(gcpath stats:*) Bash(gcpath summary:*) Bash(gcpath audit:*)
+  Bash(gcpath name:*) Bash(gcpath path:*) Bash(gcpath find:*)
+  Bash(gcpath ancestors:*) Bash(gcpath labels:*) Bash(gcpath tags:*)
+  Bash(gcpath open:*) Bash(gcpath cache status:*) Bash(gcpath config show:*)
+  Bash(gcpath hook status:*) Bash(gcpath hook run:*)
+  Bash(uvx gcpath ls:*) Bash(uvx gcpath tree:*) Bash(uvx gcpath diagram:*)
+  Bash(uvx gcpath stats:*) Bash(uvx gcpath summary:*)
+  Bash(uvx gcpath name:*) Bash(uvx gcpath path:*) Bash(uvx gcpath find:*)
+  Bash(uvx gcpath ancestors:*) Bash(uvx gcpath labels:*) Bash(uvx gcpath tags:*)
 metadata:
   author: tardigrde
   repository: https://github.com/tardigrde/gcpath
@@ -21,7 +31,7 @@ metadata:
 
 # gcpath
 
-A read-only CLI for querying GCP resource hierarchy paths. Translates between
+A GCP-read-only CLI for querying GCP resource hierarchy paths. Translates between
 GCP resource names (`folders/12345`) and human-readable paths
 (`//example.com/dept/team`) and lets you explore the org → folder → project
 tree.
@@ -43,7 +53,8 @@ tree.
 - IAM policy management (`gcloud projects get-iam-policy` is the right tool)
 - Billing or cost queries
 - Compute, GKE, Cloud Run, or other product-level resources
-- Resource creation or modification (gcpath is read-only)
+- Resource creation or modification (gcpath never mutates GCP)
+- Local cache/config/hook changes unless the user explicitly asks for them
 
 ## Running gcpath
 
@@ -109,8 +120,8 @@ gcpath ls folders/123 -R -L 2          # flat list, depth 2
 ### Machine-readable output
 
 ```bash
-gcpath --json ls -R | jq '.[] | .path'
-gcpath --yaml ancestors projects/my-project
+gcpath --format json ls -R | jq '.[] | .path'
+gcpath --format yaml ancestors projects/my-project
 ```
 
 ### Filter by GCP labels or tags
@@ -124,7 +135,7 @@ gcpath find "*" --tag cost-center=eng
 
 | Flag | Short | Description |
 |------|-------|-------------|
-| `--json` / `--yaml` | | Structured output (global) |
+| `--format FORMAT` | | `toon`, `json`, `yaml`, or `rich` (global, before subcommand) |
 | `--force-refresh` | `-F` | Bypass cache, re-fetch from GCP |
 | `--recursive` | `-R` | List all descendants (`ls` only) |
 | `--level N` | `-L` | Max depth |
@@ -138,6 +149,7 @@ For the full flag reference, read [`references/commands.md`](references/commands
 - `tree`, `diagram`, `stats` do not accept projects as starting point (leaf nodes).
 - Organizationless projects appear under `//_/` in paths.
 - `--label` / `--tag` filters are ANDed when repeated.
-- `gcpath path` and `gcpath ancestors` hit the GCP API directly — no cache needed, always fast.
-- Scoped loads (`gcpath ls folders/123`) are not cached unless that folder is the configured entrypoint.
+- `gcpath path` and `gcpath ancestors` hit the GCP API directly — no cache needed.
+- Scoped loads (`gcpath ls folders/123`) are cached only when that folder is the configured entrypoint; otherwise a fresh global cache can serve the subtree if it already contains it.
+- `gcpath cache refresh`, `cache clear`, `config set-entrypoint`, `config clear-entrypoint`, and `hook install/uninstall` write local files. Run them only on explicit user request.
 - Use `-U` if you get "Cloud Asset API not enabled" errors.

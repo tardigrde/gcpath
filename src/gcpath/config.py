@@ -6,6 +6,7 @@ Stores user preferences (e.g., default entrypoint) in ~/.gcpath/config.json.
 
 import json
 import logging
+import re
 from typing import Any, Dict, Optional
 
 from gcpath.cache import CACHE_DIR
@@ -13,6 +14,7 @@ from gcpath.cache import CACHE_DIR
 logger = logging.getLogger(__name__)
 
 CONFIG_FILE = CACHE_DIR / "config.json"
+_ENTRYPOINT_RE = re.compile(r"^(organizations|folders)/[A-Za-z0-9_-]+$")
 
 
 def read_config() -> Dict[str, Any]:
@@ -36,11 +38,10 @@ def write_config(config: Dict[str, Any]) -> None:
 
 def _validate_entrypoint(resource: str) -> None:
     """Validate that the entrypoint is a valid resource name."""
-    if not resource.startswith("organizations/") and not resource.startswith(
-        "folders/"
-    ):
+    if not _ENTRYPOINT_RE.fullmatch(resource):
         raise ValueError(
-            f"Entrypoint must start with 'organizations/' or 'folders/', got '{resource}'"
+            "Entrypoint must be a valid organization or folder resource name "
+            f"and must start with organizations/ID or folders/ID, got '{resource}'"
         )
 
 

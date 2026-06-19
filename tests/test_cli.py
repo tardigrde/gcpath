@@ -646,7 +646,12 @@ def test_ls_entrypoint_uses_cache(
 
     result = runner.invoke(app, ["ls"])
     assert result.exit_code == 0
-    mock_read_cache.assert_called_with(scope="folders/100")
+    mock_read_cache.assert_called_with(
+        scope="folders/100",
+        via_resource_manager=False,
+        include_labels=False,
+        include_tags=False,
+    )
     mock_load.assert_not_called()
 
 
@@ -663,7 +668,13 @@ def test_ls_entrypoint_writes_cache(
 
     result = runner.invoke(app, ["ls"])
     assert result.exit_code == 0
-    mock_write.assert_called_once_with(mock_hierarchy, scope="folders/100")
+    mock_write.assert_called_once_with(
+        mock_hierarchy,
+        scope="folders/100",
+        via_resource_manager=False,
+        include_labels=False,
+        include_tags=False,
+    )
 
 
 @patch("gcpath.cli.get_entrypoint", return_value="folders/100")
@@ -1455,6 +1466,55 @@ def test_cache_status_rich_no_cache(mock_info):
     assert result.exit_code == 0
 
 
+@patch("gcpath.cli.get_cache_info")
+def test_cache_status_json(mock_info):
+    mock_info.return_value = CacheInfo(
+        exists=True,
+        fresh=True,
+        age_seconds=60.0,
+        size_bytes=4096,
+        version=2,
+        org_count=1,
+        folder_count=3,
+        project_count=5,
+        scope=None,
+        via_resource_manager=False,
+        include_labels=True,
+        include_tags=False,
+    )
+    result = runner.invoke(app, ["--format", "json", "cache", "status"])
+    assert result.exit_code == 0
+    data = json.loads(result.stdout)
+    assert data["exists"] is True
+    assert data["via_resource_manager"] is False
+    assert data["include_labels"] is True
+
+
+@patch("gcpath.cli.read_config", return_value={"entrypoint": "folders/123"})
+def test_config_show_json(mock_read):
+    result = runner.invoke(app, ["--format", "json", "config", "show"])
+    assert result.exit_code == 0
+    data = json.loads(result.stdout)
+    assert data["config"]["entrypoint"] == "folders/123"
+
+
+@patch(
+    "gcpath.cli.get_hook_status",
+    return_value={
+        "codex": {
+            "installed": True,
+            "path_ok": True,
+            "location": "~/.codex/hooks.json",
+        },
+    },
+)
+def test_hook_status_json(mock_status):
+    result = runner.invoke(app, ["--format", "json", "hook", "status"])
+    assert result.exit_code == 0
+    data = json.loads(result.stdout)
+    assert data["codex"]["installed"] is True
+
+
 @patch("gcpath.cli.read_config", return_value={"entrypoint": "folders/123"})
 def test_config_show_rich(mock_read):
     result = runner.invoke(app, ["--format", "rich", "config", "show"])
@@ -1739,9 +1799,16 @@ def test_mcp_missing_dependency_emits_help():
 
     # Force `from mcp.server.fastmcp import FastMCP` (inside build_server) to
     # raise ImportError so we always exercise the missing-extra branch.
+    original_module = sys.modules.get("gcpath.mcp_server")
     sys.modules.pop("gcpath.mcp_server", None)
-    with patch.dict(sys.modules, {"mcp.server.fastmcp": None}):
-        result = runner.invoke(app, ["mcp", "--transport", "stdio"])
+    try:
+        with patch.dict(sys.modules, {"mcp.server.fastmcp": None}):
+            result = runner.invoke(app, ["mcp", "--transport", "stdio"])
+    finally:
+        if original_module is not None:
+            sys.modules["gcpath.mcp_server"] = original_module
+        else:
+            sys.modules.pop("gcpath.mcp_server", None)
     assert result.exit_code == 1
     assert "MCP support requires" in result.stdout
 

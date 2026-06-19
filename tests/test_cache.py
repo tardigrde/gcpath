@@ -4,7 +4,7 @@ Tests for the cache module.
 
 import json
 from datetime import datetime, timezone, timedelta
-from unittest.mock import patch
+from unittest.mock import ANY, patch
 from pathlib import Path
 
 import pytest
@@ -215,8 +215,9 @@ def test_write_cache(
     """Test writing to the cache file."""
     write_cache(mock_hierarchy)
     mock_cache_dir.mkdir.assert_called_once_with(parents=True, exist_ok=True)
-    mock_open.assert_called_once_with(mock_cache_file, "w")
+    mock_open.assert_called_once_with(mock_cache_file, "w", opener=ANY)
     mock_json_dump.assert_called_once()
+    mock_cache_file.chmod.assert_called_once_with(0o600)
 
     # Verify the structure passed to json.dump has version
     args, _ = mock_json_dump.call_args
@@ -401,6 +402,19 @@ def test_hierarchy_to_dict_without_scope(mock_hierarchy):
     assert result["scope"] is None
 
 
+def test_hierarchy_to_dict_with_cache_capabilities(mock_hierarchy):
+    """API mode and metadata completeness are serialized."""
+    result = _hierarchy_to_dict(
+        mock_hierarchy,
+        via_resource_manager=False,
+        include_labels=True,
+        include_tags=True,
+    )
+    assert result["via_resource_manager"] is False
+    assert result["include_labels"] is True
+    assert result["include_tags"] is True
+
+
 @patch("gcpath.cache.CACHE_FILE")
 @patch("builtins.open")
 @patch("json.load")
@@ -474,6 +488,57 @@ def test_read_cache_old_cache_rejected_for_scoped(
 
     hierarchy = read_cache(scope="folders/100")
     assert hierarchy is None
+
+
+@patch("gcpath.cache.CACHE_FILE")
+@patch("builtins.open")
+@patch("json.load")
+def test_read_cache_api_mode_mismatch(mock_json_load, mock_open, mock_cache_file):
+    """Returns None when the cached API mode differs from the requested mode."""
+    mock_cache_file.exists.return_value = True
+    mock_json_load.return_value = {
+        "version": CACHE_VERSION,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "scope": None,
+        "via_resource_manager": False,
+        "include_labels": False,
+        "include_tags": False,
+        "organizations": [],
+        "organizationless_projects": [],
+    }
+
+    assert read_cache(via_resource_manager=True) is None
+
+
+@patch("gcpath.cache.CACHE_FILE")
+@patch("builtins.open")
+@patch("json.load")
+def test_read_cache_rejects_missing_metadata(mock_json_load, mock_open, mock_cache_file):
+    """Commands requiring labels/tags must not use less complete cache data."""
+    mock_cache_file.exists.return_value = True
+    mock_json_load.return_value = {
+        "version": CACHE_VERSION,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "scope": None,
+        "via_resource_manager": True,
+        "include_labels": False,
+        "include_tags": False,
+        "organizations": [],
+        "organizationless_projects": [],
+    }
+
+    assert read_cache(include_labels=True) is None
+    assert read_cache(include_tags=True) is None
+
+
+def test_dict_to_hierarchy_malformed_v2_returns_none():
+    """Malformed current-version cache data is ignored instead of crashing."""
+    malformed = {
+        "version": CACHE_VERSION,
+        "organizations": [{"folders": {}, "projects": []}],
+        "organizationless_projects": [],
+    }
+    assert _dict_to_hierarchy(malformed) is None
 
 
 @patch("gcpath.cache.CACHE_DIR")

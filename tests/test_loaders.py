@@ -7,6 +7,7 @@ from gcpath.loaders import (
     build_folder_sql_query,
     build_project_sql_query,
     load_folders_asset,
+    load_scope_folder,
     load_projects_asset,
     load_organizationless_projects,
     _build_single_ancestor_chain,
@@ -50,6 +51,11 @@ def test_build_folder_sql_query_with_ancestors_filter():
     assert "name != '//cloudresourcemanager.googleapis.com/folders/456'" in query
 
 
+def test_build_folder_sql_query_rejects_invalid_filter():
+    with pytest.raises(ValueError, match="Invalid resource filter"):
+        build_folder_sql_query(parent_filter="folders/456' OR '1'='1")
+
+
 def test_build_project_sql_query_no_filter():
     """Test building project SQL query without filters."""
     query = build_project_sql_query()
@@ -70,6 +76,11 @@ def test_build_project_sql_query_with_ancestors_filter():
     query = build_project_sql_query(ancestors_filter="folders/456")
     assert "lifecycleState = 'ACTIVE'" in query
     assert "'folders/456' IN UNNEST(ancestors)" in query
+
+
+def test_build_project_sql_query_rejects_invalid_filter():
+    with pytest.raises(ValueError, match="Invalid resource filter"):
+        build_project_sql_query(ancestors_filter="folders/456; DROP TABLE x")
 
 
 # Test load_folders_asset
@@ -504,6 +515,34 @@ def test_load_folders_asset_root_ancestor(mock_asset_client_cls, mock_org_node):
     child = mock_org_node.folders["folders/child"]
     # Ancestor chain should end with root_ancestor, not org
     assert child.ancestors[-1] == "folders/999"
+
+
+@patch("google.cloud.resourcemanager_v3.FoldersClient")
+def test_load_scope_folder_sets_full_path_override(mock_folders_client_cls, mock_org_node):
+    """RM scoped roots preserve full ancestry paths even without ancestor folders loaded."""
+    folders_client = mock_folders_client_cls.return_value
+    folders_client.get_folder.side_effect = [
+        resourcemanager_v3.Folder(
+            name="folders/scope",
+            display_name="Scope",
+            parent="folders/parent",
+        ),
+        resourcemanager_v3.Folder(
+            name="folders/parent",
+            display_name="Parent",
+            parent="organizations/123",
+        ),
+    ]
+
+    load_scope_folder(mock_org_node, "folders/scope")
+
+    folder = mock_org_node.folders["folders/scope"]
+    assert folder.ancestors == [
+        "folders/scope",
+        "folders/parent",
+        "organizations/123",
+    ]
+    assert folder.path == "//example.com/Parent/Scope"
 
 
 @patch("google.cloud.asset_v1.AssetServiceClient")
