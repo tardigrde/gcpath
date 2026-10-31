@@ -421,6 +421,54 @@ def test_cache_refresh_reports_write_failure(
     assert "Unexpected error" not in result.stdout
 
 
+@patch("gcpath.cli.write_cache")
+@patch("gcpath.core.Hierarchy.load")
+def test_cache_refresh_json_output(
+    mock_load, mock_write, mock_hierarchy, mock_get_cache_info_home
+):
+    mock_load.return_value = mock_hierarchy
+    mock_get_cache_info_home.return_value = CacheInfo(
+        exists=True,
+        fresh=True,
+        age_seconds=2.0,
+        size_bytes=1024,
+        version=2,
+        org_count=1,
+        folder_count=2,
+        project_count=2,
+    )
+    result = runner.invoke(app, ["--format", "json", "cache", "refresh"])
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["refreshed"] is True
+    assert payload["organizations"] == 1
+    assert payload["folders"] == 2
+    assert payload["projects"] == 2
+
+
+@patch("gcpath.cli.write_cache")
+@patch("gcpath.core.Hierarchy.load")
+def test_cache_refresh_json_write_failure(
+    mock_load, mock_write, mock_hierarchy, mock_get_cache_info_home
+):
+    mock_load.return_value = mock_hierarchy
+    mock_get_cache_info_home.return_value = CacheInfo(
+        exists=False,
+        fresh=False,
+        age_seconds=None,
+        size_bytes=None,
+        version=None,
+        org_count=0,
+        folder_count=0,
+        project_count=0,
+    )
+    result = runner.invoke(app, ["--format", "json", "cache", "refresh"])
+    assert result.exit_code == 1
+    payload = json.loads(result.stdout)
+    assert payload["refreshed"] is False
+    assert "not written" in payload["error"]
+
+
 def test_home_stale_cache(mock_get_cache_info_home):
     mock_get_cache_info_home.return_value = CacheInfo(
         exists=True,

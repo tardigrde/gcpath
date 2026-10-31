@@ -4,7 +4,7 @@ import logging
 import re
 from pathlib import Path
 from dataclasses import dataclass
-from typing import Optional, List, Dict, Union
+from typing import Optional, List, Dict, Union, cast
 from urllib.parse import unquote
 from typing_extensions import Annotated
 from rich import print as rprint
@@ -444,8 +444,7 @@ def cache_refresh(ctx: typer.Context) -> None:
         info = get_cache_info()
         if not info.exists:
             if fmt in ("json", "yaml"):
-                dumper = _get_dumper(fmt)
-                assert dumper is not None
+                dumper = cast(Callable[[Any], str], _get_dumper(fmt))
                 print(
                     dumper(
                         {
@@ -468,8 +467,7 @@ def cache_refresh(ctx: typer.Context) -> None:
             f"{info.folder_count} folders, {info.project_count} projects"
         )
         if fmt in ("json", "yaml"):
-            dumper = _get_dumper(fmt)
-            assert dumper is not None
+            dumper = cast(Callable[[Any], str], _get_dumper(fmt))
             print(
                 dumper(
                     {
