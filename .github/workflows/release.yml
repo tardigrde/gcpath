@@ -35,14 +35,27 @@ jobs:
         git config user.email "github-actions[bot]@users.noreply.github.com"
     
     - name: Semantic Release
+      id: semantic_release
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
-        uv run --with 'python-semantic-release>=9,<10' semantic-release version
-        uv run --with 'python-semantic-release>=9,<10' semantic-release publish
+        set -euo pipefail
+        before=$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])")
+        uv tool run --no-build --from 'python-semantic-release==9.21.2' semantic-release version
+        after=$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])")
+        if [ "$before" = "$after" ]; then
+          echo "released=false" >> "$GITHUB_OUTPUT"
+          echo "No release needed (version remains $after)."
+        else
+          echo "released=true" >> "$GITHUB_OUTPUT"
+          echo "Released $before -> $after"
+          uv tool run --no-build --from 'python-semantic-release==9.21.2' semantic-release publish
+        fi
     
     - name: Build package
+      if: steps.semantic_release.outputs.released == 'true'
       run: uv build
     
     - name: Publish to PyPI
+      if: steps.semantic_release.outputs.released == 'true'
       uses: pypa/gh-action-pypi-publish@release/v1
