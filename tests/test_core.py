@@ -1059,3 +1059,170 @@ def test_has_resource():
     assert h.has_resource("folders/1")
     assert h.has_resource("projects/p1")
     assert not h.has_resource("folders/999")
+
+
+def _make_org(name="organizations/123", display_name="org"):
+    return OrganizationNode(
+        organization=resourcemanager_v3.Organization(
+            name=name, display_name=display_name
+        )
+    )
+
+
+def test_clone_project_includes_orgless_project():
+    project = Project(
+        name="projects/orgless",
+        project_id="orgless",
+        display_name="Orgless",
+        parent="",
+        organization=None,
+        folder=None,
+    )
+
+    clone = Hierarchy._clone_project(project, {}, {}, include_orgless_projects=True)
+
+    assert clone is not None
+    assert clone.name == "projects/orgless"
+    assert clone.organization is None
+    assert clone.folder is None
+
+
+def test_clone_project_skips_orgless_project_when_excluded():
+    project = Project(
+        name="projects/orgless",
+        project_id="orgless",
+        display_name="Orgless",
+        parent="",
+        organization=None,
+        folder=None,
+    )
+
+    assert Hierarchy._clone_project(project, {}, {}, False) is None
+
+
+@pytest.mark.parametrize(
+    ("scope_resource", "recursive", "expected"),
+    [
+        (None, True, (None, None)),
+        (None, False, ("organizations/123", None)),
+        ("folders/1", True, (None, "folders/1")),
+        ("folders/1", False, ("folders/1", None)),
+    ],
+)
+def test_folder_scope_filters(scope_resource, recursive, expected):
+    assert (
+        Hierarchy._folder_scope_filters(scope_resource, recursive, "organizations/123")
+        == expected
+    )
+
+
+def test_find_project_parent_org():
+    org = _make_org()
+
+    parent_org, parent_folder = Hierarchy._find_project_parent(
+        "organizations/123", [org]
+    )
+
+    assert parent_org is org
+    assert parent_folder is None
+
+
+def test_find_project_parent_folder():
+    org = _make_org()
+    folder = Folder(
+        name="folders/1",
+        display_name="folder",
+        ancestors=["folders/1", "organizations/123"],
+        organization=org,
+        parent="organizations/123",
+    )
+    org.folders["folders/1"] = folder
+
+    parent_org, parent_folder = Hierarchy._find_project_parent("folders/1", [org])
+
+    assert parent_org is org
+    assert parent_folder is folder
+
+
+def test_find_project_parent_unknown():
+    assert Hierarchy._find_project_parent("projects/1", []) == (None, None)
+
+
+def test_resolve_folder_scope_org_stops_on_non_folder_parent():
+    folder = MagicMock()
+    folder.parent = "projects/123"
+
+    assert Hierarchy._resolve_folder_scope_org(MagicMock(), MagicMock(), folder) == (
+        None,
+        None,
+    )
+
+
+def test_resolve_folder_scope_org_handles_org_permission_denied():
+    folder = MagicMock()
+    folder.parent = "organizations/123"
+    org_client = MagicMock()
+    org_client.get_organization.side_effect = exceptions.PermissionDenied("denied")
+
+    assert Hierarchy._resolve_folder_scope_org(
+        MagicMock(), org_client, folder
+    ) == (None, None)
+
+
+def test_resolve_folder_scope_org_handles_parent_permission_denied():
+    folder = MagicMock()
+    folder.parent = "folders/1"
+    folders_client = MagicMock()
+    folders_client.get_folder.side_effect = exceptions.PermissionDenied("denied")
+
+    assert Hierarchy._resolve_folder_scope_org(
+        folders_client, MagicMock(), folder
+    ) == (None, None)
+
+
+def test_resolve_folder_scope_org_handles_parent_error():
+    folder = MagicMock()
+    folder.parent = "folders/1"
+    folders_client = MagicMock()
+    folders_client.get_folder.side_effect = RuntimeError("boom")
+
+    assert Hierarchy._resolve_folder_scope_org(
+        folders_client, MagicMock(), folder
+    ) == (None, None)
+
+
+def test_load_folders_for_org_loads_recursive_scope_folder():
+    node = MagicMock()
+    node.organization.name = "organizations/123"
+
+    with (
+        patch("gcpath.core.load_folders_asset") as mock_load_folders,
+        patch("gcpath.core.load_scope_folder") as mock_load_scope,
+    ):
+        Hierarchy._load_folders_for_org(
+            node,
+            via_resource_manager=False,
+            scope_resource="folders/1",
+            recursive=True,
+        )
+
+    mock_load_folders.assert_called_once()
+    mock_load_scope.assert_called_once_with(node, "folders/1", root_ancestor=None)
+
+
+def test_resolve_folder_scope_org_walks_parent_folders():
+    folder = MagicMock()
+    folder.parent = "folders/1"
+    parent = MagicMock()
+    parent.parent = "organizations/123"
+    folders_client = MagicMock()
+    folders_client.get_folder.return_value = parent
+    org = MagicMock()
+    org.name = "organizations/123"
+    org.display_name = "Example Org"
+    org_client = MagicMock()
+    org_client.get_organization.return_value = org
+
+    assert Hierarchy._resolve_folder_scope_org(
+        folders_client, org_client, folder
+    ) == ("organizations/123", "Example Org")
