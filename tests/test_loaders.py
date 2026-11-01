@@ -1207,3 +1207,66 @@ def test_load_tags_asset_unexpected_error(mock_asset_client_cls, caplog):
 
     assert "Error querying tag bindings via Asset API" in caplog.text
     assert "boom" in caplog.text
+
+
+def test_build_scope_chain_uses_loaded_parent():
+    from gcpath.loaders import _build_scope_chain
+
+    node = MagicMock()
+    loaded_parent = MagicMock()
+    loaded_parent.ancestors = ["folders/parent", "organizations/1"]
+    loaded_parent.path = "//Org/Parent"
+    node.folders = {"folders/parent": loaded_parent}
+
+    folder_proto = MagicMock()
+    folder_proto.name = "folders/child"
+    folder_proto.display_name = "Child"
+    folder_proto.parent = "folders/parent"
+
+    ancestors, display, path = _build_scope_chain(
+        MagicMock(), folder_proto, node, "organizations/1"
+    )
+
+    assert ancestors == ["folders/child", "folders/parent", "organizations/1"]
+    assert display == ["Child"]
+    assert path == "//Org/Parent/Child"
+
+
+def test_build_scope_chain_stops_on_parent_error():
+    from gcpath.loaders import _build_scope_chain
+
+    node = MagicMock()
+    node.folders = {}
+    folder_proto = MagicMock()
+    folder_proto.name = "folders/child"
+    folder_proto.display_name = "Child"
+    folder_proto.parent = "folders/parent"
+    folders_client = MagicMock()
+    folders_client.get_folder.side_effect = RuntimeError("boom")
+
+    ancestors, display, path = _build_scope_chain(
+        folders_client, folder_proto, node, "organizations/1"
+    )
+
+    assert ancestors == ["folders/child", "folders/parent", "organizations/1"]
+    assert display == ["Child"]
+    assert path is None
+
+
+def test_load_scope_folder_returns_when_already_loaded(mock_org_node):
+    mock_org_node.folders["folders/scope"] = MagicMock()
+
+    with patch("gcpath.loaders.resourcemanager_v3.FoldersClient") as client_cls:
+        load_scope_folder(mock_org_node, "folders/scope")
+
+    client_cls.assert_not_called()
+
+
+def test_load_scope_folder_logs_unexpected_error(mock_org_node, caplog):
+    with patch("gcpath.loaders.resourcemanager_v3.FoldersClient") as client_cls:
+        client_cls.return_value.get_folder.side_effect = RuntimeError("boom")
+
+        with caplog.at_level(logging.WARNING, logger="gcpath.loaders"):
+            load_scope_folder(mock_org_node, "folders/scope")
+
+    assert "Could not load scope folder folders/scope" in caplog.text
