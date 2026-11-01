@@ -205,7 +205,7 @@ def read_cache_raw() -> Optional[Dict[str, Any]]:
         logger.warning(f"Could not read cache file due to an error: {e}")
         return None
     except Exception as e:
-        logger.error(f"An unexpected error occurred while reading cache: {e}")
+        logger.exception(f"An unexpected error occurred while reading cache: {e}")
         return None
 
 
@@ -383,7 +383,7 @@ def write_cache(
         CACHE_FILE.chmod(0o600)
         logger.debug(f"Successfully wrote hierarchy to cache file: {CACHE_FILE}")
     except Exception as e:
-        logger.error(f"Failed to write to cache file: {e}")
+        logger.exception(f"Failed to write to cache file: {e}")
 
 
 def clear_cache() -> bool:
@@ -394,5 +394,5 @@ def clear_cache() -> bool:
             logger.debug(f"Successfully deleted cache file: {CACHE_FILE}")
             return True
     except Exception as e:
-        logger.error(f"Failed to delete cache file: {e}")
+        logger.exception(f"Failed to delete cache file: {e}")
     return False

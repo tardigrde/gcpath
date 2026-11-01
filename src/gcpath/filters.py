@@ -87,7 +87,7 @@ def build_pattern_matcher(pattern: str, regex: bool = False) -> PatternMatcher:
     Raises GCPathError for an invalid regex.
     """
     against_path = pattern.startswith("//") or (
-        regex and (pattern.startswith("^//") or pattern.startswith(r"\A//"))
+        regex and pattern.startswith(("^//", r"\A//"))
     )
     if regex:
         if len(pattern) > MAX_REGEX_PATTERN_LENGTH:

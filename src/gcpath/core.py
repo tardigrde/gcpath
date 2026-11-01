@@ -609,7 +609,7 @@ class Hierarchy:
         try:
             folder_proto = folders_client.get_folder(name=scope_resource)
         except Exception as e:
-            logger.error(f"Could not access folder {scope_resource}: {e}")
+            logger.exception(f"Could not access folder {scope_resource}: {e}")
             raise
 
         # Try to resolve the real org by traversing parents upward
@@ -1134,8 +1134,7 @@ class Hierarchy:
         real_orgs = [
             o for o in self.organizations if o.organization.name != SYNTHETIC_ORG_NAME
         ]
-        metric_orgs = real_orgs or list(self.organizations)
-        real_folders, real_projects = self._real_org_descendants(metric_orgs)
+        real_folders, real_projects = self._real_org_descendants()
 
         max_depth = self._summary_max_depth(real_folders, real_projects)
         label_counter, tag_counter = self._summary_metadata_counters(
@@ -1164,7 +1163,7 @@ class Hierarchy:
         }
 
     def _real_org_descendants(
-        self, real_orgs: List["OrganizationNode"]
+        self,
     ) -> tuple[List["Folder"], List["Project"]]:
         """Drop synthetic-org descendants from summary metrics.
 
