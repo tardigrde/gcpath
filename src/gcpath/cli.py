@@ -1,6 +1,7 @@
 import shutil
 import typer
 import logging
+from click import get_current_context
 import re
 from pathlib import Path
 from dataclasses import dataclass
@@ -1176,7 +1177,6 @@ def _parse_fields(fields_str: str | None) -> Tuple[str, ...] | None:
 
 @app.command()
 def ls(
-    ctx: typer.Context,
     resource: Annotated[
         str | None,
         typer.Argument(
@@ -1216,6 +1216,7 @@ def ls(
 ) -> None:
     """List folders and projects. Defaults to the root organization."""
     try:
+        ctx = cast(typer.Context, get_current_context())
         _validate_type_filter(resource_type)
 
         parsed_fields = _parse_fields(fields)
