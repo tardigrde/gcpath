@@ -2098,3 +2098,48 @@ def test_find_ids_flag(mock_load, mock_hierarchy):
     assert result.exit_code == 0
     assert "resource_name" in result.stdout
     assert "folders/1" in result.stdout
+
+
+def test_resolve_target_path_returns_none_on_error():
+    from gcpath.cli import _resolve_target_path
+
+    with (
+        patch("gcpath.cli._cached_path_for", return_value=None),
+        patch(
+            "gcpath.cli.Hierarchy.resolve_ancestry",
+            side_effect=GCPathError("bad resource"),
+        ),
+    ):
+        assert _resolve_target_path("folders/1") is None
+
+
+def test_org_from_target_path_returns_none_for_non_path():
+    from gcpath.cli import _org_from_target_path
+
+    assert _org_from_target_path(None) is None
+    assert _org_from_target_path("folders/1") is None
+
+
+def test_try_read_scope_cache_logs_cache_age():
+    from gcpath.cli import _try_read_scope_cache
+
+    cached = MagicMock()
+    info = CacheInfo(
+        exists=True,
+        fresh=True,
+        age_seconds=12.0,
+        size_bytes=1024,
+        version=2,
+        org_count=1,
+        folder_count=1,
+        project_count=1,
+    )
+
+    with (
+        patch("gcpath.cli._try_read_cache", return_value=cached),
+        patch("gcpath.cli.get_cache_info", return_value=info),
+    ):
+        assert (
+            _try_read_scope_cache(True, False, None, None, False, False, False)
+            is cached
+        )

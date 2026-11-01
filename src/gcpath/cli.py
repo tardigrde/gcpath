@@ -210,6 +210,24 @@ def _cached_path_for(resource_name: str) -> str | None:
         return None
 
 
+def _resolve_target_path(resource: str) -> str | None:
+    try:
+        return _cached_path_for(resource) or Hierarchy.resolve_ancestry(resource)
+    except (
+        gcp_exceptions.PermissionDenied,
+        gcp_exceptions.NotFound,
+        GCPathError,
+    ):
+        return None
+
+
+def _org_from_target_path(target_path: str | None) -> str | None:
+    if not target_path or not target_path.startswith("//"):
+        return None
+    path_parts = target_path[2:].split("/")
+    return unquote(path_parts[0]) if path_parts else None
+
+
 def _resolve_scope(
     resource: str | None,
     entrypoint: str | None,
@@ -227,16 +245,9 @@ def _resolve_scope(
     ):
         _validate_resource_name(effective_resource)
         target_resource_name = effective_resource
-        try:
-            target_path = _cached_path_for(effective_resource) or (
-                Hierarchy.resolve_ancestry(effective_resource)
-            )
-            if target_path.startswith("//"):
-                path_parts = target_path[2:].split("/")
-                if path_parts:
-                    target_org_name = unquote(path_parts[0])
-        except (gcp_exceptions.PermissionDenied, gcp_exceptions.NotFound, GCPathError):
-            pass
+        target_org_name = _org_from_target_path(
+            _resolve_target_path(effective_resource)
+        )
 
     if not resource and entrypoint and target_org_name:
         filter_orgs = None
@@ -695,6 +706,61 @@ def _try_read_cache(
     return cached_hierarchy
 
 
+def _try_read_scope_cache(
+    is_cacheable: bool,
+    force_refresh: bool,
+    cache_scope: str | None,
+    filter_orgs: List[str] | None,
+    via_resource_manager: bool,
+    include_labels: bool,
+    include_tags: bool,
+) -> Hierarchy | None:
+    if not is_cacheable or force_refresh:
+        return None
+    cached = _try_read_cache(
+        cache_scope,
+        filter_orgs,
+        via_resource_manager,
+        include_labels,
+        include_tags,
+    )
+    if cached is None:
+        return None
+    info = get_cache_info()
+    if info.age_seconds is not None:
+        logger.debug(
+            f"Using cached data ({format_age(info.age_seconds)} ago). Use -F to refresh."
+        )
+    return cached
+
+
+def _try_read_scoped_cache(
+    is_cacheable: bool,
+    force_refresh: bool,
+    scope_resource: str | None,
+    filter_orgs: List[str] | None,
+    via_resource_manager: bool,
+    include_labels: bool,
+    include_tags: bool,
+) -> Hierarchy | None:
+    if is_cacheable or force_refresh or not scope_resource:
+        return None
+    cached = _try_read_cache(
+        None,
+        filter_orgs,
+        via_resource_manager,
+        include_labels,
+        include_tags,
+        scope_resource=scope_resource,
+    )
+    if cached is not None and cached.has_resource(scope_resource):
+        logger.debug(
+            f"Serving scoped command for {scope_resource} from the global cache."
+        )
+        return cached
+    return None
+
+
 def _load_hierarchy(
     ctx: typer.Context,
     scope_resource: str | None,
@@ -712,38 +778,31 @@ def _load_hierarchy(
     )
     cache_scope = scope_resource if is_cacheable and scope_resource else None
 
-    if is_cacheable and not force_refresh:
-        cached = _try_read_cache(
-            cache_scope,
-            filter_orgs,
-            via_resource_manager,
-            include_labels,
-            include_tags,
-        )
-        if cached is not None:
-            info = get_cache_info()
-            if info.age_seconds is not None:
-                logger.debug(
-                    f"Using cached data ({format_age(info.age_seconds)} ago). Use -F to refresh."
-                )
-            return cached
+    cached = _try_read_scope_cache(
+        is_cacheable,
+        force_refresh,
+        cache_scope,
+        filter_orgs,
+        via_resource_manager,
+        include_labels,
+        include_tags,
+    )
+    if cached is not None:
+        return cached
 
-    if not is_cacheable and not force_refresh and scope_resource:
-        # Scoped to a non-entrypoint resource: a fresh global cache that
-        # already contains the scope can serve the command without API calls.
-        cached = _try_read_cache(
-            None,
-            filter_orgs,
-            via_resource_manager,
-            include_labels,
-            include_tags,
-            scope_resource=scope_resource,
-        )
-        if cached is not None and cached.has_resource(scope_resource):
-            logger.debug(
-                f"Serving scoped command for {scope_resource} from the global cache."
-            )
-            return cached
+    # Scoped to a non-entrypoint resource: a fresh global cache that already
+    # contains the scope can serve the command without API calls.
+    cached = _try_read_scoped_cache(
+        is_cacheable,
+        force_refresh,
+        scope_resource,
+        filter_orgs,
+        via_resource_manager,
+        include_labels,
+        include_tags,
+    )
+    if cached is not None:
+        return cached
 
     effective_recursive = True if is_cacheable else recursive
 

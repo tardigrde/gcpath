@@ -7,7 +7,7 @@ This module handles loading resources from GCP via Resource Manager and Asset AP
 import logging
 import re
 import urllib.parse
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from google.cloud import resourcemanager_v3, asset_v1  # type: ignore
 from google.api_core import exceptions
@@ -258,6 +258,50 @@ def fix_folder_ancestors(node, root_ancestor: Optional[str] = None):
             )
 
 
+def _build_scope_chain(
+    folders_client: Any, folder_proto: Any, node: Any, root: str
+) -> tuple[List[str], List[str], Optional[str]]:
+    """Build the ancestor and display chains for a scoped folder."""
+    ancestors_chain = [folder_proto.name]
+    display_chain = [folder_proto.display_name]
+    current_parent = folder_proto.parent
+    path_override = None
+
+    while current_parent and current_parent.startswith(_FOLDER_PREFIX):
+        ancestors_chain.append(current_parent)
+        if current_parent in node.folders:
+            loaded_folder = node.folders[current_parent]
+            ancestors_chain.extend(
+                [
+                    a
+                    for a in loaded_folder.ancestors
+                    if a != current_parent and a not in ancestors_chain
+                ]
+            )
+            escaped_leaf = urllib.parse.quote(folder_proto.display_name, safe="")
+            path_override = f"{loaded_folder.path}/{escaped_leaf}"
+            break
+        try:
+            parent_proto = folders_client.get_folder(name=current_parent)
+            display_chain.append(parent_proto.display_name)
+            current_parent = parent_proto.parent
+        except Exception:
+            break
+
+    if not ancestors_chain or ancestors_chain[-1] != root:
+        ancestors_chain.append(root)
+    return ancestors_chain, display_chain, path_override
+
+
+def _scope_path_override(node: Any, display_chain: List[str]) -> str:
+    """Build a display-path override for a folder under an organization."""
+    escaped_org = urllib.parse.quote(node.organization.display_name, safe="")
+    escaped_segments = [
+        urllib.parse.quote(segment, safe="") for segment in reversed(display_chain)
+    ]
+    return "//" + "/".join([escaped_org, *escaped_segments])
+
+
 def load_scope_folder(node, scope_resource: str, root_ancestor: Optional[str] = None):
     """Load a specific scope folder separately (for recursive scoped loads).
 
@@ -288,48 +332,11 @@ def load_scope_folder(node, scope_resource: str, root_ancestor: Optional[str] = 
         # Import Folder class locally to avoid circular dependency
         from gcpath.core import Folder
 
-        # Build ancestors by traversing parent chain
-        ancestors_chain = [folder_proto.name]
-        display_chain = [folder_proto.display_name]
-        current_parent = folder_proto.parent
-        path_override = None
-
-        while current_parent and current_parent.startswith(_FOLDER_PREFIX):
-            ancestors_chain.append(current_parent)
-            # Check if parent is already loaded
-            if current_parent in node.folders:
-                # Use the loaded parent's ancestors
-                loaded_folder = node.folders[current_parent]
-                # Add remaining ancestors from parent (excluding the parent itself)
-                ancestors_chain.extend(
-                    [
-                        a
-                        for a in loaded_folder.ancestors
-                        if a != current_parent and a not in ancestors_chain
-                    ]
-                )
-                escaped_leaf = urllib.parse.quote(folder_proto.display_name, safe="")
-                path_override = f"{loaded_folder.path}/{escaped_leaf}"
-                break
-            else:
-                # Fetch the parent folder
-                try:
-                    parent_proto = folders_client.get_folder(name=current_parent)
-                    display_chain.append(parent_proto.display_name)
-                    current_parent = parent_proto.parent
-                except Exception:
-                    break
-
-        # Add root at the end
-        if not ancestors_chain or ancestors_chain[-1] != root:
-            ancestors_chain.append(root)
+        ancestors_chain, display_chain, path_override = _build_scope_chain(
+            folders_client, folder_proto, node, root
+        )
         if path_override is None and root.startswith(_ORG_PREFIX):
-            escaped_org = urllib.parse.quote(node.organization.display_name, safe="")
-            escaped_segments = [
-                urllib.parse.quote(segment, safe="")
-                for segment in reversed(display_chain)
-            ]
-            path_override = "//" + "/".join([escaped_org, *escaped_segments])
+            path_override = _scope_path_override(node, display_chain)
 
         folder_obj = Folder(
             name=folder_proto.name,
