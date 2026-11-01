@@ -291,46 +291,52 @@ class Hierarchy:
 
         cloned_projects: List[Project] = []
         for project in selected_projects:
-            org_name = cls._project_org_name(project)
-            project_org_clone = org_map.get(org_name or "")
-
-            if project_org_clone is None:
-                if project.organization is None and include_orgless_projects:
-                    cloned_projects.append(
-                        Project(
-                            name=project.name,
-                            project_id=project.project_id,
-                            display_name=project.display_name,
-                            parent=project.parent,
-                            organization=None,
-                            folder=None,
-                            labels=dict(project.labels),
-                            tags=dict(project.tags),
-                            path_override=project.path,
-                        )
-                    )
-                continue
-
-            project_folder_clone = (
-                folder_map.get(project.folder.name)
-                if project.folder is not None
-                else None
+            cloned = cls._clone_project(
+                project, org_map, folder_map, include_orgless_projects
             )
-            cloned_projects.append(
-                Project(
+            if cloned is not None:
+                cloned_projects.append(cloned)
+
+        return cls(cloned_orgs, cloned_projects)
+
+    @classmethod
+    def _clone_project(
+        cls,
+        project: Project,
+        org_map: Dict[str, OrganizationNode],
+        folder_map: Dict[str, Folder],
+        include_orgless_projects: bool,
+    ) -> Project | None:
+        project_org_clone = org_map.get(cls._project_org_name(project) or "")
+        if project_org_clone is None:
+            if project.organization is None and include_orgless_projects:
+                return Project(
                     name=project.name,
                     project_id=project.project_id,
                     display_name=project.display_name,
                     parent=project.parent,
-                    organization=project_org_clone,
-                    folder=project_folder_clone,
+                    organization=None,
+                    folder=None,
                     labels=dict(project.labels),
                     tags=dict(project.tags),
                     path_override=project.path,
                 )
-            )
+            return None
 
-        return cls(cloned_orgs, cloned_projects)
+        project_folder_clone = (
+            folder_map.get(project.folder.name) if project.folder is not None else None
+        )
+        return Project(
+            name=project.name,
+            project_id=project.project_id,
+            display_name=project.display_name,
+            parent=project.parent,
+            organization=project_org_clone,
+            folder=project_folder_clone,
+            labels=dict(project.labels),
+            tags=dict(project.tags),
+            path_override=project.path,
+        )
 
     def filtered_by_org_display_names(self, display_names: List[str]) -> "Hierarchy":
         """Return a hierarchy containing only the named organizations."""
@@ -612,30 +618,9 @@ class Hierarchy:
             logger.exception(f"Could not access folder {scope_resource}: {e}")
             raise
 
-        # Try to resolve the real org by traversing parents upward
-        org_name = None
-        org_display_name = None
-        current = folder_proto.parent
-        while current:
-            if current.startswith(_PREFIX_ORGS):
-                try:
-                    org_proto = org_client.get_organization(name=current)
-                    org_name = org_proto.name
-                    org_display_name = org_proto.display_name
-                except exceptions.PermissionDenied:
-                    logger.debug(f"Permission denied accessing org {current}")
-                break
-            elif current.startswith(_PREFIX_FOLDERS):
-                try:
-                    parent_proto = folders_client.get_folder(name=current)
-                    current = parent_proto.parent
-                except exceptions.PermissionDenied:
-                    logger.debug(f"Permission denied traversing to {current}")
-                    break
-                except Exception:
-                    break
-            else:
-                break
+        org_name, org_display_name = cls._resolve_folder_scope_org(
+            folders_client, org_client, folder_proto
+        )
 
         # Build synthetic OrganizationNode
         if org_name and org_display_name:
@@ -703,6 +688,46 @@ class Hierarchy:
 
         return hierarchy
 
+    @staticmethod
+    def _resolve_folder_scope_org(
+        folders_client: Any, org_client: Any, folder_proto: Any
+    ) -> tuple[str | None, str | None]:
+        """Walk folder parents upward to find the owning organization."""
+        org_name = None
+        org_display_name = None
+        current = folder_proto.parent
+        while current:
+            if current.startswith(_PREFIX_ORGS):
+                try:
+                    org_proto = org_client.get_organization(name=current)
+                    org_name = org_proto.name
+                    org_display_name = org_proto.display_name
+                except exceptions.PermissionDenied:
+                    logger.debug(f"Permission denied accessing org {current}")
+                break
+            if not current.startswith(_PREFIX_FOLDERS):
+                break
+            try:
+                parent_proto = folders_client.get_folder(name=current)
+                current = parent_proto.parent
+            except exceptions.PermissionDenied:
+                logger.debug(f"Permission denied traversing to {current}")
+                break
+            except Exception:
+                break
+        return org_name, org_display_name
+
+    @staticmethod
+    def _folder_scope_filters(
+        scope_resource: str | None, recursive: bool, org_name: str
+    ) -> tuple[str | None, str | None]:
+        """Return the Asset API parent filter and ancestors filter."""
+        if not scope_resource:
+            return (None if recursive else org_name), None
+        if recursive:
+            return None, scope_resource
+        return scope_resource, None
+
     @classmethod
     def _load_folders_for_org(
         cls,
@@ -721,31 +746,23 @@ class Hierarchy:
             load_folders_rm(node, root_parent, recursive=effective_recursive)
             if scope_resource and scope_resource.startswith(_PREFIX_FOLDERS):
                 load_scope_folder(node, scope_resource)
-        else:
-            # Determine filters for Asset API based on scope_resource and recursive
-            folder_parent_filter = None
-            folder_ancestors_filter = None
+            return
 
-            if scope_resource:
-                if recursive:
-                    folder_ancestors_filter = scope_resource
-                else:
-                    folder_parent_filter = scope_resource
-            elif not recursive:
-                folder_parent_filter = node.organization.name
+        folder_parent_filter, folder_ancestors_filter = cls._folder_scope_filters(
+            scope_resource, recursive, node.organization.name
+        )
+        load_folders_asset(
+            node,
+            parent_filter=folder_parent_filter,
+            ancestors_filter=folder_ancestors_filter,
+            query_parent=query_parent,
+            root_ancestor=root_ancestor,
+            include_labels=include_labels,
+        )
 
-            load_folders_asset(
-                node,
-                parent_filter=folder_parent_filter,
-                ancestors_filter=folder_ancestors_filter,
-                query_parent=query_parent,
-                root_ancestor=root_ancestor,
-                include_labels=include_labels,
-            )
-
-            # Load scope folder separately if needed (for recursive scoped loads)
-            if scope_resource and scope_resource.startswith("folders/") and recursive:
-                load_scope_folder(node, scope_resource, root_ancestor=root_ancestor)
+        # Load scope folder separately if needed (for recursive scoped loads)
+        if scope_resource and scope_resource.startswith(_PREFIX_FOLDERS) and recursive:
+            load_scope_folder(node, scope_resource, root_ancestor=root_ancestor)
 
     @classmethod
     def _load_all_projects(
@@ -784,6 +801,22 @@ class Hierarchy:
 
         return all_projects
 
+    @staticmethod
+    def _find_project_parent(
+        parent_name: str, org_nodes: List[OrganizationNode]
+    ) -> tuple[OrganizationNode | None, Folder | None]:
+        """Find the loaded organization and folder for a project parent."""
+        if parent_name.startswith(_PREFIX_ORGS):
+            org = next(
+                (o for o in org_nodes if o.organization.name == parent_name), None
+            )
+            return org, None
+        if parent_name.startswith(_PREFIX_FOLDERS):
+            for org in org_nodes:
+                if parent_name in org.folders:
+                    return org, org.folders[parent_name]
+        return None, None
+
     @classmethod
     def _load_projects_rm(
         cls,
@@ -807,21 +840,9 @@ class Hierarchy:
                 ):
                     continue
 
-                # Find parent organization and folder
-                parent_org = None
-                parent_folder = None
-
-                if p_proto.parent.startswith(_PREFIX_ORGS):
-                    parent_org = next(
-                        (o for o in org_nodes if o.organization.name == p_proto.parent),
-                        None,
-                    )
-                elif p_proto.parent.startswith(_PREFIX_FOLDERS):
-                    for o in org_nodes:
-                        if p_proto.parent in o.folders:
-                            parent_folder = o.folders[p_proto.parent]
-                            parent_org = o
-                            break
+                parent_org, parent_folder = cls._find_project_parent(
+                    p_proto.parent, org_nodes
+                )
 
                 labels = (
                     dict(p_proto.labels) if include_labels and p_proto.labels else {}
