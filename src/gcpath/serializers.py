@@ -5,7 +5,7 @@ JSON, YAML, or TOON output.
 """
 
 import json
-from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
+from typing import Any, Dict, List, Sequence, Tuple
 
 import yaml
 
@@ -20,7 +20,7 @@ from gcpath.toon import (
 )
 
 
-def resource_type(item: Union[OrganizationNode, Folder, Project]) -> str:
+def resource_type(item: OrganizationNode | Folder | Project) -> str:
     if isinstance(item, OrganizationNode):
         return "organization"
     elif isinstance(item, Folder):
@@ -45,7 +45,7 @@ _ALL_LS_FIELDS = (
 
 
 def _default_fields_for_items(
-    items: List[Tuple[str, Union[OrganizationNode, Folder, Project]]],
+    items: List[Tuple[str, OrganizationNode | Folder | Project]],
 ) -> Tuple[str, ...]:
     has_projects = any(isinstance(obj, Project) for _, obj in items)
     return _PROJECT_LS_FIELDS if has_projects else _DEFAULT_LS_FIELDS
@@ -69,7 +69,7 @@ def _truncate_metadata(
 
 
 def serialize_resource(
-    path: str, item: Union[OrganizationNode, Folder, Project]
+    path: str, item: OrganizationNode | Folder | Project
 ) -> Dict[str, Any]:
     """Serialize a single resource to a dict."""
     d: Dict[str, Any] = {
@@ -101,7 +101,7 @@ def serialize_resource(
 
 def _serialize_resource_fields(
     path: str,
-    item: Union[OrganizationNode, Folder, Project],
+    item: OrganizationNode | Folder | Project,
     fields: Sequence[str],
     full: bool = False,
 ) -> Dict[str, Any]:
@@ -116,17 +116,17 @@ def _serialize_resource_fields(
 
 
 def serialize_ls(
-    items: List[Tuple[str, Union[OrganizationNode, Folder, Project]]],
+    items: List[Tuple[str, OrganizationNode | Folder | Project]],
 ) -> List[Dict[str, Any]]:
     return [serialize_resource(path, item) for path, item in items]
 
 
 def toon_ls(
-    items: List[Tuple[str, Union[OrganizationNode, Folder, Project]]],
+    items: List[Tuple[str, OrganizationNode | Folder | Project]],
     total_in_scope: int,
-    fields: Optional[Sequence[str]] = None,
+    fields: Sequence[str] | None = None,
     full: bool = False,
-    help_lines: Optional[List[str]] = None,
+    help_lines: List[str] | None = None,
     include_resource_name: bool = False,
 ) -> str:
     if not items:
@@ -186,7 +186,7 @@ def serialize_open_results(
 
 def toon_open(
     results: List[Dict[str, str]],
-    help_lines: Optional[List[str]] = None,
+    help_lines: List[str] | None = None,
 ) -> str:
     if not results:
         return toon_empty("results", "for the requested paths", help_lines)
@@ -201,7 +201,7 @@ def toon_open(
 
 def toon_ancestors(
     chain: List[Tuple[str, str, str]],
-    help_lines: Optional[List[str]] = None,
+    help_lines: List[str] | None = None,
 ) -> str:
     rows = [
         {"resource_name": name, "display_name": dn, "type": t} for name, dn, t in chain
@@ -211,12 +211,12 @@ def toon_ancestors(
 
 
 def toon_find(
-    items: List[Tuple[str, Union[OrganizationNode, Folder, Project]]],
+    items: List[Tuple[str, OrganizationNode | Folder | Project]],
     pattern: str,
     total_searched: int = 0,
-    fields: Optional[Sequence[str]] = None,
+    fields: Sequence[str] | None = None,
     full: bool = False,
-    help_lines: Optional[List[str]] = None,
+    help_lines: List[str] | None = None,
     include_resource_name: bool = False,
 ) -> str:
     if not items:
@@ -243,7 +243,7 @@ def toon_metadata_aggregation(
     *,
     metadata_kind: str,
     total_resources: int,
-    help_lines: Optional[List[str]] = None,
+    help_lines: List[str] | None = None,
 ) -> str:
     """Render aggregated label/tag rows as a TOON table."""
     if not rows:
@@ -262,7 +262,7 @@ def toon_metadata_aggregation(
 def toon_labels(
     rows: List[Dict[str, Any]],
     total_resources: int,
-    help_lines: Optional[List[str]] = None,
+    help_lines: List[str] | None = None,
 ) -> str:
     return toon_metadata_aggregation(
         rows,
@@ -275,7 +275,7 @@ def toon_labels(
 def toon_tags(
     rows: List[Dict[str, Any]],
     total_resources: int,
-    help_lines: Optional[List[str]] = None,
+    help_lines: List[str] | None = None,
 ) -> str:
     return toon_metadata_aggregation(
         rows,
@@ -290,7 +290,7 @@ def toon_stats(
     organizations: int = 0,
     folders: int = 0,
     projects: int = 0,
-    help_lines: Optional[List[str]] = None,
+    help_lines: List[str] | None = None,
 ) -> str:
     data: Dict[str, Any] = {
         "scope": scope,
@@ -304,7 +304,7 @@ def toon_stats(
 
 def toon_summary(
     data: Dict[str, Any],
-    help_lines: Optional[List[str]] = None,
+    help_lines: List[str] | None = None,
 ) -> str:
     """Render a Hierarchy.summary() dict as TOON output."""
     output = toon_encode(data)
@@ -314,7 +314,7 @@ def toon_summary(
 def toon_audit(
     issues: List[Dict[str, Any]],
     severity_counts: Dict[str, int],
-    help_lines: Optional[List[str]] = None,
+    help_lines: List[str] | None = None,
 ) -> str:
     """Render audit issues as a TOON table with a severity-aware count header."""
     if not issues:
@@ -336,10 +336,10 @@ def toon_audit(
 def toon_cache_status(
     exists: bool,
     fresh: bool,
-    age_seconds: Optional[float] = None,
-    size_bytes: Optional[int] = None,
-    version: Optional[int] = None,
-    scope: Optional[str] = None,
+    age_seconds: float | None = None,
+    size_bytes: int | None = None,
+    version: int | None = None,
+    scope: str | None = None,
     org_count: int = 0,
     folder_count: int = 0,
     project_count: int = 0,
@@ -381,7 +381,7 @@ def toon_confirmed(message: str) -> str:
     return toon_object({"status": "ok", "message": message})
 
 
-def _node_to_dict(node: Union[OrganizationNode, Folder]) -> Tuple[str, Dict[str, Any]]:
+def _node_to_dict(node: OrganizationNode | Folder) -> Tuple[str, Dict[str, Any]]:
     if isinstance(node, OrganizationNode):
         return node.organization.name, {
             "path": f"//{path_escape(node.organization.display_name)}",
@@ -398,7 +398,7 @@ def _node_to_dict(node: Union[OrganizationNode, Folder]) -> Tuple[str, Dict[str,
 
 
 def _get_child_folders(
-    node: Union[OrganizationNode, Folder], parent_name: str
+    node: OrganizationNode | Folder, parent_name: str
 ) -> List[Folder]:
     org_ref = node if isinstance(node, OrganizationNode) else node.organization
     if not org_ref:
@@ -409,11 +409,11 @@ def _get_child_folders(
 
 
 def serialize_tree_node(
-    node: Union[OrganizationNode, Folder],
+    node: OrganizationNode | Folder,
     projects_by_parent: Dict[str, List[Project]],
-    level: Optional[int] = None,
+    level: int | None = None,
     current_depth: int = 0,
-    type_filter: Optional[str] = None,
+    type_filter: str | None = None,
 ) -> Dict[str, Any]:
     parent_name, d = _node_to_dict(node)
 
@@ -443,11 +443,11 @@ def serialize_tree_node(
 
 
 def serialize_tree(
-    nodes_to_process: List[Union[OrganizationNode, Folder]],
+    nodes_to_process: List[OrganizationNode | Folder],
     projects_by_parent: Dict[str, List[Project]],
-    level: Optional[int] = None,
-    orgless_projects: Optional[List[Project]] = None,
-    type_filter: Optional[str] = None,
+    level: int | None = None,
+    orgless_projects: List[Project] | None = None,
+    type_filter: str | None = None,
 ) -> List[Dict[str, Any]]:
     result = []
     for node in nodes_to_process:

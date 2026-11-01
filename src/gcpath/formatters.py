@@ -6,7 +6,7 @@ and diagram generation (Mermaid, D2).
 """
 
 import html
-from typing import List, Dict, Tuple, Union, Optional, Any
+from typing import List, Dict, Tuple, Any
 from gcpath.core import (
     OrganizationNode,
     Folder,
@@ -21,7 +21,7 @@ from gcpath.core import (
 _CONSOLE_BASE = "https://console.cloud.google.com"
 
 
-def console_url(item: Union[OrganizationNode, Folder, Project]) -> str:
+def console_url(item: OrganizationNode | Folder | Project) -> str:
     """Build a GCP Cloud Console URL for a hierarchy resource.
 
     Raises GCPathError for organizationless projects or synthetic-org folders
@@ -94,7 +94,7 @@ def _org_level_children(
 
 
 def filter_direct_children(
-    hierarchy: Hierarchy, target_resource_name: Optional[str] = None
+    hierarchy: Hierarchy, target_resource_name: str | None = None
 ) -> Tuple[List[Folder], List[Project]]:
     """Filter hierarchy to get direct children of a target resource.
 
@@ -111,9 +111,9 @@ def filter_direct_children(
 
 
 def get_display_path(
-    item: Union[OrganizationNode, Folder, Project],
+    item: OrganizationNode | Folder | Project,
     target_path_prefix: str = "",
-    target_resource_name: Optional[str] = None,
+    target_resource_name: str | None = None,
     is_direct_child: bool = False,
     recursive: bool = False,
 ) -> str:
@@ -148,8 +148,8 @@ def get_display_path(
 def _collect_recursive_items(
     hierarchy: Hierarchy,
     target_path_prefix: str,
-    target_resource_name: Optional[str],
-) -> List[Tuple[str, Union[OrganizationNode, Folder, Project]]]:
+    target_resource_name: str | None,
+) -> List[Tuple[str, OrganizationNode | Folder | Project]]:
     """Collect all items for recursive listing."""
 
     def _path(item, is_direct=False):
@@ -157,7 +157,7 @@ def _collect_recursive_items(
             item, target_path_prefix, target_resource_name, is_direct, True
         )
 
-    items: List[Tuple[str, Union[OrganizationNode, Folder, Project]]] = []
+    items: List[Tuple[str, OrganizationNode | Folder | Project]] = []
     if target_resource_name:
         items.extend((_path(f), f) for f in hierarchy.folders)
         items.extend((_path(p), p) for p in hierarchy.projects)
@@ -174,8 +174,8 @@ def _collect_nonrecursive_items(
     current_folders: List[Folder],
     current_projects: List[Project],
     target_path_prefix: str,
-    target_resource_name: Optional[str],
-) -> List[Tuple[str, Union[OrganizationNode, Folder, Project]]]:
+    target_resource_name: str | None,
+) -> List[Tuple[str, OrganizationNode | Folder | Project]]:
     """Collect items for non-recursive (direct children) listing."""
 
     def _path(item, is_direct=False):
@@ -183,7 +183,7 @@ def _collect_nonrecursive_items(
             item, target_path_prefix, target_resource_name, is_direct, False
         )
 
-    items: List[Tuple[str, Union[OrganizationNode, Folder, Project]]] = []
+    items: List[Tuple[str, OrganizationNode | Folder | Project]] = []
     if not target_resource_name:
         items.extend((_path(org), org) for org in hierarchy.organizations)
     items.extend((_path(f, True), f) for f in current_folders)
@@ -196,9 +196,9 @@ def build_items_list(
     current_folders: List[Folder],
     current_projects: List[Project],
     target_path_prefix: str = "",
-    target_resource_name: Optional[str] = None,
+    target_resource_name: str | None = None,
     recursive: bool = False,
-) -> List[Tuple[str, Union[OrganizationNode, Folder, Project]]]:
+) -> List[Tuple[str, OrganizationNode | Folder | Project]]:
     """Build list of items for display with their paths.
 
     Args:
@@ -238,7 +238,7 @@ def sort_resources(items: List[Tuple[str, Any]]) -> List[Tuple[str, Any]]:
 
 
 def _format_metadata_suffix(
-    item: Union[Folder, Project],
+    item: Folder | Project,
     show_labels: bool = False,
     show_tags: bool = False,
 ) -> str:
@@ -256,7 +256,7 @@ def _format_metadata_suffix(
 
 
 def format_tree_label(
-    item: Union[Folder, Project],
+    item: Folder | Project,
     show_ids: bool = False,
     show_labels: bool = False,
     show_tags: bool = False,
@@ -287,7 +287,7 @@ def format_tree_label(
     return ""
 
 
-def _get_node_parent_name(node: Union[OrganizationNode, Folder]) -> str:
+def _get_node_parent_name(node: OrganizationNode | Folder) -> str:
     """Get the resource name used as parent key for a node."""
     if isinstance(node, OrganizationNode):
         return node.organization.name
@@ -295,7 +295,7 @@ def _get_node_parent_name(node: Union[OrganizationNode, Folder]) -> str:
 
 
 def _get_child_folders(
-    node: Union[OrganizationNode, Folder], parent_name: str
+    node: OrganizationNode | Folder, parent_name: str
 ) -> List[Folder]:
     """Get sorted direct child folders of a node."""
     org_node_ref = node if isinstance(node, OrganizationNode) else node.organization
@@ -308,13 +308,13 @@ def _get_child_folders(
 
 def build_tree_view(
     tree_node,
-    current_node: Union[OrganizationNode, Folder],
+    current_node: OrganizationNode | Folder,
     hierarchy: Hierarchy,
     projects_by_parent: Dict[str, List[Project]],
-    level: Optional[int] = None,
+    level: int | None = None,
     current_depth: int = 0,
     show_ids: bool = False,
-    type_filter: Optional[str] = None,
+    type_filter: str | None = None,
     show_labels: bool = False,
     show_tags: bool = False,
 ):
@@ -377,7 +377,7 @@ def _sanitize_node_id(resource_name: str) -> str:
 
 
 def _get_node_label(
-    item: Union[OrganizationNode, Folder, Project], show_ids: bool = False
+    item: OrganizationNode | Folder | Project, show_ids: bool = False
 ) -> str:
     """Get display label for a diagram node."""
     if isinstance(item, OrganizationNode):
@@ -395,12 +395,12 @@ def _get_node_label(
 
 def _collect_diagram_edges(
     parent_id: str,
-    current_node: Union[OrganizationNode, Folder],
+    current_node: OrganizationNode | Folder,
     hierarchy: Hierarchy,
     projects_by_parent: Dict[str, List[Project]],
     edges: List[Tuple[str, str]],
     labels: Dict[str, str],
-    level: Optional[int] = None,
+    level: int | None = None,
     current_depth: int = 0,
     show_ids: bool = False,
 ) -> None:
@@ -480,13 +480,13 @@ def _format_d2(labels: Dict[str, str], edges: List[Tuple[str, str]]) -> str:
 
 
 def build_diagram(
-    nodes_to_process: List[Union[OrganizationNode, Folder]],
+    nodes_to_process: List[OrganizationNode | Folder],
     hierarchy: Hierarchy,
     projects_by_parent: Dict[str, List[Project]],
     fmt: str = "mermaid",
-    level: Optional[int] = None,
+    level: int | None = None,
     show_ids: bool = False,
-    orgless_projects: Optional[List[Project]] = None,
+    orgless_projects: List[Project] | None = None,
 ) -> str:
     """Build a diagram string from hierarchy data.
 
