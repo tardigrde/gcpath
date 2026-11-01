@@ -1,5 +1,7 @@
 """Tests for loaders.py module."""
 
+import logging
+
 import pytest
 from unittest.mock import MagicMock, patch
 from gcpath.core import OrganizationNode, Folder
@@ -10,6 +12,7 @@ from gcpath.loaders import (
     load_scope_folder,
     load_projects_asset,
     load_organizationless_projects,
+    load_tags_asset,
     _build_single_ancestor_chain,
 )
 from google.cloud import resourcemanager_v3
@@ -1191,3 +1194,16 @@ def test_load_organizationless_projects_propagates_unavailable(mock_proj_cls):
 
     with pytest.raises(exceptions.ServiceUnavailable):
         load_organizationless_projects(set())
+
+
+@patch("google.cloud.asset_v1.AssetServiceClient")
+def test_load_tags_asset_unexpected_error(mock_asset_client_cls, caplog):
+    """Unexpected tag-binding API errors are logged and return an empty map."""
+    mock_client = mock_asset_client_cls.return_value
+    mock_client.query_assets.side_effect = RuntimeError("boom")
+
+    with caplog.at_level(logging.ERROR, logger="gcpath.loaders"):
+        assert load_tags_asset("organizations/123") == {}
+
+    assert "Error querying tag bindings via Asset API" in caplog.text
+    assert "boom" in caplog.text

@@ -1,3 +1,5 @@
+import logging
+
 import pytest
 from unittest.mock import patch, MagicMock
 from google.api_core import exceptions
@@ -690,6 +692,34 @@ def test_load_from_folder_scope_no_org_access(
     assert "folders/100" in h.organizations[0].folders
     # Entrypoint folder ancestors should be just itself
     assert h.organizations[0].folders["folders/100"].ancestors == ["folders/100"]
+
+
+@patch("gcpath.loaders.resourcemanager_v3")
+@patch("gcpath.loaders.asset_v1")
+@patch("gcpath.core.resourcemanager_v3")
+def test_load_from_folder_scope_logs_access_error(
+    mock_core_rm, mock_loaders_asset, mock_loaders_rm, caplog
+):
+    """Entrypoint folder access errors are logged and re-raised."""
+    mock_rm = mock_core_rm
+    mock_loaders_rm.FoldersClient = mock_rm.FoldersClient
+    mock_loaders_rm.ProjectsClient = mock_rm.ProjectsClient
+    mock_rm.Organization = resourcemanager_v3.Organization
+
+    org_client = mock_rm.OrganizationsClient.return_value
+    org_client.search_organizations.return_value = []
+
+    folders_client = mock_rm.FoldersClient.return_value
+    folders_client.get_folder.side_effect = [
+        exceptions.PermissionDenied("denied"),
+        RuntimeError("no access"),
+    ]
+
+    with caplog.at_level(logging.ERROR, logger="gcpath.core"):
+        with pytest.raises(RuntimeError, match="no access"):
+            Hierarchy.load(via_resource_manager=False, scope_resource="folders/100")
+
+    assert "Could not access folder folders/100" in caplog.text
 
 
 @patch("gcpath.core.resourcemanager_v3")

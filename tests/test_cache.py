@@ -3,6 +3,7 @@ Tests for the cache module.
 """
 
 import json
+import logging
 from datetime import datetime, timezone, timedelta
 from unittest.mock import ANY, patch
 from pathlib import Path
@@ -233,6 +234,34 @@ def test_clear_cache_exists(mock_cache_file):
     mock_cache_file.unlink.assert_called_once()
 
 
+@patch("gcpath.cache.CACHE_FILE")
+def test_clear_cache_logs_exception(mock_cache_file, caplog):
+    """Unexpected delete errors are logged and return False."""
+    mock_cache_file.exists.return_value = True
+    mock_cache_file.unlink.side_effect = RuntimeError("boom")
+
+    with caplog.at_level(logging.ERROR, logger="gcpath.cache"):
+        assert clear_cache() is False
+
+    assert "Failed to delete cache file" in caplog.text
+    assert "boom" in caplog.text
+
+
+@patch("gcpath.cache.CACHE_DIR")
+@patch("gcpath.cache.CACHE_FILE")
+@patch("builtins.open")
+@patch("json.dump", side_effect=RuntimeError("boom"))
+def test_write_cache_logs_exception(
+    mock_json_dump, mock_open, mock_cache_file, mock_cache_dir, mock_hierarchy, caplog
+):
+    """Unexpected write errors are logged instead of escaping."""
+    with caplog.at_level(logging.ERROR, logger="gcpath.cache"):
+        write_cache(mock_hierarchy)
+
+    assert "Failed to write to cache file" in caplog.text
+    assert "boom" in caplog.text
+
+
 def test_is_cache_fresh_within_ttl():
     """Test that cache is fresh within TTL."""
     data = {
@@ -301,6 +330,22 @@ def test_read_cache_raw_success(mock_json_load, mock_open, mock_cache_file):
 
     data = read_cache_raw()
     assert data == test_data
+
+
+@patch("gcpath.cache.CACHE_FILE")
+@patch("builtins.open")
+@patch("json.load", side_effect=RuntimeError("boom"))
+def test_read_cache_raw_unexpected_error(
+    mock_json_load, mock_open, mock_cache_file, caplog
+):
+    """Unexpected read errors are logged and return None."""
+    mock_cache_file.exists.return_value = True
+
+    with caplog.at_level(logging.ERROR, logger="gcpath.cache"):
+        assert read_cache_raw() is None
+
+    assert "unexpected error occurred while reading cache" in caplog.text
+    assert "boom" in caplog.text
 
 
 @patch("gcpath.cache.CACHE_FILE")
