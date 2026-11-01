@@ -193,8 +193,9 @@ def test_handle_error_gcpath_error():
     from gcpath.cli import handle_error
     import typer
 
+    error = GCPathError("test error")
     with pytest.raises(typer.Exit):
-        handle_error(GCPathError("test error"))
+        handle_error(error)
 
 
 @patch("gcpath.core.Hierarchy.load")
@@ -231,8 +232,9 @@ def test_handle_error_permission_denied():
     from gcpath.cli import handle_error
     import typer
 
+    error = gcp_exceptions.PermissionDenied("denied")
     with pytest.raises(typer.Exit):
-        handle_error(gcp_exceptions.PermissionDenied("denied"))
+        handle_error(error)
 
 
 def test_handle_error_service_unavailable():
@@ -240,8 +242,9 @@ def test_handle_error_service_unavailable():
     from gcpath.cli import handle_error
     import typer
 
+    error = gcp_exceptions.ServiceUnavailable("unavailable")
     with pytest.raises(typer.Exit):
-        handle_error(gcp_exceptions.ServiceUnavailable("unavailable"))
+        handle_error(error)
 
 
 def test_handle_error_default_credentials(capsys):
@@ -249,8 +252,9 @@ def test_handle_error_default_credentials(capsys):
     from gcpath.cli import handle_error
     import typer
 
+    error = auth_exceptions.DefaultCredentialsError("no adc")
     with pytest.raises(typer.Exit):
-        handle_error(auth_exceptions.DefaultCredentialsError("no adc"))
+        handle_error(error)
     out = capsys.readouterr().out
     assert "credentials" in out.lower()
     assert "gcloud auth application-default login" in out
@@ -261,8 +265,9 @@ def test_handle_error_refresh_error(capsys):
     from gcpath.cli import handle_error
     import typer
 
+    error = auth_exceptions.RefreshError("expired")
     with pytest.raises(typer.Exit):
-        handle_error(auth_exceptions.RefreshError("expired"))
+        handle_error(error)
     out = capsys.readouterr().out
     assert "expired" in out.lower()
     assert "gcloud auth application-default login" in out
@@ -273,12 +278,11 @@ def test_handle_error_asset_api_disabled(capsys):
     from gcpath.cli import handle_error
     import typer
 
+    error = gcp_exceptions.PermissionDenied(
+        "Cloud Asset API has not been used in project 123 before or it is disabled."
+    )
     with pytest.raises(typer.Exit):
-        handle_error(
-            gcp_exceptions.PermissionDenied(
-                "Cloud Asset API has not been used in project 123 before or it is disabled."
-            )
-        )
+        handle_error(error)
     out = capsys.readouterr().out
     assert "Cloud Asset API is disabled" in out
     assert "gcloud services enable" in out

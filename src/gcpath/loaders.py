@@ -21,6 +21,7 @@ from gcpath.parsers import (
 logger = logging.getLogger(__name__)
 
 _FOLDER_PREFIX = "folders/"
+_ORG_PREFIX = "organizations/"
 _MISSING_STRUCT_FIELD_MARKER = "does not exist in STRUCT"
 _RESOURCE_FILTER_RE = re.compile(r"^(organizations|folders)/[A-Za-z0-9_-]+$")
 
@@ -224,7 +225,7 @@ def _build_single_ancestor_chain(folder, folders: Dict, root: str) -> List[str]:
             break
 
     # Add root at the end
-    if not ancestors[-1].startswith("organizations/") and ancestors[-1] != root:
+    if not ancestors[-1].startswith(_ORG_PREFIX) and ancestors[-1] != root:
         ancestors.append(root)
 
     return ancestors
@@ -322,7 +323,7 @@ def load_scope_folder(node, scope_resource: str, root_ancestor: Optional[str] = 
         # Add root at the end
         if not ancestors_chain or ancestors_chain[-1] != root:
             ancestors_chain.append(root)
-        if path_override is None and root.startswith("organizations/"):
+        if path_override is None and root.startswith(_ORG_PREFIX):
             escaped_org = urllib.parse.quote(node.organization.display_name, safe="")
             escaped_segments = [
                 urllib.parse.quote(segment, safe="")
@@ -572,7 +573,7 @@ def load_organizationless_projects(existing_project_names: set):
 
             # A project is organizationless if it's not under an organization or folder
             is_orgless = not p_proto.parent.startswith(
-                "organizations/"
+                _ORG_PREFIX
             ) and not p_proto.parent.startswith(_FOLDER_PREFIX)
 
             if is_orgless:
@@ -665,7 +666,7 @@ def load_tags_asset(parent: str) -> Dict[str, Dict[str, str]]:
     except exceptions.PermissionDenied:
         logger.warning("Permission denied querying tag bindings")
     except Exception as e:
-        logger.error(f"Error querying tag bindings via Asset API: {e}")
+        logger.exception(f"Error querying tag bindings via Asset API: {e}")
 
     return tags_map
 

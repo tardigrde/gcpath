@@ -506,7 +506,8 @@ class TestToonOpen:
             ]
         )
         assert "results" in out
-        assert "u1" in out and "u2" in out
+        assert "u1" in out
+        assert "u2" in out
 
 
 class TestToonLabelsTags:
