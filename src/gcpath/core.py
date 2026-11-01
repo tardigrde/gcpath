@@ -2,7 +2,7 @@ import logging
 import urllib.parse
 from collections import Counter
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Tuple
 
 from google.cloud import resourcemanager_v3  # type: ignore
 from google.api_core import exceptions
@@ -58,10 +58,10 @@ def path_unescape(segment: str) -> str:
 
 
 def aggregate_metadata(
-    items: List[Union["Folder", "Project"]],
+    items: List["Folder | Project"],
     attr: str,
     *,
-    key_filter: Optional[str] = None,
+    key_filter: str | None = None,
 ) -> Tuple[List[Dict[str, Any]], int]:
     """Aggregate label/tag occurrences across folders/projects.
 
@@ -144,7 +144,7 @@ class Folder:
     )
     labels: Dict[str, str] = field(default_factory=dict)
     tags: Dict[str, str] = field(default_factory=dict)
-    path_override: Optional[str] = None
+    path_override: str | None = None
 
     def is_path_match(self, path_parts: List[str]) -> bool:
         # path matching logic
@@ -189,11 +189,11 @@ class Project:
     project_id: str
     display_name: str
     parent: str
-    organization: Optional["OrganizationNode"]
-    folder: Optional[Folder]
+    organization: OrganizationNode | None
+    folder: Folder | None
     labels: Dict[str, str] = field(default_factory=dict)
     tags: Dict[str, str] = field(default_factory=dict)
-    path_override: Optional[str] = None
+    path_override: str | None = None
 
     @property
     def path(self) -> str:
@@ -236,7 +236,7 @@ class Hierarchy:
         self._projects_by_name = {p.name: p for p in self.projects}
 
     @staticmethod
-    def _project_org_name(project: "Project") -> Optional[str]:
+    def _project_org_name(project: "Project") -> str | None:
         if project.organization is not None:
             return project.organization.organization.name
         if project.folder is not None:
@@ -421,9 +421,9 @@ class Hierarchy:
     @classmethod
     def load(
         cls,
-        display_names: Optional[List[str]] = None,
+        display_names: List[str] | None = None,
         via_resource_manager: bool = True,
-        scope_resource: Optional[str] = None,
+        scope_resource: str | None = None,
         recursive: bool = False,
         include_labels: bool = False,
         include_tags: bool = False,
@@ -518,9 +518,9 @@ class Hierarchy:
     def _load_organizations(
         cls,
         org_client,
-        display_names: Optional[List[str]],
+        display_names: List[str] | None,
         via_resource_manager: bool,
-        scope_resource: Optional[str],
+        scope_resource: str | None,
         recursive: bool,
         include_labels: bool = False,
     ) -> List[OrganizationNode]:
@@ -567,7 +567,7 @@ class Hierarchy:
         return org_nodes
 
     @staticmethod
-    def _scope_root_org_name(scope_resource: Optional[str]) -> Optional[str]:
+    def _scope_root_org_name(scope_resource: str | None) -> str | None:
         """Resolve the organization that owns a scoped resource when possible."""
         if not scope_resource:
             return None
@@ -708,10 +708,10 @@ class Hierarchy:
         cls,
         node: OrganizationNode,
         via_resource_manager: bool,
-        scope_resource: Optional[str],
+        scope_resource: str | None,
         recursive: bool,
-        query_parent: Optional[str] = None,
-        root_ancestor: Optional[str] = None,
+        query_parent: str | None = None,
+        root_ancestor: str | None = None,
         include_labels: bool = False,
     ):
         """Load folders for a single organization."""
@@ -753,7 +753,7 @@ class Hierarchy:
         project_client,
         org_nodes: List[OrganizationNode],
         via_resource_manager: bool,
-        scope_resource: Optional[str],
+        scope_resource: str | None,
         recursive: bool,
         include_labels: bool = False,
     ) -> List[Project]:
@@ -789,7 +789,7 @@ class Hierarchy:
         cls,
         project_client,
         org_nodes: List[OrganizationNode],
-        scope_resource: Optional[str] = None,
+        scope_resource: str | None = None,
         recursive: bool = True,
         include_labels: bool = False,
     ) -> List[Project]:
@@ -872,9 +872,9 @@ class Hierarchy:
     def _load_projects_asset_all_orgs(
         cls,
         org_nodes: List[OrganizationNode],
-        scope_resource: Optional[str],
+        scope_resource: str | None,
         recursive: bool,
-        query_parent: Optional[str] = None,
+        query_parent: str | None = None,
         include_labels: bool = False,
     ) -> List[Project]:
         """Load projects for all organizations using Asset API."""
@@ -983,7 +983,7 @@ class Hierarchy:
         folders_client,
         projects_client,
         org_client,
-    ) -> tuple[str, Optional[str]]:
+    ) -> tuple[str, str | None]:
         """Fetch display name and parent for a resource.
 
         Returns (display_name, parent_name_or_None).
@@ -1020,7 +1020,7 @@ class Hierarchy:
         raise ResourceNotFoundError(f"Unknown resource type: {name}")
 
     @staticmethod
-    def _resolve_org_directly(resource_name: str) -> Optional[str]:
+    def _resolve_org_directly(resource_name: str) -> str | None:
         """Resolve an organization resource name to its path. Returns None for non-org resources."""
         if not resource_name.startswith(_PREFIX_ORGS):
             return None
@@ -1082,7 +1082,7 @@ class Hierarchy:
         folders_client,
         projects_client,
         org_client,
-    ) -> tuple[str, str, str, Optional[str]]:
+    ) -> tuple[str, str, str, str | None]:
         """Fetch a single link in the ancestry chain.
 
         Returns (resource_name, display_name, type, parent_or_None).
@@ -1278,7 +1278,7 @@ class Hierarchy:
         org_client = resourcemanager_v3.OrganizationsClient()
 
         chain: List[tuple[str, str, str]] = []
-        current: Optional[str] = resource_name
+        current: str | None = resource_name
 
         while current:
             name, display_name, rtype, parent = Hierarchy._fetch_chain_link(

@@ -4,7 +4,7 @@ import logging
 import re
 from pathlib import Path
 from dataclasses import dataclass
-from typing import Optional, List, Dict, Union, cast
+from typing import List, Dict, cast
 from urllib.parse import unquote
 from typing_extensions import Annotated
 from rich import print as rprint
@@ -134,9 +134,9 @@ _IDS_OPTION = typer.Option(
 
 
 def _metadata_inclusion(
-    parsed_fields: Optional[Tuple[str, ...]],
-    label_filters: Optional[List[str]],
-    tag_filters: Optional[List[str]],
+    parsed_fields: Tuple[str, ...] | None,
+    label_filters: List[str] | None,
+    tag_filters: List[str] | None,
     show_labels: bool = False,
     show_tags: bool = False,
 ) -> Tuple[bool, bool]:
@@ -164,7 +164,7 @@ def _display_bin_path(path: str) -> str:
     return path
 
 
-def _validate_type_filter(resource_type: Optional[str]) -> None:
+def _validate_type_filter(resource_type: str | None) -> None:
     if resource_type is not None and resource_type not in _VALID_TYPE_FILTERS:
         print(
             toon_error(
@@ -183,19 +183,19 @@ def _validate_resource_name(resource_name: str) -> None:
 
 
 def _matches_type(
-    obj: Union[OrganizationNode, Folder, Project], type_filter: str
+    obj: OrganizationNode | Folder | Project, type_filter: str
 ) -> bool:
     return get_resource_type(obj) == type_filter
 
 
 @dataclass
 class _ScopeResult:
-    target_resource_name: Optional[str]
-    target_org_name: Optional[str]
-    filter_orgs: Optional[List[str]]
+    target_resource_name: str | None
+    target_org_name: str | None
+    filter_orgs: List[str] | None
 
 
-def _cached_path_for(resource_name: str) -> Optional[str]:
+def _cached_path_for(resource_name: str) -> str | None:
     """Resolve a resource path from the fresh global cache without API calls.
 
     Returns None when the cache is missing, stale, or doesn't contain the
@@ -211,8 +211,8 @@ def _cached_path_for(resource_name: str) -> Optional[str]:
 
 
 def _resolve_scope(
-    resource: Optional[str],
-    entrypoint: Optional[str],
+    resource: str | None,
+    entrypoint: str | None,
 ) -> _ScopeResult:
     """Resolve resource/entrypoint into scope parameters for hierarchy loading.
 
@@ -264,7 +264,7 @@ hook_app = typer.Typer(help="Manage agent session hooks.")
 app.add_typer(hook_app, name="hook")
 
 
-def _get_dumper(output_format: str) -> Optional[Callable[[Any], str]]:
+def _get_dumper(output_format: str) -> Callable[[Any], str] | None:
     if output_format == "json":
         return dump_json
     if output_format == "yaml":
@@ -297,7 +297,7 @@ def main(
         help="Use Cloud Asset API to load folders (faster) or Resource Manager (slower)",
     ),
     debug: bool = typer.Option(False, "--debug", help="Enable debug logging"),
-    entrypoint: Optional[str] = typer.Option(
+    entrypoint: str | None = typer.Option(
         None,
         "--entrypoint",
         "-e",
@@ -670,13 +670,13 @@ def _clean_resolve_path(path: str) -> str:
 
 
 def _try_read_cache(
-    cache_scope: Optional[str],
-    filter_orgs: Optional[List[str]],
+    cache_scope: str | None,
+    filter_orgs: List[str] | None,
     via_resource_manager: bool = True,
     include_labels: bool = False,
     include_tags: bool = False,
-    scope_resource: Optional[str] = None,
-) -> Optional[Hierarchy]:
+    scope_resource: str | None = None,
+) -> Hierarchy | None:
     cached_hierarchy = read_cache(
         scope=cache_scope,
         via_resource_manager=via_resource_manager,
@@ -697,10 +697,10 @@ def _try_read_cache(
 
 def _load_hierarchy(
     ctx: typer.Context,
-    scope_resource: Optional[str],
+    scope_resource: str | None,
     recursive: bool,
     force_refresh: bool,
-    filter_orgs: Optional[List[str]] = None,
+    filter_orgs: List[str] | None = None,
     include_labels: bool = False,
     include_tags: bool = False,
 ) -> Hierarchy:
@@ -771,17 +771,17 @@ def _load_hierarchy(
 @dataclass
 class _HierarchyCommandContext:
     hierarchy: Hierarchy
-    nodes_to_process: List[Union[OrganizationNode, Folder]]
+    nodes_to_process: List[OrganizationNode | Folder]
     projects_by_parent: Dict[str, List[Project]]
-    target_resource_name: Optional[str]
-    target_path: Optional[str]
+    target_resource_name: str | None
+    target_path: str | None
 
 
 @dataclass
 class _ParsedResource:
-    target_resource_name: Optional[str]
-    target_org_name: Optional[str]
-    target_path: Optional[str]
+    target_resource_name: str | None
+    target_org_name: str | None
+    target_path: str | None
 
 
 def _parse_resource_arg(effective_resource: str, command_name: str) -> _ParsedResource:
@@ -830,8 +830,8 @@ def _parse_resource_arg(effective_resource: str, command_name: str) -> _ParsedRe
 def _find_target_nodes(
     hierarchy: Hierarchy,
     target_resource_name: str,
-    target_path: Optional[str],
-) -> List[Union[OrganizationNode, Folder]]:
+    target_path: str | None,
+) -> List[OrganizationNode | Folder]:
     if target_resource_name.startswith(_RESOURCE_PREFIX_ORGS):
         for o in hierarchy.organizations:
             if o.organization.name == target_resource_name:
@@ -863,11 +863,11 @@ def _find_target_nodes(
 def _prepare_hierarchy_command(
     ctx: typer.Context,
     command_name: str,
-    resource: Optional[str],
+    resource: str | None,
     force_refresh: bool,
     include_labels: bool = False,
     include_tags: bool = False,
-) -> Optional[_HierarchyCommandContext]:
+) -> _HierarchyCommandContext | None:
     ep = ctx.obj.get("entrypoint")
     effective_resource = resource or ep
 
@@ -956,7 +956,7 @@ def _handle_empty_hierarchy(fmt: str) -> None:
 
 
 def _resolve_target_path_prefix(
-    hierarchy: Hierarchy, target_resource_name: Optional[str]
+    hierarchy: Hierarchy, target_resource_name: str | None
 ) -> str:
     if not target_resource_name:
         return ""
@@ -971,7 +971,7 @@ def _resolve_target_path_prefix(
         return ""
 
 
-def _get_resource_name(obj: Union[OrganizationNode, Folder, Project]) -> str:
+def _get_resource_name(obj: OrganizationNode | Folder | Project) -> str:
     if isinstance(obj, OrganizationNode):
         return obj.organization.name
     return obj.name
@@ -979,10 +979,10 @@ def _get_resource_name(obj: Union[OrganizationNode, Folder, Project]) -> str:
 
 def _apply_ls_filters(
     items: list,
-    resource_type: Optional[str],
-    label_filters: Optional[List[str]],
-    tag_filters: Optional[List[str]],
-    excludes: Optional[List[str]] = None,
+    resource_type: str | None,
+    label_filters: List[str] | None,
+    tag_filters: List[str] | None,
+    excludes: List[str] | None = None,
 ) -> list:
     if resource_type:
         items = [(p, obj) for p, obj in items if _matches_type(obj, resource_type)]
@@ -1001,7 +1001,7 @@ def _apply_ls_filters(
 
 def _apply_depth_limit(
     items: list,
-    level: Optional[int],
+    level: int | None,
     recursive: bool,
     target_path_prefix: str,
 ) -> list:
@@ -1015,14 +1015,14 @@ def _apply_depth_limit(
 
 def _build_ls_items(
     hierarchy: Hierarchy,
-    target_resource_name: Optional[str],
+    target_resource_name: str | None,
     target_path_prefix: str,
     recursive: bool,
-    resource_type: Optional[str],
-    label_filters: Optional[List[str]],
-    tag_filters: Optional[List[str]],
-    level: Optional[int],
-    excludes: Optional[List[str]] = None,
+    resource_type: str | None,
+    label_filters: List[str] | None,
+    tag_filters: List[str] | None,
+    level: int | None,
+    excludes: List[str] | None = None,
 ) -> Tuple[list, int]:
     """Build ls items and return (filtered_items, total_before_filtering)."""
     current_folders, current_projects = filter_direct_children(
@@ -1055,7 +1055,7 @@ def _ls_help_lines(recursive: bool) -> List[str]:
     return lines
 
 
-def _format_metadata(obj: Union[OrganizationNode, Folder, Project], attr: str) -> str:
+def _format_metadata(obj: OrganizationNode | Folder | Project, attr: str) -> str:
     metadata = getattr(obj, attr, {})
     if not metadata:
         return ""
@@ -1100,7 +1100,7 @@ def _display_ls_rich(
     console.print(table)
 
 
-def _parse_fields(fields_str: Optional[str]) -> Optional[Tuple[str, ...]]:
+def _parse_fields(fields_str: str | None) -> Tuple[str, ...] | None:
     if not fields_str:
         return None
     fields = tuple(f.strip() for f in fields_str.split(","))
@@ -1119,7 +1119,7 @@ def _parse_fields(fields_str: Optional[str]) -> Optional[Tuple[str, ...]]:
 def ls(
     ctx: typer.Context,
     resource: Annotated[
-        Optional[str],
+        str | None,
         typer.Argument(
             help="Resource name (e.g. folders/123) or path to list children from."
         ),
@@ -1127,13 +1127,13 @@ def ls(
     recursive: bool = typer.Option(
         False, "--recursive", "-R", help="List resources recursively"
     ),
-    resource_type: Optional[str] = typer.Option(
+    resource_type: str | None = typer.Option(
         None,
         "--type",
         "-t",
         help="Filter by resource type: folder, project, organization",
     ),
-    level: Optional[int] = typer.Option(
+    level: int | None = typer.Option(
         None, "--level", "-L", help="Max depth for recursive listing (requires -R)"
     ),
     force_refresh: bool = typer.Option(
@@ -1148,10 +1148,10 @@ def ls(
     show_tags: bool = typer.Option(
         False, "--show-tags", help="Display GCP resource tags"
     ),
-    label_filters: Optional[List[str]] = _LABEL_FILTER_OPTION,
-    tag_filters: Optional[List[str]] = _TAG_FILTER_OPTION,
-    excludes: Optional[List[str]] = _EXCLUDE_OPTION,
-    fields: Optional[str] = _FIELDS_OPTION,
+    label_filters: List[str] | None = _LABEL_FILTER_OPTION,
+    tag_filters: List[str] | None = _TAG_FILTER_OPTION,
+    excludes: List[str] | None = _EXCLUDE_OPTION,
+    fields: str | None = _FIELDS_OPTION,
     ids: bool = _IDS_OPTION,
     full: bool = _FULL_OPTION,
 ) -> None:
@@ -1231,7 +1231,7 @@ def ls(
         handle_error(e)
 
 
-def _get_orgless_projects(hctx: _HierarchyCommandContext) -> Optional[List[Project]]:
+def _get_orgless_projects(hctx: _HierarchyCommandContext) -> List[Project] | None:
     if hctx.target_resource_name:
         return None
     orgless = [p for p in hctx.hierarchy.projects if not p.organization]
@@ -1239,8 +1239,8 @@ def _get_orgless_projects(hctx: _HierarchyCommandContext) -> Optional[List[Proje
 
 
 def _tree_root_label(
-    node: Union[OrganizationNode, Folder],
-    is_targeted: Optional[str],
+    node: OrganizationNode | Folder,
+    is_targeted: str | None,
 ) -> tuple[str, str]:
     if isinstance(node, OrganizationNode):
         safe_path = f"//{path_escape(node.organization.display_name)}"
@@ -1251,9 +1251,9 @@ def _tree_root_label(
 
 def _add_orgless_tree_nodes(
     root_tree,
-    orgless_projects: Optional[List[Project]],
-    resource_type: Optional[str],
-    level: Optional[int],
+    orgless_projects: List[Project] | None,
+    resource_type: str | None,
+    level: int | None,
     show_ids: bool,
     show_labels: bool,
     show_tags: bool,
@@ -1271,7 +1271,7 @@ def _add_orgless_tree_nodes(
 def tree(
     ctx: typer.Context,
     resource: Annotated[
-        Optional[str],
+        str | None,
         typer.Argument(
             help="Resource name (e.g. folders/123) or path to start tree from."
         ),
@@ -1285,7 +1285,7 @@ def tree(
     show_ids: bool = typer.Option(
         False, "--ids", "-i", help="Show resource names in the tree"
     ),
-    resource_type: Optional[str] = typer.Option(
+    resource_type: str | None = typer.Option(
         None, "--type", "-t", help="Filter by resource type: folder, project"
     ),
     force_refresh: bool = typer.Option(
@@ -1300,10 +1300,10 @@ def tree(
     show_tags: bool = typer.Option(
         False, "--show-tags", help="Display GCP resource tags"
     ),
-    label_filters: Optional[List[str]] = typer.Option(
+    label_filters: List[str] | None = typer.Option(
         None, "--label", help="Filter by label (key=value). Repeatable, ANDed together"
     ),
-    tag_filters: Optional[List[str]] = typer.Option(
+    tag_filters: List[str] | None = typer.Option(
         None, "--tag", help="Filter by tag (key=value). Repeatable, ANDed together"
     ),
 ) -> None:
@@ -1393,7 +1393,7 @@ def tree(
 def diagram(
     ctx: typer.Context,
     resource: Annotated[
-        Optional[str],
+        str | None,
         typer.Argument(
             help="Resource name (e.g. folders/123) or path to generate diagram from."
         ),
@@ -1413,7 +1413,7 @@ def diagram(
     show_ids: bool = typer.Option(
         False, "--ids", "-i", help="Show resource names in node labels"
     ),
-    output: Optional[str] = typer.Option(
+    output: str | None = typer.Option(
         None, "--output", "-o", help="Write diagram to a file instead of stdout"
     ),
     force_refresh: bool = typer.Option(
@@ -1468,7 +1468,7 @@ def diagram(
         handle_error(e)
 
 
-def _validate_stats_resource(effective_resource: Optional[str]) -> Optional[str]:
+def _validate_stats_resource(effective_resource: str | None) -> str | None:
     """Validate and return the target resource name for stats command."""
     if not effective_resource:
         return None
@@ -1494,7 +1494,7 @@ def _stats_rich(
     org_count: int,
     folder_count: int,
     project_count: int,
-    target_resource_name: Optional[str],
+    target_resource_name: str | None,
 ) -> None:
     """Render stats as a Rich table."""
     from rich.table import Table
@@ -1519,7 +1519,7 @@ def _stats_rich(
 def stats(
     ctx: typer.Context,
     resource: Annotated[
-        Optional[str],
+        str | None,
         typer.Argument(
             help="Resource name (e.g. folders/123 or organizations/456) to scope statistics to."
         ),
@@ -1598,7 +1598,7 @@ def stats(
 def summary_command(
     ctx: typer.Context,
     resource: Annotated[
-        Optional[str],
+        str | None,
         typer.Argument(
             help="Resource to scope the summary to (e.g. organizations/123 or folders/456)."
         ),
@@ -1685,15 +1685,15 @@ _VALID_AUDIT_CHECKS = (
 def audit_command(
     ctx: typer.Context,
     resource: Annotated[
-        Optional[str],
+        str | None,
         typer.Argument(help="Resource to scope the audit (e.g. folders/123)"),
     ] = None,
-    require_labels: Optional[str] = typer.Option(
+    require_labels: str | None = typer.Option(
         None,
         "--require-labels",
         help="Comma-separated list of label keys that every folder/project must have",
     ),
-    name_pattern: Optional[str] = typer.Option(
+    name_pattern: str | None = typer.Option(
         None,
         "--name-pattern",
         help="Regex that every display_name must fullmatch",
@@ -1703,7 +1703,7 @@ def audit_command(
         "--severity",
         help=f"Minimum severity to report: {', '.join(_VALID_AUDIT_SEVERITIES)}",
     ),
-    checks: Optional[str] = typer.Option(
+    checks: str | None = typer.Option(
         None,
         "--check",
         help=f"Comma-separated subset of checks: {', '.join(_VALID_AUDIT_CHECKS)}",
@@ -1765,13 +1765,13 @@ def audit_command(
         handle_error(e)
 
 
-def _parse_required_labels(require_labels: Optional[str]) -> Optional[List[str]]:
+def _parse_required_labels(require_labels: str | None) -> List[str] | None:
     if not require_labels:
         return None
     return [k.strip() for k in require_labels.split(",") if k.strip()] or None
 
 
-def _parse_audit_check_subset(checks: Optional[str]) -> Optional[List[str]]:
+def _parse_audit_check_subset(checks: str | None) -> List[str] | None:
     if not checks:
         return None
     subset = [c.strip() for c in checks.split(",") if c.strip()]
@@ -1787,9 +1787,9 @@ def _parse_audit_check_subset(checks: Optional[str]) -> Optional[List[str]]:
 
 
 def _validate_audit_check_inputs(
-    check_subset: Optional[List[str]],
-    required_label_keys: Optional[List[str]],
-    name_pattern: Optional[str],
+    check_subset: List[str] | None,
+    required_label_keys: List[str] | None,
+    name_pattern: str | None,
 ) -> None:
     """Reject combinations that would silently disable a requested check."""
     if (
@@ -1939,21 +1939,21 @@ def get_resource_name(
         handle_error(e)
 
 
-def _find_loaded_org(hierarchy: Hierarchy, res_name: str) -> Optional[OrganizationNode]:
+def _find_loaded_org(hierarchy: Hierarchy, res_name: str) -> OrganizationNode | None:
     for org in hierarchy.organizations:
         if org.organization.name == res_name:
             return org
     return None
 
 
-def _find_loaded_folder(hierarchy: Hierarchy, res_name: str) -> Optional[Folder]:
+def _find_loaded_folder(hierarchy: Hierarchy, res_name: str) -> Folder | None:
     for org in hierarchy.organizations:
         if res_name in org.folders:
             return org.folders[res_name]
     return None
 
 
-def _find_loaded_project(hierarchy: Hierarchy, res_name: str) -> Optional[Project]:
+def _find_loaded_project(hierarchy: Hierarchy, res_name: str) -> Project | None:
     for proj in hierarchy.projects:
         if proj.name == res_name:
             return proj
@@ -1962,7 +1962,7 @@ def _find_loaded_project(hierarchy: Hierarchy, res_name: str) -> Optional[Projec
 
 def _resolve_path_to_object(
     hierarchy: Hierarchy, path: str
-) -> Union[OrganizationNode, Folder, Project]:
+) -> OrganizationNode | Folder | Project:
     """Resolve a gcpath path to the underlying resource object."""
     res_name = hierarchy.get_resource_name(path)
     if res_name.startswith(_RESOURCE_PREFIX_ORGS):
@@ -2154,9 +2154,9 @@ def get_path_command(
 def _search_hierarchy(
     hierarchy: Hierarchy,
     matcher: PatternMatcher,
-    type_filter: Optional[str],
-) -> List[tuple[str, Union[OrganizationNode, Folder, Project]]]:
-    candidates: List[Union[OrganizationNode, Folder, Project]] = []
+    type_filter: str | None,
+) -> List[tuple[str, OrganizationNode | Folder | Project]]:
+    candidates: List[OrganizationNode | Folder | Project] = []
     if not type_filter or type_filter == "organization":
         candidates.extend(hierarchy.organizations)
     if not type_filter or type_filter == "folder":
@@ -2183,10 +2183,10 @@ def find(
         ),
     ],
     resource: Annotated[
-        Optional[str],
+        str | None,
         typer.Argument(help="Resource to scope search within (e.g. folders/123)"),
     ] = None,
-    resource_type: Optional[str] = typer.Option(
+    resource_type: str | None = typer.Option(
         None,
         "--type",
         "-t",
@@ -2201,10 +2201,10 @@ def find(
     force_refresh: bool = typer.Option(
         False, "--force-refresh", "-F", help=_REFRESH_HELP
     ),
-    label_filters: Optional[List[str]] = _LABEL_FILTER_OPTION,
-    tag_filters: Optional[List[str]] = _TAG_FILTER_OPTION,
-    excludes: Optional[List[str]] = _EXCLUDE_OPTION,
-    fields: Optional[str] = _FIELDS_OPTION,
+    label_filters: List[str] | None = _LABEL_FILTER_OPTION,
+    tag_filters: List[str] | None = _TAG_FILTER_OPTION,
+    excludes: List[str] | None = _EXCLUDE_OPTION,
+    fields: str | None = _FIELDS_OPTION,
     ids: bool = _IDS_OPTION,
     full: bool = _FULL_OPTION,
 ) -> None:
@@ -2291,10 +2291,10 @@ def find(
 def _run_metadata_aggregation(
     ctx: typer.Context,
     *,
-    resource: Optional[str],
+    resource: str | None,
     attr: str,
-    key_filter: Optional[str],
-    top: Optional[int],
+    key_filter: str | None,
+    top: int | None,
     force_refresh: bool,
 ) -> None:
     """Shared implementation for `gcpath labels` and `gcpath tags`."""
@@ -2313,7 +2313,7 @@ def _run_metadata_aggregation(
         include_tags=include_tags,
     )
 
-    items: List[Union[Folder, Project]] = list(hierarchy.folders) + list(
+    items: List[Folder | Project] = list(hierarchy.folders) + list(
         hierarchy.projects
     )
     rows, total = aggregate_metadata(items, attr, key_filter=key_filter)
@@ -2362,13 +2362,13 @@ def _run_metadata_aggregation(
 def labels_command(
     ctx: typer.Context,
     resource: Annotated[
-        Optional[str],
+        str | None,
         typer.Argument(help="Resource to scope aggregation within (e.g. folders/123)"),
     ] = None,
-    key: Optional[str] = typer.Option(
+    key: str | None = typer.Option(
         None, "--key", help="Show only entries with this label key"
     ),
-    top: Optional[int] = typer.Option(
+    top: int | None = typer.Option(
         None, "--top", help="Limit to the top N most frequent entries"
     ),
     force_refresh: bool = typer.Option(
@@ -2393,13 +2393,13 @@ def labels_command(
 def tags_command(
     ctx: typer.Context,
     resource: Annotated[
-        Optional[str],
+        str | None,
         typer.Argument(help="Resource to scope aggregation within (e.g. folders/123)"),
     ] = None,
-    key: Optional[str] = typer.Option(
+    key: str | None = typer.Option(
         None, "--key", help="Show only entries with this tag key"
     ),
-    top: Optional[int] = typer.Option(
+    top: int | None = typer.Option(
         None, "--top", help="Limit to the top N most frequent entries"
     ),
     force_refresh: bool = typer.Option(
@@ -2490,7 +2490,7 @@ def mcp_command(
     ),
     host: str = typer.Option("127.0.0.1", "--host", help="Host for SSE transport"),
     port: int = typer.Option(8765, "--port", help="Port for SSE transport"),
-    scope: Optional[str] = typer.Option(
+    scope: str | None = typer.Option(
         None,
         "--scope",
         help="Optional resource scope to load on first call (e.g. folders/123)",
